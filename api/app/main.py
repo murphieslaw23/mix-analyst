@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.v1 import health, uploads, mixes
+from .api.v1 import health, uploads, mixes, jobs
 from .config import settings
 from .db.session import init_db
 from .services.storage import StorageService
@@ -10,11 +10,9 @@ from .services.storage import StorageService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize storage directories
     storage = StorageService(settings.storage_root)
     storage.init_directories()
 
-    # Initialize DB tables
     try:
         init_db()
     except Exception as e:
@@ -42,6 +40,7 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api/v1/health", tags=["Health"])
 app.include_router(uploads.router, prefix="/api/v1/uploads", tags=["Uploads"])
 app.include_router(mixes.router, prefix="/api/v1/mixes", tags=["Mixes"])
+app.include_router(jobs.router, prefix="/api/v1", tags=["Jobs"])
 
 
 @app.get("/health/live", tags=["Health"])

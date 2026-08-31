@@ -1,5 +1,16 @@
 import { useEffect, useState, useRef, ChangeEvent } from "react";
-import { Activity, UploadCloud, Music, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  UploadCloud,
+  Music,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  PlayCircle,
+  Loader2,
+  XCircle,
+  RotateCcw,
+} from "lucide-react";
 
 interface MixItem {
   id: string;
@@ -16,6 +27,15 @@ interface MixItem {
   };
 }
 
+interface ActiveJobState {
+  job_id: string;
+  mix_id: string;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+  progress_percent: number;
+  current_stage: string;
+  error_message?: string;
+}
+
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
 
 function App() {
@@ -24,6 +44,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStatusText, setUploadStatusText] = useState<string>("");
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [activeJobs, setActiveJobs] = useState<Record<string, ActiveJobState>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchStatusAndMixes = async () => {
@@ -55,7 +76,6 @@ function App() {
     setUploadStatusText("Initializing upload session...");
 
     try {
-      // 1. Initialize upload session
       const initRes = await fetch("/api/v1/uploads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -72,8 +92,6 @@ function App() {
       }
 
       const { upload_id } = await initRes.json();
-
-      // 2. Upload chunks sequentially
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       let offset = 0;
 
@@ -100,7 +118,6 @@ function App() {
         offset += chunk.size;
       }
 
-      // 3. Complete and probe audio
       setUploadStatusText("Probing audio stream with ffprobe...");
       const completeRes = await fetch(`/api/v1/uploads/${upload_id}/complete`, {
         method: "POST",
@@ -115,18 +132,91 @@ function App() {
         throw new Error(err.detail || "Failed to finalize audio analysis");
       }
 
-      setUploadStatusText("Upload & audio probe complete!");
+      setUploadStatusText("Upload complete!");
       setUploadProgress(100);
       setTimeout(() => {
         setUploadProgress(null);
         setUploadStatusText("");
         if (fileInputRef.current) fileInputRef.current.value = "";
         fetchStatusAndMixes();
-      }, 1500);
+      }, 1200);
     } catch (err: any) {
       setUploadError(err.message || "Upload failed");
       setUploadProgress(null);
       setUploadStatusText("");
+    }
+  };
+
+  const startAnalysisJob = async (mixId: string) => {
+    try {
+      const res = await fetch(`/api/v1/mixes/${mixId}/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_type: "ANALYSIS" }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to start analysis job");
+      }
+
+      const jobData = await res.json();
+      const jobId = jobData.id;
+
+      setActiveJobs((prev) => ({
+        ...prev,
+        [mixId]: {
+          job_id: jobId,
+          mix_id: mixId,
+          status: "QUEUED",
+          progress_percent: 0,
+          current_stage: "Queued",
+        },
+      }));
+
+      // Connect SSE stream
+      const evtSource = new EventSource(`/api/v1/jobs/${jobId}/events`);
+
+      evtSource.addEventListener("update", (event) => {
+        const data = JSON.parse(event.data);
+        setActiveJobs((prev) => ({
+          ...prev,
+          [mixId]: {
+            job_id: jobId,
+            mix_id: mixId,
+            status: data.status,
+            progress_percent: data.progress_percent || 0,
+            current_stage: data.current_stage || "",
+            error_message: data.error_message,
+          },
+        }));
+      });
+
+      evtSource.addEventListener("close", () => {
+        evtSource.close();
+      });
+
+      evtSource.onerror = () => {
+        evtSource.close();
+      };
+    } catch (err: any) {
+      alert(`Error starting analysis: ${err.message}`);
+    }
+  };
+
+  const cancelJob = async (jobId: string, mixId: string) => {
+    try {
+      await fetch(`/api/v1/jobs/${jobId}/cancel`, { method: "POST" });
+      setActiveJobs((prev) => ({
+        ...prev,
+        [mixId]: {
+          ...prev[mixId],
+          status: "CANCELLED",
+          current_stage: "Cancelled",
+        },
+      }));
+    } catch (err) {
+      console.error("Failed to cancel job", err);
     }
   };
 
@@ -175,10 +265,10 @@ function App() {
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
           <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
             <UploadCloud className="w-5 h-5 text-indigo-400" />
-            Resumable Stream Ingestion (Phase 1)
+            Resumable Ingestion & Storage
           </h2>
           <p className="text-sm text-slate-400">
-            Stream full DJ recordings (WAV, FLAC, MP3) in 5MB chunks without memory exhaustion. Audio is validated using ffprobe.
+            Stream full DJ recordings (WAV, FLAC, MP3) in 5MB chunks. Validated with ffprobe and registered in PostgreSQL.
           </p>
 
           <div className="flex items-center gap-4">
@@ -219,11 +309,11 @@ function App() {
           )}
         </div>
 
-        {/* Mixes List */}
+        {/* Mixes List with Real-time Job Queue */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
           <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
             <Music className="w-5 h-5 text-emerald-400" />
-            Analyzed Mixes ({mixes.length})
+            Analyzed Mixes & Pipeline Queue ({mixes.length})
           </h2>
 
           {mixes.length === 0 ? (
@@ -232,28 +322,84 @@ function App() {
             </div>
           ) : (
             <div className="divide-y divide-slate-800">
-              {mixes.map((mix) => (
-                <div key={mix.id} className="py-4 flex items-center justify-between">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-200">{mix.title}</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
-                        {mix.media_asset.codec}
-                      </span>
+              {mixes.map((mix) => {
+                const activeJob = activeJobs[mix.id];
+                return (
+                  <div key={mix.id} className="py-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-slate-200">{mix.title}</span>
+                          <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">
+                            {mix.media_asset.codec}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-400 flex items-center gap-4">
+                          <span>Duration: {formatDuration(mix.media_asset.duration_seconds)}</span>
+                          <span>Rate: {mix.media_asset.sample_rate} Hz</span>
+                          <span>Channels: {mix.media_asset.channels}</span>
+                          <span>Size: {formatSize(mix.media_asset.file_size_bytes)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {!activeJob || activeJob.status === "SUCCEEDED" || activeJob.status === "CANCELLED" || activeJob.status === "FAILED" ? (
+                          <button
+                            onClick={() => startAnalysisJob(mix.id)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition"
+                          >
+                            <PlayCircle className="w-3.5 h-3.5" />
+                            {activeJob?.status === "SUCCEEDED" ? "Re-Analyze" : "Start Pipeline"}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => cancelJob(activeJob.job_id, mix.id)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-800 rounded-lg text-xs font-semibold transition"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            Cancel
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-400 flex items-center gap-4">
-                      <span>Duration: {formatDuration(mix.media_asset.duration_seconds)}</span>
-                      <span>Rate: {mix.media_asset.sample_rate} Hz</span>
-                      <span>Channels: {mix.media_asset.channels}</span>
-                      <span>Size: {formatSize(mix.media_asset.file_size_bytes)}</span>
-                    </div>
+
+                    {/* Active Job Progress Bar & Stage Status */}
+                    {activeJob && (
+                      <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            {activeJob.status === "RUNNING" && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
+                            {activeJob.status === "SUCCEEDED" && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+                            {activeJob.status === "FAILED" && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
+                            {activeJob.status === "CANCELLED" && <RotateCcw className="w-3.5 h-3.5 text-amber-400" />}
+                            <span className="text-slate-300 font-medium">Stage: {activeJob.current_stage}</span>
+                          </div>
+                          <span className="text-slate-400">{activeJob.progress_percent}%</span>
+                        </div>
+
+                        <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-300 ${
+                              activeJob.status === "SUCCEEDED"
+                                ? "bg-emerald-500"
+                                : activeJob.status === "FAILED"
+                                ? "bg-rose-500"
+                                : activeJob.status === "CANCELLED"
+                                ? "bg-amber-500"
+                                : "bg-indigo-500"
+                            }`}
+                            style={{ width: `${activeJob.progress_percent}%` }}
+                          />
+                        </div>
+
+                        {activeJob.error_message && (
+                          <p className="text-xs text-rose-400">{activeJob.error_message}</p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-950/40 border border-emerald-900/50 px-2.5 py-1 rounded-md">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Ready</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

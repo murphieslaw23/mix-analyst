@@ -1,5 +1,7 @@
 celery>=5.4.0
 redis>=5.0.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
 numpy>=1.26.0
 scipy>=1.13.0
 soundfile>=0.12.0
