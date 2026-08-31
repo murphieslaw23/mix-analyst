@@ -22,10 +22,13 @@ class Settings(BaseSettings):
 
     # Storage
     storage_root: str = "/data/storage"
+    max_upload_size_bytes: int = 4 * 1024 * 1024 * 1024  # 4 GB max per mix
+    default_chunk_size_bytes: int = 5 * 1024 * 1024      # 5 MB per chunk
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 @lru_cache()

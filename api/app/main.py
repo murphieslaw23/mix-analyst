@@ -1,12 +1,35 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.v1 import health
+from .api.v1 import health, uploads, mixes
 from .config import settings
+from .db.session import init_db
+from .services.storage import StorageService
 
-app = FastAPI(title="Mix Analyst API", version="0.1.0")
 
-# CORS for local dev (Vercel web frontend)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize storage directories
+    storage = StorageService(settings.storage_root)
+    storage.init_directories()
+
+    # Initialize DB tables
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Warning: Database initialization pending: {e}")
+
+    yield
+
+
+app = FastAPI(
+    title="Mix Analyst API",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[str(origin) for origin in settings.allowed_origins],
@@ -15,15 +38,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(health.router, prefix="/api/v1/health")
+# Routers
+app.include_router(health.router, prefix="/api/v1/health", tags=["Health"])
+app.include_router(uploads.router, prefix="/api/v1/uploads", tags=["Uploads"])
+app.include_router(mixes.router, prefix="/api/v1/mixes", tags=["Mixes"])
 
 
-@app.get("/health/live")
+@app.get("/health/live", tags=["Health"])
 def health_live():
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
+@app.get("/health/ready", tags=["Health"])
 def health_ready():
-    # Placeholder: will check DB, Redis, storage in Phase 1+
-    return {"status": "ok", "checks": {"database": "ok", "redis": "ok", "storage": "ok"}}
+    return {"status": "ok"}
