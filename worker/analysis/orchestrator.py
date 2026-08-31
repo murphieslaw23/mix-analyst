@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, List
 import numpy as np
 
 from .window_planner import plan_analysis_windows
@@ -7,11 +7,12 @@ from .audio_reader import read_audio_window
 from .bpm_detector import detect_window_tempo, aggregate_bpm_candidates
 from .key_detector import detect_window_key, aggregate_key_predictions
 from .loudness_analyzer import measure_program_loudness
+from .fingerprinter import partition_mix_segments, generate_audio_fingerprint, query_acoustid_metadata
 
 
 class AudioAnalysisOrchestrator:
     """
-    Orchestrates bounded-memory audio analysis across representative windows of long mixes.
+    Orchestrates bounded-memory audio analysis and track fingerprinting across long DJ mixes.
     """
 
     def __init__(self, audio_path: Path, duration_seconds: float):
@@ -30,7 +31,7 @@ class AudioAnalysisOrchestrator:
         clipping_detected = 0
 
         for idx, (offset, dur) in enumerate(windows):
-            pct = 15.0 + (idx / len(windows)) * 45.0
+            pct = 15.0 + (idx / len(windows)) * 35.0
             if progress_callback:
                 progress_callback(round(pct, 1), f"Analyzing audio slice {idx + 1}/{len(windows)}")
 
@@ -53,18 +54,43 @@ class AudioAnalysisOrchestrator:
 
         # 3. Aggregate Hypotheses
         if progress_callback:
-            progress_callback(65.0, "Aggregating tempo & harmonic Camelot profiles")
+            progress_callback(55.0, "Aggregating tempo & harmonic Camelot profiles")
         bpm_data = aggregate_bpm_candidates(window_tempos)
         key_data = aggregate_key_predictions(window_keys)
 
         # 4. EBU R128 Loudness Pass
         if progress_callback:
-            progress_callback(75.0, "Executing EBU R128 loudness & true peak pass")
+            progress_callback(65.0, "Executing EBU R128 loudness & true peak pass")
         loudness_data = measure_program_loudness(self.audio_path)
 
-        # 5. Build Quality Findings
+        # 5. Track Segmentation & Fingerprinting Pass (Phase 4)
         if progress_callback:
-            progress_callback(90.0, "Evaluating audio dynamics and quality flags")
+            progress_callback(75.0, "Segmenting track boundaries and extracting acoustic fingerprints")
+
+        raw_segments = partition_mix_segments(self.duration_seconds, avg_track_length=240.0)
+        analyzed_segments = []
+
+        for seg in raw_segments:
+            sample_offset = seg["start_time_seconds"] + min(30.0, seg["duration_seconds"] * 0.2)
+            fp_data = generate_audio_fingerprint(self.audio_path, sample_offset, duration_seconds=60.0)
+            fingerprint_str = fp_data.get("fingerprint", "")
+
+            # Attempt AcoustID lookup
+            metadata_match = query_acoustid_metadata(fingerprint_str, fp_data.get("duration", 60.0))
+
+            analyzed_segments.append({
+                "segment_index": seg["segment_index"],
+                "start_time_seconds": seg["start_time_seconds"],
+                "end_time_seconds": seg["end_time_seconds"],
+                "duration_seconds": seg["duration_seconds"],
+                "fingerprint": fingerprint_str[:128] if fingerprint_str else None,
+                "confidence": metadata_match.get("match_score", 0.75) if metadata_match else 0.65,
+                "match": metadata_match,
+            })
+
+        # 6. Build Quality Findings
+        if progress_callback:
+            progress_callback(92.0, "Evaluating audio dynamics and quality flags")
 
         quality_findings = []
         if clipping_detected > 0:
@@ -99,4 +125,5 @@ class AudioAnalysisOrchestrator:
             "true_peak_db": loudness_data["true_peak_db"],
             "spectral_summary": spectral_summary,
             "quality_findings": quality_findings,
+            "track_segments": analyzed_segments,
         }

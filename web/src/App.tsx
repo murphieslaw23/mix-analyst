@@ -12,6 +12,8 @@ import {
   Gauge,
   KeyRound,
   Volume2,
+  ListMusic,
+  Disc,
 } from "lucide-react";
 
 interface BpmCandidate {
@@ -39,12 +41,28 @@ interface AnalysisResult {
   quality_findings: QualityFinding[];
 }
 
+interface TrackMatch {
+  title: string;
+  artist: string;
+  album?: string;
+  match_score: number;
+  source: string;
+}
+
+interface TrackSegment {
+  id: string;
+  segment_index: number;
+  start_time_seconds: number;
+  end_time_seconds: number;
+  duration_seconds: number;
+  confidence: number;
+  match?: TrackMatch;
+}
+
 interface MixItem {
   id: string;
   title: string;
-  artist: string | null;
-  status: string;
-  created_at: string;
+  artist?: string;
   media_asset: {
     duration_seconds: number;
     sample_rate: number;
@@ -67,8 +85,9 @@ interface ActiveJobState {
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
 
 function App() {
-  const [apiStatus, setApiStatus] = useState<string>("checking...");
+  const [health, setHealth] = useState<any>(null);
   const [mixes, setMixes] = useState<MixItem[]>([]);
+  const [tracklists, setTracklists] = useState<Record<string, TrackSegment[]>>({});
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStatusText, setUploadStatusText] = useState<string>("");
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -77,22 +96,43 @@ function App() {
 
   const fetchStatusAndMixes = async () => {
     try {
-      const healthRes = await fetch("/api/v1/health/ready");
-      const healthData = await healthRes.json();
-      setApiStatus(healthData.status || "unknown");
+      const hRes = await fetch("/api/v1/health");
+      if (hRes.ok) setHealth(await hRes.json());
 
-      const mixesRes = await fetch("/api/v1/mixes");
-      if (mixesRes.ok) {
-        const mixesData = await mixesRes.json();
-        setMixes(mixesData.items || []);
+      const mRes = await fetch("/api/v1/mixes");
+      if (mRes.ok) {
+        const data = await mRes.json();
+        setMixes(data.items || []);
+
+        // Fetch tracklists for analyzed mixes
+        for (const mix of data.items || []) {
+          fetchMixTracklist(mix.id);
+        }
       }
-    } catch {
-      setApiStatus("unreachable");
+    } catch (err) {
+      console.error("Failed fetching data", err);
+    }
+  };
+
+  const fetchMixTracklist = async (mixId: string) => {
+    try {
+      const res = await fetch(`/api/v1/mixes/${mixId}/tracklist`);
+      if (res.ok) {
+        const data = await res.json();
+        setTracklists((prev) => ({
+          ...prev,
+          [mixId]: data.tracks || [],
+        }));
+      }
+    } catch (err) {
+      console.error(`Failed to fetch tracklist for ${mixId}`, err);
     }
   };
 
   useEffect(() => {
     fetchStatusAndMixes();
+    const timer = setInterval(fetchStatusAndMixes, 10000);
+    return () => clearInterval(timer);
   }, []);
 
   const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -109,40 +149,39 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           filename: file.name,
-          total_size_bytes: file.size,
+          total_bytes: file.size,
           chunk_size: CHUNK_SIZE,
         }),
       });
 
       if (!initRes.ok) {
         const err = await initRes.json();
-        throw new Error(err.detail || "Failed to initialize upload");
+        throw new Error(err.detail || "Failed to initialize upload session");
       }
 
       const { upload_id } = await initRes.json();
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       let offset = 0;
 
-      for (let i = 0; i < totalChunks; i++) {
+      for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
         const chunk = file.slice(offset, offset + CHUNK_SIZE);
-        const formData = new FormData();
-        formData.append("file", chunk, file.name);
-        formData.append("offset", offset.toString());
+        setUploadStatusText(`Uploading chunk ${chunkIdx + 1} of ${totalChunks}...`);
 
-        setUploadStatusText(`Uploading chunk ${i + 1} of ${totalChunks}...`);
-
-        const chunkRes = await fetch(`/api/v1/uploads/${upload_id}`, {
-          method: "PATCH",
-          body: formData,
+        const chunkRes = await fetch(`/api/v1/uploads/${upload_id}/chunks`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Chunk-Index": chunkIdx.toString(),
+            "X-Offset-Bytes": offset.toString(),
+          },
+          body: chunk,
         });
 
         if (!chunkRes.ok) {
-          const err = await chunkRes.json();
-          throw new Error(err.detail || `Failed to upload chunk ${i + 1}`);
+          throw new Error(`Upload chunk ${chunkIdx} failed`);
         }
 
-        const chunkData = await chunkRes.json();
-        setUploadProgress(chunkData.progress_percent);
+        setUploadProgress(Math.round(((chunkIdx + 1) / totalChunks) * 90));
         offset += chunk.size;
       }
 
@@ -258,41 +297,52 @@ function App() {
   };
 
   const formatSize = (bytes: number) => {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12">
-      <div className="max-w-4xl mx-auto space-y-8">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Activity className="w-8 h-8 text-emerald-400" />
-            <div>
-              <h1 className="text-2xl font-bold">Mix Analyst</h1>
-              <p className="text-xs text-slate-400">Continuous DJ Mix & Recording Analyzer</p>
-            </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {/* Header */}
+      <header className="border-b border-slate-800 bg-slate-900/40 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">
+            MA
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={fetchStatusAndMixes}
-              className="p-2 text-slate-400 hover:text-slate-200 bg-slate-900 border border-slate-800 rounded-lg"
-              title="Refresh"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg text-sm">
-              <div
-                className={`w-2.5 h-2.5 rounded-full ${
-                  apiStatus === "ok" ? "bg-emerald-400" : "bg-amber-400"
-                }`}
-              />
-              <span className="text-slate-300 capitalize">{apiStatus}</span>
-            </div>
+          <div>
+            <h1 className="font-bold text-lg tracking-tight">Mix Analyst</h1>
+            <p className="text-xs text-slate-400">Continuous DJ Mix Intelligence & Audio Pipeline</p>
           </div>
         </div>
 
-        {/* Upload Box */}
+        <div className="flex items-center gap-4 text-xs">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-800/80 border border-slate-700/50">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                health?.status === "ok" ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
+              }`}
+            />
+            <span className="text-slate-300">
+              {health?.status === "ok" ? "Platform Online" : "Connecting..."}
+            </span>
+          </div>
+
+          <button
+            onClick={fetchStatusAndMixes}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+            title="Refresh State"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 max-w-6xl w-full mx-auto p-6 space-y-6">
+        {/* Upload Section */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
           <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
             <UploadCloud className="w-5 h-5 text-indigo-400" />
@@ -306,17 +356,21 @@ function App() {
             <input
               type="file"
               ref={fileInputRef}
-              accept="audio/*"
               onChange={handleFileUpload}
-              className="block w-full text-sm text-slate-400
-                file:mr-4 file:py-2 file:px-4
-                file:rounded-md file:border-0
-                file:text-sm file:font-semibold
-                file:bg-indigo-600 file:text-white
-                hover:file:bg-indigo-500 cursor-pointer"
+              accept="audio/*"
+              className="hidden"
+              id="mix-file-input"
             />
+            <label
+              htmlFor="mix-file-input"
+              className="cursor-pointer px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition shadow-md shadow-indigo-600/20 inline-flex items-center gap-2"
+            >
+              <UploadCloud className="w-4 h-4" />
+              Upload DJ Mix File
+            </label>
           </div>
 
+          {/* Upload Progress Bar */}
           {uploadProgress !== null && (
             <div className="space-y-2 pt-2">
               <div className="flex justify-between text-xs text-slate-400">
@@ -325,7 +379,7 @@ function App() {
               </div>
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div
-                  className="bg-indigo-500 h-full transition-all duration-300"
+                  className="bg-indigo-500 h-full transition-all duration-200"
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
@@ -333,8 +387,8 @@ function App() {
           )}
 
           {uploadError && (
-            <div className="flex items-center gap-2 text-rose-400 text-sm bg-rose-950/40 border border-rose-900/50 p-3 rounded-lg">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <div className="flex items-center gap-2 text-rose-400 text-xs bg-rose-950/40 border border-rose-900/50 p-3 rounded-lg">
+              <AlertCircle className="w-4 h-4" />
               <span>{uploadError}</span>
             </div>
           )}
@@ -348,14 +402,15 @@ function App() {
           </h2>
 
           {mixes.length === 0 ? (
-            <div className="text-center py-10 text-slate-500 text-sm">
-              No mixes uploaded yet. Choose an audio file above to start analyzing.
+            <div className="py-8 text-center text-slate-500 text-sm">
+              No mixes uploaded yet. Upload a DJ set above to run analysis.
             </div>
           ) : (
             <div className="divide-y divide-slate-800">
               {mixes.map((mix) => {
                 const activeJob = activeJobs[mix.id];
                 const analysis = mix.analysis_result;
+                const tracklist = tracklists[mix.id] || [];
 
                 return (
                   <div key={mix.id} className="py-4 space-y-4">
@@ -465,13 +520,55 @@ function App() {
                         </div>
                       </div>
                     )}
+
+                    {/* Detected Tracklist & Fingerprints (Phase 4) */}
+                    {tracklist.length > 0 && (
+                      <div className="bg-slate-950/40 border border-slate-800/60 rounded-lg p-4 space-y-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2 font-medium text-slate-300">
+                            <ListMusic className="w-4 h-4 text-indigo-400" />
+                            <span>Detected Track Segments ({tracklist.length})</span>
+                          </div>
+                          <span className="text-slate-500">
+                            Acoustic Fingerprints Extracted
+                          </span>
+                        </div>
+
+                        <div className="divide-y divide-slate-800/60">
+                          {tracklist.map((track) => (
+                            <div key={track.id} className="py-2.5 flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-3">
+                                <span className="w-6 font-mono text-slate-500 text-center font-bold">
+                                  #{track.segment_index}
+                                </span>
+                                <Disc className="w-4 h-4 text-slate-500" />
+                                <div>
+                                  <div className="font-medium text-slate-200">
+                                    {track.match ? `${track.match.artist} - ${track.match.title}` : `Segment ${track.segment_index}`}
+                                  </div>
+                                  <div className="text-slate-500 text-[11px]">
+                                    {formatDuration(track.start_time_seconds)} – {formatDuration(track.end_time_seconds)} ({formatDuration(track.duration_seconds)})
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400">
+                                  Confidence {(track.confidence * 100).toFixed(0)}%
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

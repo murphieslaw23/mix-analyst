@@ -2,6 +2,7 @@ import os
 import json
 import socket
 import redis
+import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy import text
@@ -26,8 +27,8 @@ def publish_event(job_id: str, payload: dict) -> None:
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
 def run_analysis_pipeline(self, job_id: str):
     """
-    Execute the real bounded-memory audio analysis pipeline for a Mix.
-    Calculates BPM, Camelot Key, and EBU R128 loudness, then persists results.
+    Execute the real bounded-memory audio analysis & track identification pipeline for a Mix.
+    Calculates BPM, Camelot Key, EBU R128 loudness, segments tracks, and persists results.
     """
     db = SessionLocal()
     hostname = socket.gethostname()
@@ -130,6 +131,65 @@ def run_analysis_pipeline(self, job_id: str):
             },
         )
 
+        # Clear existing track segments and persist new ones (Phase 4)
+        db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.commit()
+
+        for seg in analysis_data.get("track_segments", []):
+            seg_id = str(uuid.uuid4())
+            db.execute(
+                text("""
+                    INSERT INTO track_segments (
+                        id, mix_id, segment_index, start_time_seconds,
+                        end_time_seconds, duration_seconds, fingerprint,
+                        confidence, created_at
+                    ) VALUES (
+                        :id, :mix_id, :idx, :start, :end, :dur, :fp, :conf, :now
+                    )
+                """),
+                {
+                    "id": seg_id,
+                    "mix_id": mix_id,
+                    "idx": seg["segment_index"],
+                    "start": seg["start_time_seconds"],
+                    "end": seg["end_time_seconds"],
+                    "dur": seg["duration_seconds"],
+                    "fp": seg.get("fingerprint"),
+                    "conf": seg["confidence"],
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+
+            match = seg.get("match")
+            if match:
+                match_id = str(uuid.uuid4())
+                db.execute(
+                    text("""
+                        INSERT INTO track_matches (
+                            id, segment_id, mix_id, title, artist,
+                            album, acoustid_id, musicbrainz_recording_id,
+                            match_score, source, created_at
+                        ) VALUES (
+                            :id, :seg_id, :mix_id, :title, :artist,
+                            :album, :acoustid, :mb_id, :score, 'acoustid', :now
+                        )
+                    """),
+                    {
+                        "id": match_id,
+                        "seg_id": seg_id,
+                        "mix_id": mix_id,
+                        "title": match.get("title", "Unknown Track"),
+                        "artist": match.get("artist", "Unknown Artist"),
+                        "album": match.get("album"),
+                        "acoustid": match.get("acoustid_id"),
+                        "mb_id": match.get("musicbrainz_recording_id"),
+                        "score": match.get("match_score", 0.8),
+                        "now": datetime.now(timezone.utc),
+                    },
+                )
+
+        db.commit()
+
         # Finalize Job
         finish_time = datetime.now(timezone.utc)
         db.execute(
@@ -151,27 +211,27 @@ def run_analysis_pipeline(self, job_id: str):
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
-    except Exception as e:
-        db.rollback()
-        fail_time = datetime.now(timezone.utc)
-        error_str = str(e)
-
-        db.execute(
-            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"),
-            {"id": job_id, "err": error_str, "finish": fail_time},
-        )
-        db.execute(
-            text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
-            {"id": job_id, "err": error_str, "finish": fail_time},
-        )
-        db.commit()
-
-        publish_event(job_id, {
-            "job_id": job_id,
-            "status": "FAILED",
-            "progress_percent": 0.0,
-            "error_message": error_str,
-        })
-        raise e
-    finally:
-        db.close()
+    except Exception as e:\
+        db.rollback()\
+        fail_time = datetime.now(timezone.utc)\
+        error_str = str(e)\
+\
+        db.execute(\
+            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"),\
+            {"id": job_id, "err": error_str, "finish": fail_time},\
+        )\
+        db.execute(\
+            text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),\
+            {"id": job_id, "err": error_str, "finish": fail_time},\
+        )\
+        db.commit()\
+\
+        publish_event(job_id, {\
+            "job_id": job_id,\
+            "status": "FAILED",\
+            "progress_percent": 0.0,\
+            "error_message": error_str,\
+        })\
+        raise e\
+    finally:\
+        db.close()\
