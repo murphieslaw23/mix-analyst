@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, List
+from .analysis import AnalysisResultOut
 
 
 class MediaAssetOut(BaseModel):
@@ -28,6 +29,7 @@ class MixOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     media_asset: MediaAssetOut
+    analysis_result: Optional[AnalysisResultOut] = None
 
     class Config:
         from_attributes = True

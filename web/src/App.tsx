@@ -9,8 +9,35 @@ import {
   PlayCircle,
   Loader2,
   XCircle,
-  RotateCcw,
+  Gauge,
+  KeyRound,
+  Volume2,
 } from "lucide-react";
+
+interface BpmCandidate {
+  bpm: number;
+  confidence: number;
+  support_count: number;
+}
+
+interface QualityFinding {
+  type: string;
+  severity: string;
+  description: string;
+}
+
+interface AnalysisResult {
+  primary_bpm: number;
+  bpm_confidence: number;
+  bpm_candidates: BpmCandidate[];
+  detected_key: string;
+  camelot_code: string;
+  key_confidence: number;
+  integrated_lufs: number;
+  loudness_range_lra: number;
+  true_peak_db: number;
+  quality_findings: QualityFinding[];
+}
 
 interface MixItem {
   id: string;
@@ -25,6 +52,7 @@ interface MixItem {
     codec: string;
     file_size_bytes: number;
   };
+  analysis_result?: AnalysisResult;
 }
 
 interface ActiveJobState {
@@ -174,7 +202,6 @@ function App() {
         },
       }));
 
-      // Connect SSE stream
       const evtSource = new EventSource(`/api/v1/jobs/${jobId}/events`);
 
       evtSource.addEventListener("update", (event) => {
@@ -190,6 +217,10 @@ function App() {
             error_message: data.error_message,
           },
         }));
+
+        if (data.status === "SUCCEEDED") {
+          fetchStatusAndMixes();
+        }
       });
 
       evtSource.addEventListener("close", () => {
@@ -309,7 +340,7 @@ function App() {
           )}
         </div>
 
-        {/* Mixes List with Real-time Job Queue */}
+        {/* Mixes List with Real-time Job Queue & Analysis Card */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
           <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
             <Music className="w-5 h-5 text-emerald-400" />
@@ -324,8 +355,10 @@ function App() {
             <div className="divide-y divide-slate-800">
               {mixes.map((mix) => {
                 const activeJob = activeJobs[mix.id];
+                const analysis = mix.analysis_result;
+
                 return (
-                  <div key={mix.id} className="py-4 space-y-3">
+                  <div key={mix.id} className="py-4 space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
@@ -349,7 +382,7 @@ function App() {
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition"
                           >
                             <PlayCircle className="w-3.5 h-3.5" />
-                            {activeJob?.status === "SUCCEEDED" ? "Re-Analyze" : "Start Pipeline"}
+                            {analysis ? "Re-Analyze" : "Start Analysis Pipeline"}
                           </button>
                         ) : (
                           <button
@@ -363,38 +396,73 @@ function App() {
                       </div>
                     </div>
 
-                    {/* Active Job Progress Bar & Stage Status */}
-                    {activeJob && (
+                    {/* Active Job Progress Bar */}
+                    {activeJob && activeJob.status === "RUNNING" && (
                       <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2">
-                            {activeJob.status === "RUNNING" && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
-                            {activeJob.status === "SUCCEEDED" && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-                            {activeJob.status === "FAILED" && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
-                            {activeJob.status === "CANCELLED" && <RotateCcw className="w-3.5 h-3.5 text-amber-400" />}
+                            <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />
                             <span className="text-slate-300 font-medium">Stage: {activeJob.current_stage}</span>
                           </div>
                           <span className="text-slate-400">{activeJob.progress_percent}%</span>
                         </div>
-
                         <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                           <div
-                            className={`h-full transition-all duration-300 ${
-                              activeJob.status === "SUCCEEDED"
-                                ? "bg-emerald-500"
-                                : activeJob.status === "FAILED"
-                                ? "bg-rose-500"
-                                : activeJob.status === "CANCELLED"
-                                ? "bg-amber-500"
-                                : "bg-indigo-500"
-                            }`}
+                            className="bg-indigo-500 h-full transition-all duration-300"
                             style={{ width: `${activeJob.progress_percent}%` }}
                           />
                         </div>
+                      </div>
+                    )}
 
-                        {activeJob.error_message && (
-                          <p className="text-xs text-rose-400">{activeJob.error_message}</p>
-                        )}
+                    {/* Analysis Result Card (Phase 3) */}
+                    {analysis && (
+                      <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                        {/* BPM & Tempo Map */}
+                        <div className="space-y-1.5 bg-slate-900/40 p-3 rounded-md border border-slate-800/50">
+                          <div className="flex items-center gap-1.5 text-indigo-400 font-medium">
+                            <Gauge className="w-4 h-4" />
+                            <span>Tempo & BPM</span>
+                          </div>
+                          <div className="text-xl font-bold text-slate-100">
+                            {analysis.primary_bpm} <span className="text-xs font-normal text-slate-400">BPM</span>
+                          </div>
+                          <div className="text-slate-400">
+                            Confidence: {(analysis.bpm_confidence * 100).toFixed(0)}%
+                          </div>
+                        </div>
+
+                        {/* Harmonic Key & Camelot */}
+                        <div className="space-y-1.5 bg-slate-900/40 p-3 rounded-md border border-slate-800/50">
+                          <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                            <KeyRound className="w-4 h-4" />
+                            <span>Harmonic Key</span>
+                          </div>
+                          <div className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                            <span>{analysis.detected_key}</span>
+                            <span className="text-xs bg-emerald-950 text-emerald-400 border border-emerald-800 px-1.5 py-0.5 rounded font-mono">
+                              {analysis.camelot_code}
+                            </span>
+                          </div>
+                          <div className="text-slate-400">
+                            Confidence: {(analysis.key_confidence * 100).toFixed(0)}%
+                          </div>
+                        </div>
+
+                        {/* Loudness & Dynamics */}
+                        <div className="space-y-1.5 bg-slate-900/40 p-3 rounded-md border border-slate-800/50">
+                          <div className="flex items-center gap-1.5 text-amber-400 font-medium">
+                            <Volume2 className="w-4 h-4" />
+                            <span>Loudness (EBU R128)</span>
+                          </div>
+                          <div className="text-slate-200">
+                            Integrated: <span className="font-bold text-slate-100">{analysis.integrated_lufs}</span> LUFS
+                          </div>
+                          <div className="text-slate-400 flex justify-between">
+                            <span>True Peak: {analysis.true_peak_db} dBTP</span>
+                            <span>LRA: {analysis.loudness_range_lra} LU</span>
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
