@@ -1,14 +1,17 @@
 # Mix Analyst
 
-Mix Analyst is a full-stack application for analyzing mixes, built with a web frontend, an API backend, and Docker-based deployment.
+Mix Analyst is a full-stack application for analyzing long DJ mixes and continuous audio recordings. It provides automatic track detection (Shazam-style), BPM/key analysis, loudness measurement, and export tools.
 
 ## Stack
 
-- **Web** — frontend application
-- **API** — backend service
-- **Docker** — containerized development and deployment
+- **Web** — React + TypeScript + Vite + Tailwind CSS
+- **API** — FastAPI + Pydantic v2 + SQLAlchemy 2
+- **Worker** — Celery + Redis
+- **Database** — PostgreSQL 16
+- **Audio Analysis** — librosa, soundfile, shazamio, pyacoustid
+- **Deployment** — Docker Compose
 
-## Getting Started
+## Quickstart
 
 ### Prerequisites
 
@@ -22,19 +25,25 @@ docker compose up --build
 
 Once running:
 
-- Web: http://localhost:3000
-- API: http://localhost:8000
+- **Web**: http://localhost:3000
+- **API**: http://localhost:8000
+- **API Health**: http://localhost:8000/health/live
 
 ### Local Development
 
 ```bash
-# Frontend
-cd web
-npm install
-npm run dev
-
 # API
 cd api
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+
+# Worker
+cd worker
+pip install -r requirements.txt
+celery -A celery_app worker --loglevel=info
+
+# Web
+cd web
 npm install
 npm run dev
 ```
@@ -43,11 +52,11 @@ npm run dev
 
 ```
 mix-analyst/
-├── web/                  # Frontend application
-├── api/                  # Backend API
+├── api/                  # FastAPI backend
+├── worker/               # Celery worker tasks
+├── web/                  # React + Vite frontend
 ├── docker-compose.yml    # Local orchestration
-├── Dockerfile            # Container build
-├── .gitignore
+├── .env.example          # Environment template
 └── README.md
 ```
 
