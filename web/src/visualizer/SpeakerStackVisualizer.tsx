@@ -87,6 +87,10 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [hudTelemetry, setHudTelemetry] = useState({ subDb: -60, midDb: -60, highDb: -60, excursionMm: 0 });
+  
+  const autoOrbitYawRef = useRef<number>(0);
+  const lastHudUpdateRef = useRef<number>(0);
+  const lastTimeRef = useRef<number>(performance.now());
 
   // Generate Stack geometry based on selected architecture
   const boxes = useMemo<SpeakerBox[]>(() => {
@@ -148,7 +152,6 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
       }
     } else if (settings.architecture === 'mechanical_totem') {
       // Vertical massive totem tower with side wings
-      // Center Tower
       list.push({ type: 'sub_scoop', x: 0, y: -1.8, z: 0, w: 2.4, h: 1.5, d: 1.6, coneRadius: 0.65, coneCount: 2 });
       list.push({ type: 'sub_scoop', x: 0, y: -0.3, z: 0.1, w: 2.2, h: 1.4, d: 1.5, coneRadius: 0.58, coneCount: 2 });
       list.push({ type: 'kick_bin', x: 0, y: 1.1, z: 0.2, w: 2.0, h: 1.2, d: 1.3, coneRadius: 0.46, coneCount: 2 });
@@ -186,10 +189,13 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
     let animId: number;
     const freqData = new Uint8Array(analyserNode ? analyserNode.frequencyBinCount : 128);
 
-    const render = () => {
+    const render = (now: number) => {
+      const delta = (now - lastTimeRef.current) / 1000;
+      lastTimeRef.current = now;
+
       // Resize handling
       const width = (canvas.width = canvas.parentElement?.clientWidth || 800);
-      const height = (canvas.height = canvas.parentElement?.clientHeight || 500);
+      const height = (canvas.height = canvas.parentElement?.clientHeight || 480);
 
       // Audio Analysis Extraction
       let subEnergy = 0;
@@ -198,7 +204,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
 
       if (analyserNode && isPlaying) {
         analyserNode.getByteFrequencyData(freqData);
-        // Sub-bass: bins 1 to 6 (roughly 20 - 120 Hz)
+        // Sub-bass: bins 1 to 6
         let subSum = 0;
         for (let i = 1; i <= 6; i++) subSum += freqData[i] || 0;
         subEnergy = subSum / (6 * 255);
@@ -213,23 +219,28 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
         for (let i = 31; i <= 80; i++) highSum += freqData[i] || 0;
         highEnergy = highSum / (50 * 255);
       } else if (isPlaying) {
-        // Subtle idle pulse
-        const t = Date.now() / 300;
+        // Idle pulse
+        const t = now / 300;
         subEnergy = 0.2 + Math.sin(t) * 0.15;
         midEnergy = 0.15 + Math.cos(t * 1.5) * 0.1;
         highEnergy = 0.1 + Math.sin(t * 2) * 0.08;
       }
 
       const excursion = subEnergy * settings.excursionScale * 14.0; // mm
-      setHudTelemetry({
-        subDb: Math.round(subEnergy * 60 - 60),
-        midDb: Math.round(midEnergy * 60 - 60),
-        highDb: Math.round(highEnergy * 60 - 60),
-        excursionMm: parseFloat(excursion.toFixed(1)),
-      });
+
+      // Throttle React HUD updates to ~8 Hz (every 120ms) to avoid render churn
+      if (now - lastHudUpdateRef.current > 120) {
+        lastHudUpdateRef.current = now;
+        setHudTelemetry({
+          subDb: Math.round(subEnergy * 60 - 60),
+          midDb: Math.round(midEnergy * 60 - 60),
+          highDb: Math.round(highEnergy * 60 - 60),
+          excursionMm: parseFloat(excursion.toFixed(1)),
+        });
+      }
 
       // Clear Canvas & draw industrial background gradient
-      ctx.fillStyle = '#0a0a0a';
+      ctx.fillStyle = '#0a0a0c';
       ctx.fillRect(0, 0, width, height);
 
       // Radial stage glow reacting to sub hits
@@ -258,26 +269,24 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
         ctx.stroke();
       }
 
-      // Auto-orbit camera
-      let curYaw = rotation.yaw;
+      // Continuous Auto-Orbit Accumulation
       if (settings.orbitSpeed > 0 && !isDragging) {
-        curYaw += settings.orbitSpeed * 0.008;
+        autoOrbitYawRef.current += settings.orbitSpeed * delta * 0.5;
       }
+      const totalYaw = rotation.yaw + autoOrbitYawRef.current;
 
       // 3D Projection Engine
       const scale = Math.min(width, height) / 5.5;
       const originX = width / 2;
       const originY = height * 0.6;
-      const cosYaw = Math.cos(curYaw);
-      const sinYaw = Math.sin(curYaw);
+      const cosYaw = Math.cos(totalYaw);
+      const sinYaw = Math.sin(totalYaw);
       const cosPitch = Math.cos(rotation.pitch);
       const sinPitch = Math.sin(rotation.pitch);
 
       const project3D = (x: number, y: number, z: number) => {
-        // Rotate around Y (yaw)
         const rx = x * cosYaw - z * sinYaw;
-        const rz = x * sinYaw + z * cosYaw + 6.0; // camera distance
-        // Rotate around X (pitch)
+        const rz = x * sinYaw + z * cosYaw + 6.0;
         const ry = y * cosPitch - (rz - 6.0) * sinPitch;
         const fov = 4.5 / Math.max(0.1, rz);
         return {
@@ -288,7 +297,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
         };
       };
 
-      // Sort boxes back to front (Painter's algorithm)
+      // Painter's sorting back to front
       const sortedBoxes = [...boxes].map((b) => {
         const center = project3D(b.x, b.y, b.z);
         return { ...b, depth: center.depth };
@@ -301,7 +310,6 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
         const hh = box.h / 2;
         const hd = box.d / 2;
 
-        // 8 Corners of the cabinet box
         const corners = [
           project3D(box.x - hw, box.y - hh, box.z - hd),
           project3D(box.x + hw, box.y - hh, box.z - hd),
@@ -313,7 +321,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
           project3D(box.x - hw, box.y + hh, box.z + hd),
         ];
 
-        // Front Face (corners 4, 5, 6, 7)
+        // Front Face
         ctx.beginPath();
         ctx.moveTo(corners[4].px, corners[4].py);
         ctx.lineTo(corners[5].px, corners[5].py);
@@ -333,11 +341,10 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
           ctx.stroke();
         }
 
-        // Perforated Grille & Corner Bolts
         const centerFront = project3D(box.x, box.y, box.z + hd);
         const boxRadiusPx = box.coneRadius * scale * centerFront.fovScale;
 
-        // Render Dynamic Cones / Horns
+        // Render Dynamic Cones & Horn Flares
         if (box.type === 'sub_scoop' || box.type === 'kick_bin') {
           const coneDisp = box.type === 'sub_scoop' ? excursion * 0.02 : midEnergy * 0.015;
           const coneFront = project3D(box.x, box.y, box.z + hd + coneDisp);
@@ -350,14 +357,12 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
           ctx.lineWidth = 2;
           ctx.stroke();
 
-          // Dust cap vibrating
           ctx.beginPath();
           ctx.arc(coneFront.px, coneFront.py, boxRadiusPx * 0.35, 0, Math.PI * 2);
           ctx.fillStyle = palette.grill;
           ctx.fill();
           ctx.stroke();
         } else if (box.type === 'mid_horn' || box.type === 'top_flare') {
-          // Flare Horn with reactive illumination
           const flareFront = project3D(box.x, box.y, box.z + hd);
           const flareW = boxRadiusPx * 1.6;
           const flareH = boxRadiusPx * 0.9;
@@ -374,7 +379,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
 
       // Strobe Trigger Flash
       if (subEnergy > settings.strobeSensitivity && isPlaying) {
-        ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.3, (subEnergy - settings.strobeSensitivity) * 0.8)})`;
+        ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.35, (subEnergy - settings.strobeSensitivity) * 0.9)})`;
         ctx.fillRect(0, 0, width, height);
       }
 
@@ -415,7 +420,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
       <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
 
       {/* HUD Telemetry Overlay */}
-      <div className="absolute top-3 left-3 bg-neutral-900/85 backdrop-blur border border-neutral-700 px-3 py-2 rounded text-xs font-mono text-neutral-300 space-y-1">
+      <div className="absolute top-3 left-3 bg-neutral-900/85 backdrop-blur border border-neutral-700 px-3 py-2 rounded text-xs font-mono text-neutral-300 space-y-1 pointer-events-none">
         <div className="text-orange-500 font-bold uppercase tracking-wider text-[10px]">
           SYCO23 // 3D STACK RIG
         </div>
@@ -426,8 +431,8 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
         </div>
       </div>
 
-      <div className="absolute bottom-3 right-3 text-[10px] font-mono text-neutral-500 bg-black/60 px-2 py-1 rounded">
-        Drag to Orbit | 3D WebGL Projection
+      <div className="absolute bottom-3 right-3 text-[10px] font-mono text-neutral-500 bg-black/60 px-2 py-1 rounded pointer-events-none">
+        Drag to Orbit | 3D Canvas Projection
       </div>
     </div>
   );

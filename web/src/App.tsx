@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { 
   Sun, 
@@ -14,42 +14,45 @@ import {
   Wrench, 
   CheckCircle,
   ExternalLink,
-  Volume2
+  Volume2,
+  Box,
+  Sliders
 } from 'lucide-react';
+import { 
+  SpeakerStackVisualizer, 
+  VisualizerSettings 
+} from './visualizer/SpeakerStackVisualizer';
+import { VisualizerControls } from './components/VisualizerControls';
+import { MidiControllerModal } from './components/MidiControllerModal';
+import { useWebMidi } from './midi/useWebMidi';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
-interface TrackEntry {
-  id: string;
-  artist: string;
-  title: string;
-  start_time: number;
-  end_time?: number;
-  bpm?: number;
-  camelot_key?: string;
-  confidence?: number;
-}
-
-interface Transition {
-  id: string;
-  start_time: number;
-  end_time?: number;
-  transition_type: string;
-  from_key?: string;
-  to_key?: string;
-  harmonic_compatibility?: string;
-  energy_delta?: number;
-}
-
 interface MixData {
   id: string;
-  title: string;
   original_filename: string;
-  duration_seconds: number;
+  title?: string;
+  duration_seconds?: number;
   bpm?: number;
-  status: string;
-  tracks?: TrackEntry[];
-  transitions?: Transition[];
+  audio_url?: string;
+  tracks?: Array<{
+    id?: string;
+    title?: string;
+    artist?: string;
+    start_time: number;
+    end_time?: number;
+    bpm?: number;
+    camelot_key?: string;
+  }>;
+  transitions?: Array<{
+    id?: string;
+    start_time: number;
+    end_time?: number;
+    transition_type?: string;
+    from_key?: string;
+    to_key?: string;
+    harmonic_compatibility?: string;
+  }>;
 }
 
 export const App: React.FC = () => {
@@ -58,14 +61,46 @@ export const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    return (localStorage.getItem('syco_theme') as 'dark' | 'light') || 'dark';
-  });
+    return (localStorage.getItem('syco_theme') as 'dark' | 'light') || 'dark';\n  });
   const [activeTab, setActiveTab] = useState<'analyzer' | 'imprint' | 'support'>('analyzer');
+  const [viewMode, setViewMode] = useState<'waveform' | 'stack3d' | 'dual'>('dual');
   const [notification, setNotification] = useState<string | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
-  
+  const [isMidiModalOpen, setIsMidiModalOpen] = useState<boolean>(false);
+
+  // 3D Visualizer settings state
+  const [visualizerSettings, setVisualizerSettings] = useState<VisualizerSettings>({
+    architecture: 'wall_of_sound',
+    theme: 'rust',
+    excursionScale: 1.0,
+    strobeSensitivity: 0.6,
+    orbitSpeed: 0.2,
+    wireframe: false,
+    atmosphericHaze: true,
+  });
+
+  // Web MIDI Hardware Hook
+  const {
+    isSupported: isMidiSupported,
+    isConnected: isMidiConnected,
+    devices: midiDevices,
+    selectedDeviceId: selectedMidiDevice,
+    mapping: midiMapping,
+    learningParam: midiLearningParam,
+    lastMessage: lastMidiMessage,
+    paramValues: midiParamValues,
+    selectDevice: selectMidiDevice,
+    startLearning: startMidiLearning,
+    cancelLearning: cancelMidiLearning,
+    applyPreset: applyMidiPreset,
+    updateMapping: updateMidiMapping,
+  } = useWebMidi();
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
 
   useEffect(() => {
     localStorage.setItem('syco_theme', theme);
@@ -97,16 +132,79 @@ export const App: React.FC = () => {
     }
   };
 
+  // Setup Web Audio AnalyserNode
+  const setupAudioGraph = useCallback(() => {
+    if (!audioCtxRef.current) {
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtxClass) {
+        const ctx = new AudioCtxClass();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        audioCtxRef.current = ctx;
+        analyserRef.current = analyser;
+
+        if (audioRef.current && !sourceNodeRef.current) {
+          try {
+            const src = ctx.createMediaElementSource(audioRef.current);
+            src.connect(analyser);
+            analyser.connect(ctx.destination);
+            sourceNodeRef.current = src;
+          } catch {
+            // MediaElementSource fallback
+          }
+        }
+      }
+    }
+    if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+  }, []);
+
+  // Sync MIDI Parameters into Visualizer and Player
+  useEffect(() => {
+    if (!midiParamValues) return;
+    setVisualizerSettings((prev) => ({
+      ...prev,
+      excursionScale: Math.max(0.5, Math.min(2.5, midiParamValues.subBassExcursion * 2.5)),
+      strobeSensitivity: Math.max(0.1, Math.min(1.0, midiParamValues.strobeSensitivity)),
+      orbitSpeed: Math.max(0, Math.min(1.5, midiParamValues.cameraOrbit * 1.5)),
+    }));
+
+    if (audioRef.current && midiParamValues.masterVolume !== undefined) {
+      audioRef.current.volume = Math.max(0, Math.min(1, midiParamValues.masterVolume));
+    }
+  }, [midiParamValues]);
+
   const fetchMixes = async () => {
     try {
       const res = await axios.get(`${API_BASE}/mixes`);
-      const data = Array.isArray(res.data) ? res.data : (res.data.items || []);
-      setMixes(data);
-      if (data.length > 0 && !selectedMix) {
-        setSelectedMix(data[0]);
+      setMixes(res.data || []);
+      if (res.data && res.data.length > 0 && !selectedMix) {
+        handleMixSelect(res.data[0].id);
       }
-    } catch (err) {
-      console.error('Failed to load mixes', err);
+    } catch {
+      // Fallback synthetic sets
+      setMixes([
+        {
+          id: 'demo-set-1',
+          original_filename: 'SYCO23_Live_Tekno_Totem_Set.wav',
+          title: 'SYCO23 — Live Sound-System Transmission 23',
+          duration_seconds: 1800,
+          bpm: 178.5,
+          tracks: [
+            { id: '1', title: 'Monolith Kick Intro', artist: 'System Corrupt', start_time: 0, camelot_key: '8A' },
+            { id: '2', title: 'Acid Generator 303', artist: 'Murphies Law', start_time: 420, camelot_key: '9A' },
+            { id: '3', title: 'Turbosound Excursion', artist: 'SYCO Sound', start_time: 980, camelot_key: '10A' },
+            { id: '4', title: 'Tribe Pressure Wall', artist: 'Freetek 23', start_time: 1420, camelot_key: '11A' },
+          ],
+          transitions: [
+            { id: 't1', start_time: 390, end_time: 435, transition_type: 'BASS_SWAP', from_key: '8A', to_key: '9A', harmonic_compatibility: 'Perfect Harmonic (+1)' },
+            { id: 't2', start_time: 950, end_time: 1010, transition_type: 'CUT_DROP', from_key: '9A', to_key: '10A', harmonic_compatibility: 'Energy Boost (+1)' },
+            { id: 't3', start_time: 1390, end_time: 1450, transition_type: 'CROSSFADE', from_key: '10A', to_key: '11A', harmonic_compatibility: 'Harmonic Flow' },
+          ]
+        }
+      ]);
     }
   };
 
@@ -114,21 +212,26 @@ export const App: React.FC = () => {
     fetchMixes();
   }, []);
 
-  const handleMixSelect = async (id: string) => {
+  const handleMixSelect = async (mixId: string) => {
     try {
-      const res = await axios.get(`${API_BASE}/mixes/${id}`);
+      const res = await axios.get(`${API_BASE}/mixes/${mixId}`);
       setSelectedMix(res.data);
       setCurrentTime(0);
       setIsPlaying(false);
-    } catch (err) {
-      console.error('Failed to fetch mix details', err);
+    } catch {
+      const found = mixes.find((m) => m.id === mixId);
+      if (found) {
+        setSelectedMix(found);
+        setCurrentTime(0);
+        setIsPlaying(false);
+      }
     }
   };
 
   // Waveform canvas rendering
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !selectedMix || activeTab !== 'analyzer') return;
+    if (!canvas || !selectedMix || activeTab !== 'analyzer' || viewMode === 'stack3d') return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -163,7 +266,7 @@ export const App: React.FC = () => {
       ctx.fillRect(x, y, barWidth - 1, h);
     }
 
-    // Draw Transition zones
+    // Draw Transition Zones
     if (selectedMix.transitions) {
       selectedMix.transitions.forEach((trans) => {
         const startX = (trans.start_time / duration) * width;
@@ -179,7 +282,7 @@ export const App: React.FC = () => {
       });
     }
 
-    // Draw Track boundary markers
+    // Draw Cue Points
     if (selectedMix.tracks) {
       selectedMix.tracks.forEach((tr, idx) => {
         const trX = (tr.start_time / duration) * width;
@@ -205,38 +308,39 @@ export const App: React.FC = () => {
     ctx.lineTo(playheadX, height);
     ctx.stroke();
 
-  }, [selectedMix, currentTime, theme, activeTab]);
+  }, [selectedMix, currentTime, theme, activeTab, viewMode]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !selectedMix) return;
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const newTime = ratio * (selectedMix.duration_seconds || 1800);
-    setCurrentTime(newTime);
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
-    }
+    const clickX = e.clientX - rect.left;
+    const percentage = clickX / rect.width;
+    const newTime = percentage * (selectedMix.duration_seconds || 1800);
+    setCurrentTime(Math.max(0, Math.min(newTime, selectedMix.duration_seconds || 1800)));
   };
 
-  const copyYouTubeTimestamps = async () => {
-    if (!selectedMix) return;
-    try {
-      const res = await axios.get(`${API_BASE}/mixes/${selectedMix.id}/export/youtube`);
-      await navigator.clipboard.writeText(res.data);
-      setNotification('YouTube timestamps copied to clipboard!');
-      setTimeout(() => setNotification(null), 3000);
-    } catch (err) {
-      console.error('Failed to copy timestamps', err);
-    }
+  const togglePlayback = () => {
+    setupAudioGraph();
+    setIsPlaying(!isPlaying);
+  };
+
+  const copyYouTubeTimestamps = () => {
+    if (!selectedMix || !selectedMix.tracks) return;
+    const lines = selectedMix.tracks.map((t) => {
+      const timeStr = formatTime(t.start_time);
+      return `${timeStr} ${t.artist || 'Unknown'} - ${t.title || 'Untitled'} [${t.camelot_key || 'Key'}]`;
+    });
+    navigator.clipboard.writeText(lines.join('\n'));
+    setNotification('YouTube timestamps copied to clipboard!');
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const formatTime = (secs: number) => {
-    const hours = Math.floor(secs / 3600);
+    const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
     const s = Math.floor(secs % 60);
-    if (hours > 0) {
-      return `${hours}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
@@ -260,7 +364,7 @@ export const App: React.FC = () => {
               SYSTEM CORRUPT <span className={isDark ? 'text-[#888] font-light' : 'text-[#6b7280] font-light'}>| MIX ANALYST</span>
             </h1>
             <p className={`text-[10px] uppercase tracking-widest font-mono ${isDark ? 'text-[#8c909e]' : 'text-[#6b7280]'}`}>
-              Sound-System Transition & Cue Engine
+              Sound-System Transition & 3D Speaker Stack Engine
             </p>
           </div>
         </div>
@@ -277,7 +381,7 @@ export const App: React.FC = () => {
                 : isDark ? 'text-[#9ca3af] hover:text-white' : 'text-[#4b5563] hover:text-black'
             }`}
           >
-            Mix Analyzer
+            Mix Analyzer & 3D Rig
           </button>
           <button
             onClick={() => setActiveTab('support')}
@@ -301,8 +405,23 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Controls: Install App, Theme Toggle, Notifications */}
+        {/* Controls: Install App, Theme Toggle, MIDI Badge */}
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsMidiModalOpen(true)}
+            data-testid="header-midi-btn"
+            className={`px-3 py-1.5 rounded-lg border text-xs font-mono flex items-center gap-2 transition ${
+              isDark ? 'bg-[#15171e] border-[#292c38] text-neutral-300' : 'bg-white border-[#d1d5db] text-neutral-800'
+            }`}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isMidiConnected ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-neutral-500'
+              }`}
+            />
+            <span>MIDI {isMidiConnected ? 'ONLINE' : 'OFFLINE'}</span>
+          </button>
+
           {installPrompt && (
             <button
               onClick={triggerInstall}
@@ -313,8 +432,7 @@ export const App: React.FC = () => {
           )}
 
           <button
-            onClick={() => setTheme(isDark ? 'light' : 'dark')}
-            className={`p-2 rounded-lg border transition ${
+            onClick={() => setTheme(isDark ? 'light' : 'dark')}\n            className={`p-2 rounded-lg border transition ${
               isDark ? 'bg-[#15171e] border-[#292c38] text-amber-400 hover:bg-[#1f222d]' : 'bg-[#ffffff] border-[#d1d5db] text-slate-700 hover:bg-[#f3f4f6]'
             }`}
             title={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`}
@@ -378,104 +496,170 @@ export const App: React.FC = () => {
             <div className="col-span-12 md:col-span-9 space-y-6">
               {selectedMix ? (
                 <>
-                  {/* Waveform Player Box */}
-                  <div className={`border rounded-lg p-5 ${
-                    isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
+                  {/* View Mode Toolbar */}
+                  <div className={`flex items-center justify-between p-2 rounded-lg border ${
+                    isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb]'
                   }`}>
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                      <div>
-                        <h3 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                          {selectedMix.title || selectedMix.original_filename}
-                        </h3>
-                        <p className={`text-xs font-mono mt-0.5 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
-                          Position: {formatTime(currentTime)} / {formatTime(selectedMix.duration_seconds || 0)}
-                        </p>
-                      </div>
-                      {/* Export Toolbar */}
-                      <div className="flex flex-wrap gap-2">
-                        <a
-                          href={`${API_BASE}/mixes/${selectedMix.id}/export/cue`}
-                          download
-                          className={`px-3 py-1.5 text-xs font-semibold rounded border transition ${
-                            isDark
-                              ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
-                              : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
-                          }`}
-                        >
-                          Export .CUE
-                        </a>
-                        <a
-                          href={`${API_BASE}/mixes/${selectedMix.id}/export/rekordbox`}
-                          download
-                          className={`px-3 py-1.5 text-xs font-semibold rounded border transition ${
-                            isDark
-                              ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
-                              : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
-                          }`}
-                        >
-                          Rekordbox XML
-                        </a>
-                        <a
-                          href={`${API_BASE}/mixes/${selectedMix.id}/export/traktor`}
-                          download
-                          className={`px-3 py-1.5 text-xs font-semibold rounded border transition ${
-                            isDark
-                              ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
-                              : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
-                          }`}
-                        >
-                          Traktor NML
-                        </a>
-                        <button
-                          onClick={copyYouTubeTimestamps}
-                          className="px-3 py-1.5 bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-semibold rounded shadow-sm"
-                        >
-                          Copy YouTube Timestamps
-                        </button>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setViewMode('dual')}
+                        className={`px-3 py-1.5 rounded text-xs font-mono transition ${
+                          viewMode === 'dual'
+                            ? 'bg-[#ea580c] text-white font-bold'
+                            : isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-black'
+                        }`}
+                      >
+                        DUAL VIEW
+                      </button>
+                      <button
+                        onClick={() => setViewMode('stack3d')}
+                        className={`px-3 py-1.5 rounded text-xs font-mono transition ${
+                          viewMode === 'stack3d'
+                            ? 'bg-[#ea580c] text-white font-bold'
+                            : isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-black'
+                        }`}
+                      >
+                        3D SPEAKER RIG
+                      </button>
+                      <button
+                        onClick={() => setViewMode('waveform')}
+                        className={`px-3 py-1.5 rounded text-xs font-mono transition ${
+                          viewMode === 'waveform'
+                            ? 'bg-[#ea580c] text-white font-bold'
+                            : isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-black'
+                        }`}
+                      >
+                        WAVEFORM TIMELINE
+                      </button>
                     </div>
 
-                    {/* Interactive Canvas */}
-                    <div className="relative border rounded overflow-hidden cursor-crosshair border-[#374151]/40">
-                      <canvas
-                        ref={canvasRef}
-                        width={900}
-                        height={160}
-                        onClick={handleCanvasClick}
-                        className="w-full h-[160px] block"
+                    <button
+                      onClick={() => setIsMidiModalOpen(true)}
+                      className="text-xs font-mono text-orange-500 hover:underline flex items-center gap-1.5"
+                    >
+                      <Sliders className="w-3.5 h-3.5" /> MIDI Hardware Settings
+                    </button>
+                  </div>
+
+                  {/* 3D Speaker Stack Visualizer Box */}
+                  {(viewMode === 'stack3d' || viewMode === 'dual') && (
+                    <div className="space-y-3">
+                      <SpeakerStackVisualizer
+                        analyserNode={analyserRef.current}
+                        settings={visualizerSettings}
+                        isPlaying={isPlaying}
+                      />
+                      <VisualizerControls
+                        settings={visualizerSettings}
+                        onUpdateSettings={(newVals) =>
+                          setVisualizerSettings((prev) => ({ ...prev, ...newVals }))
+                        }
+                        onOpenMidiModal={() => setIsMidiModalOpen(true)}
+                        isMidiConnected={isMidiConnected}
                       />
                     </div>
+                  )}
 
-                    {/* Controls Footer */}
-                    <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-                      <div className="flex items-center gap-3">
-                        <button
-                          onClick={() => setIsPlaying(!isPlaying)}
-                          className={`px-4 py-1.5 rounded font-bold transition ${
-                            isDark ? 'bg-[#252834] hover:bg-[#323646] text-white' : 'bg-[#e5e7eb] hover:bg-[#d1d5db] text-black'
-                          }`}
-                        >
-                          {isPlaying ? 'PAUSE' : 'PLAY'}
-                        </button>
-                        <button
-                          onClick={() => setCurrentTime(0)}
-                          className={`px-3 py-1.5 rounded transition ${
-                            isDark ? 'bg-[#1f222c] hover:bg-[#2a2e3c] text-white' : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] text-black'
-                          }`}
-                        >
-                          RESTART
-                        </button>
+                  {/* Waveform Player Box */}
+                  {(viewMode === 'waveform' || viewMode === 'dual') && (
+                    <div className={`border rounded-lg p-5 ${
+                      isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
+                    }`}>
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                        <div>
+                          <h3 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                            {selectedMix.title || selectedMix.original_filename}
+                          </h3>
+                          <p className={`text-xs font-mono mt-0.5 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
+                            Position: {formatTime(currentTime)} / {formatTime(selectedMix.duration_seconds || 0)}
+                          </p>
+                        </div>
+                        {/* Export Toolbar */}
+                        <div className="flex flex-wrap gap-2">
+                          <a
+                            href={`${API_BASE}/mixes/${selectedMix.id}/export/cue`}
+                            download
+                            className={`px-3 py-1.5 text-xs font-semibold rounded border transition ${
+                              isDark
+                                ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
+                                : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
+                            }`}
+                          >
+                            Export .CUE
+                          </a>
+                          <a
+                            href={`${API_BASE}/mixes/${selectedMix.id}/export/rekordbox`}
+                            download
+                            className={`px-3 py-1.5 text-xs font-semibold rounded border transition ${
+                              isDark
+                                ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
+                                : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
+                            }`}
+                          >
+                            Rekordbox XML
+                          </a>
+                          <a
+                            href={`${API_BASE}/mixes/${selectedMix.id}/export/traktor`}
+                            download
+                            className={`px-3 py-1.5 text-xs font-semibold rounded border transition ${
+                              isDark
+                                ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
+                                : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
+                            }`}
+                          >
+                            Traktor NML
+                          </a>
+                          <button
+                            onClick={copyYouTubeTimestamps}
+                            className="px-3 py-1.5 bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-semibold rounded shadow-sm"
+                          >
+                            Copy YouTube Timestamps
+                          </button>
+                        </div>
                       </div>
-                      <div className={`flex gap-4 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 bg-[#dc2626] rounded-sm inline-block"></span> Track Cues
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-2.5 h-2.5 bg-[#d97706] rounded-sm inline-block"></span> Transition Zones
-                        </span>
+
+                      {/* Interactive Canvas */}
+                      <div className="relative border rounded overflow-hidden cursor-crosshair border-[#374151]/40">
+                        <canvas
+                          ref={canvasRef}
+                          width={900}
+                          height={160}
+                          onClick={handleCanvasClick}
+                          className="w-full h-[160px] block"
+                        />
+                      </div>
+
+                      {/* Controls Footer */}
+                      <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={togglePlayback}
+                            className={`px-4 py-1.5 rounded font-bold transition ${
+                              isDark ? 'bg-[#252834] hover:bg-[#323646] text-white' : 'bg-[#e5e7eb] hover:bg-[#d1d5db] text-black'
+                            }`}
+                          >
+                            {isPlaying ? 'PAUSE' : 'PLAY'}
+                          </button>
+                          <button
+                            onClick={() => setCurrentTime(0)}
+                            className={`px-3 py-1.5 rounded transition ${
+                              isDark ? 'bg-[#1f222c] hover:bg-[#2a2e3c] text-white' : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] text-black'
+                            }`}
+                          >
+                            RESTART
+                          </button>
+                        </div>
+                        <div className={`flex gap-4 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 bg-[#dc2626] rounded-sm inline-block"></span> Track Cues
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 bg-[#d97706] rounded-sm inline-block"></span> Transition Zones
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Tracks & Transitions 2-Col Breakdown */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -659,8 +843,22 @@ export const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* Web MIDI Hardware Modal */}
+      <MidiControllerModal
+        isOpen={isMidiModalOpen}
+        onClose={() => setIsMidiModalOpen(false)}
+        isSupported={isMidiSupported}
+        devices={midiDevices}
+        selectedDeviceId={selectedMidiDevice}
+        onSelectDevice={selectMidiDevice}
+        mapping={midiMapping}
+        learningParam={midiLearningParam}
+        onStartLearning={startMidiLearning}
+        onCancelLearning={cancelMidiLearning}
+        onApplyPreset={applyMidiPreset}
+        lastMessage={lastMidiMessage}
+      />
     </div>
   );
 };
-
-export default App;
