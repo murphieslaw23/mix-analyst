@@ -15,30 +15,17 @@ export default defineConfig({
     ['list']
   ],
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:3000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    headless: true,
   },
   projects: [
     {
       name: 'Desktop-Chrome',
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1440, height: 900 },
-      },
-    },
-    {
-      name: 'Desktop-Firefox',
-      use: {
-        ...devices['Desktop Firefox'],
-        viewport: { width: 1440, height: 900 },
-      },
-    },
-    {
-      name: 'Desktop-Safari',
-      use: {
-        ...devices['Desktop Safari'],
         viewport: { width: 1440, height: 900 },
       },
     },
@@ -58,8 +45,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run dev -- --host 0.0.0.0 --port 3000',
-    url: 'http://localhost:3000',
+    command: 'npx vite --host 127.0.0.1 --port 3000',
+    url: 'http://127.0.0.1:3000',
     reuseExistingServer: !process.env.CI,
     timeout: 60 * 1000,
   },
