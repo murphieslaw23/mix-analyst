@@ -1,0 +1,162 @@
+{
+  "id": "mix-30min-syco-freetekno-live",
+  "title": "SYSTEM CORRUPT - 30Min Live Sound-System Assault",
+  "original_filename": "syco23_30min_freetekno_live_set.wav",
+  "duration_seconds": 1800.0,
+  "bpm": 152.0,
+  "status": "completed",
+  "tracks": [
+    {
+      "id": "tr-001",
+      "artist": "System Corrupt",
+      "title": "Resonance Generator (Intro)",
+      "start_time": 0.0,
+      "end_time": 225.0,
+      "bpm": 150.0,
+      "camelot_key": "8A",
+      "confidence": 0.98
+    },
+    {
+      "id": "tr-002",
+      "artist": "Curley Korrupt",
+      "title": "Subwoofer Pressure Tribe",
+      "start_time": 225.0,
+      "end_time": 450.0,
+      "bpm": 152.0,
+      "camelot_key": "9A",
+      "confidence": 0.95
+    },
+    {
+      "id": "tr-003",
+      "artist": "Murphies Law",
+      "title": "Tekno Totem Assault",
+      "start_time": 450.0,
+      "end_time": 675.0,
+      "bpm": 152.0,
+      "camelot_key": "9B",
+      "confidence": 0.96
+    },
+    {
+      "id": "tr-004",
+      "artist": "Turbulence 23",
+      "title": "Acid Wall Destroyer",
+      "start_time": 675.0,
+      "end_time": 900.0,
+      "bpm": 154.0,
+      "camelot_key": "10B",
+      "confidence": 0.94
+    },
+    {
+      "id": "tr-005",
+      "artist": "Underground Tribe",
+      "title": "Oxidized Copper Coil",
+      "start_time": 900.0,
+      "end_time": 1160.0,
+      "bpm": 154.0,
+      "camelot_key": "11A",
+      "confidence": 0.97
+    },
+    {
+      "id": "tr-006",
+      "artist": "Tekno Core 23",
+      "title": "Speaker Stack Distortion",
+      "start_time": 1160.0,
+      "end_time": 1450.0,
+      "bpm": 155.0,
+      "camelot_key": "12A",
+      "confidence": 0.93
+    },
+    {
+      "id": "tr-007",
+      "artist": "System Corrupt",
+      "title": "Hardtek Ritual Anthem",
+      "start_time": 1450.0,
+      "end_time": 1680.0,
+      "bpm": 156.0,
+      "camelot_key": "1A",
+      "confidence": 0.96
+    },
+    {
+      "id": "tr-008",
+      "artist": "SYCO23",
+      "title": "Outro Sub Frequency Fade",
+      "start_time": 1680.0,
+      "end_time": 1800.0,
+      "bpm": 150.0,
+      "camelot_key": "2A",
+      "confidence": 0.99
+    }
+  ],
+  "transitions": [
+    {
+      "id": "trans-001",
+      "start_time": 195.0,
+      "end_time": 240.0,
+      "transition_type": "BEATMATCH_BLEND",
+      "from_key": "8A",
+      "to_key": "9A",
+      "harmonic_compatibility": "Compatible (+1 Fifth)",
+      "energy_delta": 0.15
+    },
+    {
+      "id": "trans-002",
+      "start_time": 420.0,
+      "end_time": 465.0,
+      "transition_type": "ENERGY_BOOST_DROP",
+      "from_key": "9A",
+      "to_key": "9B",
+      "harmonic_compatibility": "Relative Major",
+      "energy_delta": 0.32
+    },
+    {
+      "id": "trans-003",
+      "start_time": 645.0,
+      "end_time": 690.0,
+      "transition_type": "CROSSFADE_LONG",
+      "from_key": "9B",
+      "to_key": "10B",
+      "harmonic_compatibility": "Compatible (+1 Fifth)",
+      "energy_delta": 0.08
+    },
+    {
+      "id": "trans-004",
+      "start_time": 870.0,
+      "end_time": 915.0,
+      "transition_type": "HARMONIC_SWAP",
+      "from_key": "10B",
+      "to_key": "11A",
+      "harmonic_compatibility": "Diagonal Transition",
+      "energy_delta": 0.22
+    },
+    {
+      "id": "trans-005",
+      "start_time": 1130.0,
+      "end_time": 1175.0,
+      "transition_type": "BEATMATCH_BLEND",
+      "from_key": "11A",
+      "to_key": "12A",
+      "harmonic_compatibility": "Compatible (+1 Fifth)",
+      "energy_delta": 0.18
+    },
+    {
+      "id": "trans-006",
+      "start_time": 1420.0,
+      "end_time": 1465.0,
+      "transition_type": "DOUBLE_DROP_CUT",
+      "from_key": "12A",
+      "to_key": "1A",
+      "harmonic_compatibility": "Compatible (+1 Fifth)",
+      "energy_delta": 0.45
+    },
+    {
+      "id": "trans-007",
+      "start_time": 1650.0,
+      "end_time": 1695.0,
+      "transition_type": "FADEOUT_BLEND",
+      "from_key": "1A",
+      "to_key": "2A",
+      "harmonic_compatibility": "Compatible (+1 Fifth)",
+      "energy_delta": -0.3
+    }
+  ]
+}
