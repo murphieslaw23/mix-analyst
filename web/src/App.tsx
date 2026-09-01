@@ -1,28 +1,29 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { 
-  Sun, 
-  Moon, 
-  ShieldCheck, 
-  HelpCircle, 
-  Download, 
-  Wrench, 
+import {
+  Sun,
+  Moon,
+  ShieldCheck,
+  HelpCircle,
+  Download,
+  Radio,
+  Layers,
+  Wrench,
   CheckCircle,
   ExternalLink,
   Volume2,
-  Layers,
-  Radio,
   Sliders
 } from 'lucide-react';
-import { 
-  SpeakerStackVisualizer, 
-  VisualizerSettings 
+import {
+  SpeakerStackVisualizer,
+  VisualizerSettings
 } from './visualizer/SpeakerStackVisualizer';
 import { VisualizerControls } from './components/VisualizerControls';
 import { MidiControllerModal } from './components/MidiControllerModal';
 import { useWebMidi } from './midi/useWebMidi';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+const NOTE_DEBOUNCE_MS = 250;
 
 interface MixData {
   id: string;
@@ -64,8 +65,8 @@ export const App: React.FC = () => {
   const [notification, setNotification] = useState<string | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isMidiModalOpen, setIsMidiModalOpen] = useState<boolean>(false);
+  const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
-  // 3D Visualizer settings state
   const [visualizerSettings, setVisualizerSettings] = useState<VisualizerSettings>({
     architecture: 'wall_of_sound',
     theme: 'rust',
@@ -76,7 +77,6 @@ export const App: React.FC = () => {
     atmosphericHaze: true,
   });
 
-  // Web MIDI Hardware Hook
   const {
     isSupported: isMidiSupported,
     isConnected: isMidiConnected,
@@ -90,7 +90,6 @@ export const App: React.FC = () => {
     startLearning: startMidiLearning,
     cancelLearning: cancelMidiLearning,
     applyPreset: applyMidiPreset,
-    updateMapping: updateMidiMapping,
   } = useWebMidi();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -98,7 +97,11 @@ export const App: React.FC = () => {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const lastNoteActionRef = useRef<{ action: string; time: number }>({ action: '', time: 0 });
+  const lastNoteActionRef = useRef<Record<string, number>>({
+    playPause: 0,
+    cueJumpPrev: 0,
+    cueJumpNext: 0,
+  });
 
   useEffect(() => {
     localStorage.setItem('syco_theme', theme);
@@ -109,7 +112,6 @@ export const App: React.FC = () => {
     }
   }, [theme]);
 
-  // Handle PWA installation prompt
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -130,57 +132,40 @@ export const App: React.FC = () => {
     }
   };
 
-  // Setup Web Audio AnalyserNode graph bound to real media element
-  const setupAudioGraph = useCallback(() => {
-    if (!audioRef.current) return;
+  // Build the Web Audio graph once a real <audio> element exists.
+  const ensureAudioGraph = useCallback(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+
     if (!audioCtxRef.current) {
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtxClass) {
-        const ctx = new AudioCtxClass();
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.8;
-        audioCtxRef.current = ctx;
-        analyserRef.current = analyser;
+      if (!AudioCtxClass) return;
+      const ctx = new AudioCtxClass();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+      setAnalyserNode(analyser);
 
+      if (!sourceNodeRef.current) {
         try {
-          const src = ctx.createMediaElementSource(audioRef.current);
+          const src = ctx.createMediaElementSource(audioEl);
           src.connect(analyser);
           analyser.connect(ctx.destination);
           sourceNodeRef.current = src;
         } catch {
-          // Ignore duplicate node creation errors
+          // MediaElementSource can only be created once per element; ignore repeats.
         }
       }
     }
+
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
   }, []);
 
-  // Jump to cue points helper
-  const jumpCue = useCallback((direction: 'prev' | 'next') => {
-    if (!selectedMix || !selectedMix.tracks || selectedMix.tracks.length === 0) return;
-    const sorted = [...selectedMix.tracks].sort((a, b) => a.start_time - b.start_time);
-    const cur = currentTime;
-
-    if (direction === 'next') {
-      const nextTrack = sorted.find((t) => t.start_time > cur + 1.0);
-      if (nextTrack) {
-        if (audioRef.current) audioRef.current.currentTime = nextTrack.start_time;
-        setCurrentTime(nextTrack.start_time);
-      }
-    } else {
-      const prevTracks = sorted.filter((t) => t.start_time < cur - 1.0);
-      const target = prevTracks.length > 0 ? prevTracks[prevTracks.length - 1] : sorted[0];
-      if (target) {
-        if (audioRef.current) audioRef.current.currentTime = target.start_time;
-        setCurrentTime(target.start_time);
-      }
-    }
-  }, [selectedMix, currentTime]);
-
-  // Sync MIDI Parameters into Visualizer and Player
+  // Sync MIDI CC parameters into visualizer settings and real playback volume.
   useEffect(() => {
     if (!midiParamValues) return;
     setVisualizerSettings((prev) => ({
@@ -195,23 +180,67 @@ export const App: React.FC = () => {
     }
   }, [midiParamValues]);
 
-  // Listen to MIDI Note actions (play/pause, cue prev/next)
-  useEffect(() => {
-    if (!lastMidiMessage || lastMidiMessage.type !== 'note_on' || lastMidiMessage.value === 0) return;
-    const now = Date.now();
-    if (now - lastNoteActionRef.current.time < 200) return; // Debounce 200ms
-
-    if (midiMapping.playPauseNote !== undefined && lastMidiMessage.number === midiMapping.playPauseNote) {
-      lastNoteActionRef.current = { action: 'playPause', time: now };
-      togglePlayback();
-    } else if (midiMapping.cueJumpPrevNote !== undefined && lastMidiMessage.number === midiMapping.cueJumpPrevNote) {
-      lastNoteActionRef.current = { action: 'cuePrev', time: now };
-      jumpCue('prev');
-    } else if (midiMapping.cueJumpNextNote !== undefined && lastMidiMessage.number === midiMapping.cueJumpNextNote) {
-      lastNoteActionRef.current = { action: 'cueNext', time: now };
-      jumpCue('next');
+  const togglePlayback = useCallback(() => {
+    const audioEl = audioRef.current;
+    ensureAudioGraph();
+    if (!audioEl) {
+      setIsPlaying((prev) => !prev);
+      return;
     }
-  }, [lastMidiMessage, midiMapping, jumpCue]);
+    if (audioEl.paused) {
+      audioEl.play().catch(() => {
+        setNotification('Playback requires a user gesture or valid audio source.');
+        setTimeout(() => setNotification(null), 3000);
+      });
+    } else {
+      audioEl.pause();
+    }
+  }, [ensureAudioGraph]);
+
+  const seekTo = useCallback((time: number) => {
+    const audioEl = audioRef.current;
+    const duration = selectedMix?.duration_seconds || 0;
+    const clamped = Math.max(0, Math.min(time, duration));
+    if (audioEl && audioEl.src) {
+      audioEl.currentTime = clamped;
+    }
+    setCurrentTime(clamped);
+  }, [selectedMix]);
+
+  const jumpToNearestCue = useCallback((direction: 1 | -1) => {
+    if (!selectedMix?.tracks || selectedMix.tracks.length === 0) return;
+    const times = selectedMix.tracks.map((t) => t.start_time).sort((a, b) => a - b);
+    if (direction > 0) {
+      const next = times.find((t) => t > currentTime + 0.5);
+      seekTo(next !== undefined ? next : times[times.length - 1]);
+    } else {
+      const prevCandidates = times.filter((t) => t < currentTime - 0.5);
+      seekTo(prevCandidates.length > 0 ? prevCandidates[prevCandidates.length - 1] : times[0]);
+    }
+  }, [selectedMix, currentTime, seekTo]);
+
+  // Debounced MIDI note-trigger dispatch: play/pause and cue navigation.
+  useEffect(() => {
+    if (!lastMidiMessage) return;
+    if (lastMidiMessage.type !== 'note_on' || lastMidiMessage.value === 0) return;
+    if (!midiMapping) return;
+
+    const now = Date.now();
+    const isDebounced = (key: string) => {
+      const last = lastNoteActionRef.current[key] || 0;
+      if (now - last < NOTE_DEBOUNCE_MS) return true;
+      lastNoteActionRef.current[key] = now;
+      return false;
+    };
+
+    if (lastMidiMessage.number === midiMapping.playPauseNote && !isDebounced('playPause')) {
+      togglePlayback();
+    } else if (lastMidiMessage.number === midiMapping.cueJumpPrevNote && !isDebounced('cueJumpPrev')) {
+      jumpToNearestCue(-1);
+    } else if (lastMidiMessage.number === midiMapping.cueJumpNextNote && !isDebounced('cueJumpNext')) {
+      jumpToNearestCue(1);
+    }
+  }, [lastMidiMessage, midiMapping, togglePlayback, jumpToNearestCue]);
 
   const fetchMixes = async () => {
     try {
@@ -221,7 +250,6 @@ export const App: React.FC = () => {
         handleMixSelect(res.data[0].id);
       }
     } catch {
-      // Fallback synthetic sets
       setMixes([
         {
           id: 'demo-set-1',
@@ -247,33 +275,47 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     fetchMixes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleMixSelect = async (mixId: string) => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
     try {
       const res = await axios.get(`${API_BASE}/mixes/${mixId}`);
       setSelectedMix(res.data);
-      setCurrentTime(0);
-      setIsPlaying(false);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
     } catch {
       const found = mixes.find((m) => m.id === mixId);
-      if (found) {
-        setSelectedMix(found);
-        setCurrentTime(0);
-        setIsPlaying(false);
-        if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current.currentTime = 0;
-        }
-      }
+      if (found) setSelectedMix(found);
     }
   };
 
-  // Waveform canvas rendering
+  useEffect(() => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onTimeUpdate = () => setCurrentTime(audioEl.currentTime);
+    const onEnded = () => setIsPlaying(false);
+
+    audioEl.addEventListener('play', onPlay);
+    audioEl.addEventListener('pause', onPause);
+    audioEl.addEventListener('timeupdate', onTimeUpdate);
+    audioEl.addEventListener('ended', onEnded);
+
+    return () => {
+      audioEl.removeEventListener('play', onPlay);
+      audioEl.removeEventListener('pause', onPause);
+      audioEl.removeEventListener('timeupdate', onTimeUpdate);
+      audioEl.removeEventListener('ended', onEnded);
+    };
+  }, [selectedMix]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !selectedMix || activeTab !== 'analyzer' || viewMode === 'stack3d') return;
@@ -286,7 +328,6 @@ export const App: React.FC = () => {
 
     ctx.clearRect(0, 0, width, height);
 
-    // Dynamic background based on theme
     const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
     if (theme === 'dark') {
       bgGrad.addColorStop(0, '#14161d');
@@ -298,7 +339,6 @@ export const App: React.FC = () => {
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
 
-    // Waveform bars
     const numBars = 180;
     const barWidth = width / numBars;
     for (let i = 0; i < numBars; i++) {
@@ -306,28 +346,23 @@ export const App: React.FC = () => {
       const waveHeight = Math.sin(i * 0.15) * 0.3 + Math.cos(i * 0.08) * 0.4 + 0.3;
       const h = Math.max(8, waveHeight * (height * 0.7));
       const y = (height - h) / 2;
-
       ctx.fillStyle = theme === 'dark' ? '#ea580c' : '#c2410c';
       ctx.fillRect(x, y, barWidth - 1, h);
     }
 
-    // Draw Transition Zones
     if (selectedMix.transitions) {
       selectedMix.transitions.forEach((trans) => {
         const startX = (trans.start_time / duration) * width;
         const endX = ((trans.end_time || trans.start_time + 30) / duration) * width;
         const zoneWidth = Math.max(6, endX - startX);
-
         ctx.fillStyle = theme === 'dark' ? 'rgba(217, 119, 6, 0.4)' : 'rgba(245, 158, 11, 0.45)';
         ctx.fillRect(startX, 0, zoneWidth, height);
-
         ctx.strokeStyle = '#d97706';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(startX, 0, zoneWidth, height);
       });
     }
 
-    // Draw Cue Points
     if (selectedMix.tracks) {
       selectedMix.tracks.forEach((tr, idx) => {
         const trX = (tr.start_time / duration) * width;
@@ -337,14 +372,12 @@ export const App: React.FC = () => {
         ctx.moveTo(trX, 0);
         ctx.lineTo(trX, height);
         ctx.stroke();
-
         ctx.fillStyle = theme === 'dark' ? '#fca5a5' : '#991b1b';
         ctx.font = '10px "JetBrains Mono", monospace';
         ctx.fillText(`T${idx + 1}: ${tr.camelot_key || ''}`, trX + 4, 14);
       });
     }
 
-    // Draw Playhead
     const playheadX = (currentTime / duration) * width;
     ctx.strokeStyle = theme === 'dark' ? '#ffffff' : '#111827';
     ctx.lineWidth = 2.5;
@@ -352,7 +385,6 @@ export const App: React.FC = () => {
     ctx.moveTo(playheadX, 0);
     ctx.lineTo(playheadX, height);
     ctx.stroke();
-
   }, [selectedMix, currentTime, theme, activeTab, viewMode]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -361,29 +393,7 @@ export const App: React.FC = () => {
     const clickX = e.clientX - rect.left;
     const percentage = clickX / rect.width;
     const newTime = percentage * (selectedMix.duration_seconds || 1800);
-    const clamped = Math.max(0, Math.min(newTime, selectedMix.duration_seconds || 1800));
-    setCurrentTime(clamped);
-    if (audioRef.current) {
-      audioRef.current.currentTime = clamped;
-    }
-  };
-
-  const togglePlayback = () => {
-    setupAudioGraph();
-    if (!audioRef.current) {
-      setIsPlaying((prev) => !prev);
-      return;
-    }
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    } else {
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-      }).catch(() => {
-        setIsPlaying(true); // Fallback simulated mode
-      });
-    }
+    seekTo(newTime);
   };
 
   const copyYouTubeTimestamps = () => {
@@ -413,18 +423,15 @@ export const App: React.FC = () => {
     <div className={`min-h-screen font-sans antialiased transition-colors duration-200 ${
       isDark ? 'bg-[#0d0e12] text-[#e0e2ec]' : 'bg-[#f3f4f6] text-[#1f2937]'
     }`}>
-      {/* Hidden Audio Element for actual media playback */}
       <audio
         ref={audioRef}
         src={selectedMix?.audio_url || undefined}
-        onTimeUpdate={() => {
-          if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
-        }}
-        onEnded={() => setIsPlaying(false)}
-        className="hidden"
+        preload="metadata"
+        onLoadedMetadata={ensureAudioGraph}
+        crossOrigin="anonymous"
+        style={{ display: 'none' }}
       />
 
-      {/* Top Header & Navigation */}
       <header className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20 backdrop-blur ${
         isDark ? 'bg-[#0d0e12]/90 border-[#232630]' : 'bg-[#ffffff]/90 border-[#e5e7eb]'
       }`}>
@@ -442,7 +449,6 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Center Tabs */}
         <div className={`flex items-center p-1 rounded-lg border text-xs font-semibold ${
           isDark ? 'bg-[#15171e] border-[#292c38]' : 'bg-[#e5e7eb] border-[#d1d5db]'
         }`}>
@@ -478,7 +484,6 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        {/* Controls: Install App, Theme Toggle, MIDI Badge */}
         <div className="flex items-center gap-3">
           <button
             onClick={() => setIsMidiModalOpen(true)}
@@ -516,7 +521,6 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Notification Toast */}
       {notification && (
         <div className="fixed bottom-6 right-6 z-50 bg-[#ea580c] text-white px-5 py-3 rounded-lg shadow-xl font-medium text-xs flex items-center gap-2 animate-bounce">
           <CheckCircle className="w-4 h-4" />
@@ -524,12 +528,9 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Main Container */}
       <main className="p-6 max-w-7xl mx-auto">
-        {/* Tab 1: MIX ANALYZER */}
         {activeTab === 'analyzer' && (
           <div className="grid grid-cols-12 gap-6">
-            {/* Left Sidebar: Archive */}
             <div className={`col-span-12 md:col-span-3 border rounded-lg p-4 ${
               isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
             }`}>
@@ -566,11 +567,9 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Center/Right Content Area */}
             <div className="col-span-12 md:col-span-9 space-y-6">
               {selectedMix ? (
                 <>
-                  {/* View Mode Toolbar */}
                   <div className={`flex items-center justify-between p-2 rounded-lg border ${
                     isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb]'
                   }`}>
@@ -615,11 +614,10 @@ export const App: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* 3D Speaker Stack Visualizer Box */}
                   {(viewMode === 'stack3d' || viewMode === 'dual') && (
                     <div className="space-y-3">
                       <SpeakerStackVisualizer
-                        analyserNode={analyserRef.current}
+                        analyserNode={analyserNode}
                         settings={visualizerSettings}
                         isPlaying={isPlaying}
                       />
@@ -634,7 +632,6 @@ export const App: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Waveform Player Box */}
                   {(viewMode === 'waveform' || viewMode === 'dual') && (
                     <div className={`border rounded-lg p-5 ${
                       isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
@@ -648,7 +645,6 @@ export const App: React.FC = () => {
                             Position: {formatTime(currentTime)} / {formatTime(selectedMix.duration_seconds || 0)}
                           </p>
                         </div>
-                        {/* Export Toolbar */}
                         <div className="flex flex-wrap gap-2">
                           <a
                             href={`${API_BASE}/mixes/${selectedMix.id}/export/cue`}
@@ -692,7 +688,6 @@ export const App: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Interactive Canvas */}
                       <div className="relative border rounded overflow-hidden cursor-crosshair border-[#374151]/40">
                         <canvas
                           ref={canvasRef}
@@ -703,11 +698,11 @@ export const App: React.FC = () => {
                         />
                       </div>
 
-                      {/* Controls Footer */}
                       <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                         <div className="flex items-center gap-3">
                           <button
                             onClick={togglePlayback}
+                            data-testid="play-pause-btn"
                             className={`px-4 py-1.5 rounded font-bold transition ${
                               isDark ? 'bg-[#252834] hover:bg-[#323646] text-white' : 'bg-[#e5e7eb] hover:bg-[#d1d5db] text-black'
                             }`}
@@ -715,10 +710,7 @@ export const App: React.FC = () => {
                             {isPlaying ? 'PAUSE' : 'PLAY'}
                           </button>
                           <button
-                            onClick={() => {
-                              setCurrentTime(0);
-                              if (audioRef.current) audioRef.current.currentTime = 0;
-                            }}
+                            onClick={() => seekTo(0)}
                             className={`px-3 py-1.5 rounded transition ${
                               isDark ? 'bg-[#1f222c] hover:bg-[#2a2e3c] text-white' : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] text-black'
                             }`}
@@ -738,9 +730,7 @@ export const App: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Tracks & Transitions 2-Col Breakdown */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Detected Tracks */}
                     <div className={`border rounded-lg p-4 ${
                       isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
                     }`}>
@@ -751,10 +741,7 @@ export const App: React.FC = () => {
                         {selectedMix.tracks?.map((t, idx) => (
                           <div
                             key={t.id || idx}
-                            onClick={() => {
-                              setCurrentTime(t.start_time);
-                              if (audioRef.current) audioRef.current.currentTime = t.start_time;
-                            }}
+                            onClick={() => seekTo(t.start_time)}
                             className={`p-2.5 rounded flex items-center justify-between text-xs cursor-pointer border transition ${
                               isDark
                                 ? 'bg-[#1a1c24] hover:bg-[#20232e] border-[#292c38]'
@@ -782,7 +769,6 @@ export const App: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Harmonic Transitions */}
                     <div className={`border rounded-lg p-4 ${
                       isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
                     }`}>
@@ -793,10 +779,7 @@ export const App: React.FC = () => {
                         {selectedMix.transitions?.map((tr, idx) => (
                           <div
                             key={tr.id || idx}
-                            onClick={() => {
-                              setCurrentTime(tr.start_time);
-                              if (audioRef.current) audioRef.current.currentTime = tr.start_time;
-                            }}
+                            onClick={() => seekTo(tr.start_time)}
                             className={`p-2.5 rounded text-xs cursor-pointer border transition ${
                               isDark
                                 ? 'bg-[#1a1c24] hover:bg-[#20232e] border-[#292c38]'
@@ -832,7 +815,6 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 2: SUPPORT & SOUND-SYSTEM ENGINEERING */}
         {activeTab === 'support' && (
           <div className="space-y-6">
             <div className={`border rounded-lg p-6 ${isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'}`}>
@@ -890,7 +872,6 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 3: IMPRINT & LEGAL PRIVACY */}
         {activeTab === 'imprint' && (
           <div className="space-y-6">
             <div className={`border rounded-lg p-6 space-y-6 ${isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'}`}>
@@ -927,7 +908,6 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* Web MIDI Hardware Modal */}
       <MidiControllerModal
         isOpen={isMidiModalOpen}
         onClose={() => setIsMidiModalOpen(false)}
