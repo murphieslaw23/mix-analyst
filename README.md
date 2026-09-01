@@ -1,80 +1,100 @@
-# SYSTEM CORRUPT | MIX ANALYST 🎚️
+# SYSTEM CORRUPT | MIX ANALYST 🔊
 
-**Underground Mix Analysis, Cue Detection, Transition Mapping & Mastering Engine**
+![PWA Ready](https://img.shields.io/badge/PWA-Installable-ea580c.svg)
+![CI Status](https://img.shields.io/badge/CI-Passing-10b981.svg)
+![DSP Engine](https://img.shields.io/badge/Audio-EBU_R128_%2B_Demucs-0f766e.svg)
 
-Built for continuous Freetekno, Hardtek, Tribe, Jungle, and electronic sound-system sets.
+> **Continuous DJ Mix Intelligence, Transition & Cue Engine with Stem Separation & Broadcast Synchronization** for underground sound-system culture (freetekno, hardtek, acidcore, jungle).
 
 ---
 
-## Architecture Overview
+## 🏛️ System Architecture
 
 ```
-                          ┌────────────────────────┐
-                          │   FastAPI Gateway      │
-                          │   /api/v1 (REST / SSE) │
-                          └───────────┬────────────┘
-                                      │
-            ┌─────────────────────────┼─────────────────────────┐
-            │                         │                         │
-  ┌─────────▼──────────┐    ┌─────────▼──────────┐    ┌─────────▼──────────┐
-  │ Ingestion & Upload │    │  Export & CUE Gen  │    │ Two-Pass Mastering │
-  │ (Chunked / ffprobe)│    │ (CUE/Rekordbox/NML)│    │ (LUFS/EQ/Limiter)  │
-  └─────────┬──────────┘    └────────────────────┘    └────────────────────┘
-            │
-  ┌─────────▼──────────┐
-  │ PostgreSQL / Redis │
-  └─────────┬──────────┘
-            │
-  ┌─────────▼──────────────────────────────────────────────────┐
-  │ Celery Worker Engine (Bounded-Memory Analysis)              │
-  │ • Windowed BPM Detection & Tempo Variance                  │
-  │ • Chroma / Camelot Harmonic Key Analysis                   │
-  │ • Segment Partitioning & Acoustic Fingerprinting           │
-  │ • Energy Delta & Transition / Cue Point Detection          │
-  │ • Two-Pass EBU R128 Mastering & Report Engine               │
-  └────────────────────────────────────────────────────────────┘
+                                  ┌────────────────────────┐
+                                  │   Continuous DJ Mix    │
+                                  │ (WAV / FLAC / MP3 4h)  │
+                                  └───────────┬────────────┘
+                                              │
+                      ┌───────────────────────┴───────────────────────┐
+                      ▼                                               ▼
+         ┌─────────────────────────┐                     ┌─────────────────────────┐
+         │   FastAPI Core Engine   │                     │  Demucs 4-Stem Worker   │
+         │ (EBU R128 LUFS / Peak)  │                     │ (Drums, Bass, Vocal)    │
+         └────────────┬────────────┘                     └────────────┬────────────┘
+                      │                                               │
+                      ├───────────────────────┬───────────────────────┘
+                      ▼                       ▼
+         ┌─────────────────────────┐  ┌─────────────────────────┐
+         │  Harmonic Transitions   │  │   AzuraCast Web Radio   │
+         │ (Camelot Key & Cues)    │  │ (Live Metadata Sync)   │
+         └────────────┬────────────┘  └─────────────────────────┘
+                      │
+                      ▼
+         ┌─────────────────────────┐
+         │  Progressive Web App    │
+         │ (Mobile, Tablet, Web)   │
+         └─────────────────────────┘
 ```
 
 ---
 
-## Features & Implemented Phases
+## 📱 Full PWA Installation
 
-- **Phase 1: Ingestion & Storage:** Streamed chunked uploads, ffprobe technical validation, persistent Media models.
-- **Phase 2: Job Platform:** Asynchronous Celery tasks, persistent `StageRun` tracking, and real-time Server-Sent Events (SSE).
-- **Phase 3: Bounded Audio Analysis:** Windowed analysis maintaining bounded RAM for multi-hour recordings, BPM detection, and EBU R128 loudness.
-- **Phase 4: Track Identification:** Segment partitioning and AcoustID fingerprinting.
-- **Phase 5: Transition Detection:** Energy delta tracking, Camelot wheel harmonic compatibility classification, and cue point generation.
-- **Phase 6: DJ Exports & Dashboard:** Standard CDRWIN `.cue` sheets (75 fps), Pioneer Rekordbox `DJ_PLAYLISTS` XML, Traktor NML, YouTube timestamps, synthetic test fixtures, and interactive Waveform canvas player.
-- **Phase 7: Two-Pass Mastering:** Pass-1 input measurement, 5-band parametric EQ, dynamic compression, true-peak limiting, Pass-2 output verification, and before/after mastering reports.
+The web interface is fully installable as a standalone Progressive Web Application across all devices:
+
+- **Desktop (Chrome / Edge / Safari macOS)**: Click the **Install App** button in the top navigation or use browser address bar install prompt.
+- **Mobile (iOS Safari)**: Tap `Share` → `Add to Home Screen`.
+- **Mobile (Android Chrome)**: Tap `Install App` banner or `Add to Home screen`.
 
 ---
 
-## API Endpoints
+## 🌓 Light & Dark Industrial Theme Tokens
 
-### Uploads & Mixes
-- `POST /api/v1/uploads/chunk` — Streamed chunk upload session.
-- `GET /api/v1/mixes` — List analyzed mixes.
-- `GET /api/v1/mixes/{id}` — Full mix metadata, detected tracks, and transitions.
+Designed in accordance with the **SYSTEM CORRUPT Brand Book**:
 
-### DJ Exports
-- `GET /api/v1/mixes/{id}/export/cue` — Standard CDRWIN `.cue` file.
-- `GET /api/v1/mixes/{id}/export/rekordbox` — Pioneer Rekordbox XML with memory and hot cues.
-- `GET /api/v1/mixes/{id}/export/traktor` — Native Instruments Traktor NML collection file.
-- `GET /api/v1/mixes/{id}/export/youtube` — Formatted YouTube timestamps with BPM and Camelot keys.
-
-### Mastering & Reports
-- `POST /api/v1/mixes/{id}/master` — Trigger two-pass mastering pipeline.
-- `GET /api/v1/mixes/{id}/mastering-report` — Retrieve mastering measurements and before/after comparison.
-- `GET /api/v1/mastering/presets` — List built-in mastering presets.
+- **Dark Mode (Default)**: Deep obsidian plate (`#0d0e12`), charcoal cards (`#15171e`), Rust Orange accents (`#ea580c`), Oxidized Copper indicators (`#0f766e`).
+- **Light Mode**: Weathered concrete slate (`#f3f4f6`), high-contrast industrial cards (`#ffffff`), burnt ochre highlights (`#c2410c`).
 
 ---
 
-## Running Tests & Benchmarks
+## 🧪 Comprehensive E2E Testing with Playwright
+
+End-to-end tests simulate realistic **30-minute long-format DJ sets** (`1800.0s`) across multiple device viewports:
 
 ```bash
-# Run full unit and integration test suite
-pytest
+cd web
 
-# Run throughput and latency benchmarks
-python -m tests.benchmarks.benchmark_pipeline
+# Install test dependencies & Playwright browsers
+npm install
+npx playwright install --with-deps
+
+# Run full test suite
+npm run test:e2e
+
+# Interactive UI runner
+npm run test:e2e:ui
 ```
+
+### Supported Viewports:
+- **Desktop**: Chromium, Firefox, WebKit (1440 × 900)
+- **Tablet**: Apple iPad Gen 7 (768 × 1024)
+- **Mobile**: Apple iPhone 14 (390 × 844)
+
+---
+
+## 🚀 Docker Compose Quickstart
+
+```bash
+# Clone and spin up full multi-stage stack
+git clone https://github.com/murphieslaw23/mix-analyst.git
+cd mix-analyst
+
+cp .env.example .env
+docker compose up --build -d
+```
+
+- **Frontend PWA**: `http://localhost`
+- **FastAPI Backend**: `http://localhost:8000/docs`
+- **PostgreSQL**: `localhost:5432`
+- **Redis Queue**: `localhost:6379`
