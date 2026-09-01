@@ -5,7 +5,6 @@ import {
   Moon, 
   ShieldCheck, 
   HelpCircle, 
-  Activity, 
   Download, 
   Radio, 
   Layers, 
@@ -89,7 +88,6 @@ export const App: React.FC = () => {
     startLearning: startMidiLearning,
     cancelLearning: cancelMidiLearning,
     applyPreset: applyMidiPreset,
-    updateMapping: updateMidiMapping,
   } = useWebMidi();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -746,7 +744,8 @@ export const App: React.FC = () => {
 
                     <div className={`border rounded-lg p-4 ${
                       isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'
-                    }`}>\n                      <h4 className={`text-xs font-bold uppercase tracking-widest mb-3 ${isDark ? 'text-[#8c909e]' : 'text-[#6b7280]'}`}>
+                    }`}>
+                      <h4 className={`text-xs font-bold uppercase tracking-widest mb-3 ${isDark ? 'text-[#8c909e]' : 'text-[#6b7280]'}`}>
                         Harmonic Transitions ({selectedMix.transitions?.length || 0})
                       </h4>
                       <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
