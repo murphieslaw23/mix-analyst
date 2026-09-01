@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  rpi-redis:
+    image: redis:7-alpine
+    container_name: syco-rpi-redis
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "48mb", "--maxmemory-policy", "volatile-lru", "--save", ""]
+    ports:
+      - "127.0.0.1:6379:6379"
+    mem_limit: 64m
+    mem_reservation: 32m
+
+  rpi-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: syco-rpi-api
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=production
+      - PORT=8000
+      - DATABASE_URL=sqlite:////app/storage/mixanalyst.db
+      - REDIS_URL=redis://rpi-redis:6379/0
+      - STORAGE_PATH=/app/storage
+      - CORS_ORIGINS=https://mix-analyzer-system-corrupt.vercel.app,http://localhost:3000
+      - DEMUCS_ENABLED=false
+    volumes:
+      - ./storage:/app/storage
+    ports:
+      - "0.0.0.0:8000:8000"
+    depends_on:
+      - rpi-redis
+    mem_limit: 180m
+    mem_reservation: 90m
+
+  rpi-worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: syco-rpi-worker
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=sqlite:////app/storage/mixanalyst.db
+      - REDIS_URL=redis://rpi-redis:6379/0
+      - STORAGE_PATH=/app/storage
+      - DEMUCS_DEVICE=cpu
+      - DEMUCS_ENABLED=false
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      - rpi-redis
+    command: ["celery", "-A", "celery_app.celery", "worker", "--loglevel=INFO", "--concurrency=1", "--max-memory-per-child=256000"]
+    mem_limit: 380m
+    mem_reservation: 150m
