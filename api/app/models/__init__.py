@@ -5,6 +5,7 @@ from api.app.models.tracklist import Tracklist, TrackEntry
 from api.app.models.transition import Transition
 from api.app.models.mastering import MasteringPreset, MasteringJob
 from api.app.models.broadcast import BroadcastSync
+from api.app.models.stems import StemJob
 
 __all__ = [
     "Media",
@@ -18,5 +19,6 @@ __all__ = [
     "Transition",
     "MasteringPreset",
     "MasteringJob",
-    "BroadcastSync"
+    "BroadcastSync",
+    "StemJob"
 ]
