@@ -41,7 +41,7 @@ export const App: React.FC = () => {
   const [selectedMix, setSelectedMix] = useState<MixData | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
-  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const [zoomLevel] = useState<number>(1);
   const [notification, setNotification] = useState<string | null>(null);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -50,9 +50,10 @@ export const App: React.FC = () => {
   const fetchMixes = async () => {
     try {
       const res = await axios.get(`${API_BASE}/mixes`);
-      setMixes(res.data);
-      if (res.data.length > 0 && !selectedMix) {
-        setSelectedMix(res.data[0]);
+      const data = Array.isArray(res.data) ? res.data : (res.data.items || []);
+      setMixes(data);
+      if (data.length > 0 && !selectedMix) {
+        setSelectedMix(data[0]);
       }
     } catch (err) {
       console.error('Failed to load mixes', err);
@@ -74,7 +75,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // Waveform canvas rendering with cues & transition zones
+  // Waveform canvas rendering with cues & transition zones for long sets
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !selectedMix) return;
@@ -83,7 +84,7 @@ export const App: React.FC = () => {
 
     const width = canvas.width;
     const height = canvas.height;
-    const duration = selectedMix.duration_seconds || 3600;
+    const duration = selectedMix.duration_seconds || 1800;
 
     ctx.clearRect(0, 0, width, height);
 
@@ -99,7 +100,6 @@ export const App: React.FC = () => {
     const barWidth = width / numBars;
     for (let i = 0; i < numBars; i++) {
       const x = i * barWidth;
-      const barTime = (i / numBars) * duration;
       
       // Calculate amplitude visualization
       const waveHeight = Math.sin(i * 0.15) * 0.3 + Math.cos(i * 0.08) * 0.4 + 0.3;
@@ -115,7 +115,7 @@ export const App: React.FC = () => {
     if (selectedMix.transitions) {
       selectedMix.transitions.forEach((trans) => {
         const startX = (trans.start_time / duration) * width;
-        const endX = ((trans.end_time || trans.start_time + 15) / duration) * width;
+        const endX = ((trans.end_time || trans.start_time + 30) / duration) * width;
         const zoneWidth = Math.max(6, endX - startX);
 
         ctx.fillStyle = 'rgba(217, 119, 6, 0.35)'; // Amber transition band
@@ -160,7 +160,7 @@ export const App: React.FC = () => {
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const newTime = ratio * (selectedMix.duration_seconds || 3600);
+    const newTime = ratio * (selectedMix.duration_seconds || 1800);
     setCurrentTime(newTime);
     if (audioRef.current) {
       audioRef.current.currentTime = newTime;
@@ -180,8 +180,12 @@ export const App: React.FC = () => {
   };
 
   const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
+    const hours = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = Math.floor(secs % 60);
+    if (hours > 0) {
+      return `${hours}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
@@ -204,7 +208,7 @@ export const App: React.FC = () => {
       {/* Main Grid */}
       <div className="grid grid-cols-12 gap-6">
         {/* Left Sidebar: Mixes */}
-        <div className="col-span-3 bg-[#15171e] border border-[#232630] rounded-lg p-4">
+        <div className="col-span-12 md:col-span-3 bg-[#15171e] border border-[#232630] rounded-lg p-4">
           <h2 className="text-xs font-bold text-[#8c909e] uppercase tracking-widest mb-3">Mix Archive</h2>
           <div className="space-y-2">
             {mixes.map((m) => (
@@ -228,12 +232,12 @@ export const App: React.FC = () => {
         </div>
 
         {/* Center/Right Content Area */}
-        <div className="col-span-9 space-y-6">
+        <div className="col-span-12 md:col-span-9 space-y-6">
           {selectedMix ? (
             <>
               {/* Interactive Waveform Display */}
               <div className="bg-[#15171e] border border-[#232630] rounded-lg p-5">
-                <div className="flex justify-between items-center mb-3">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-3">
                   <div>
                     <h3 className="text-lg font-bold text-white">{selectedMix.title || selectedMix.original_filename}</h3>
                     <p className="text-xs text-[#9ca3af]">
@@ -241,7 +245,7 @@ export const App: React.FC = () => {
                     </p>
                   </div>
                   {/* Export Actions */}
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <a
                       href={`${API_BASE}/mixes/${selectedMix.id}/export/cue`}
                       download
@@ -284,7 +288,7 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* Playback Controls */}
-                <div className="mt-4 flex items-center justify-between text-xs text-[#9ca3af]">
+                <div className="mt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-[#9ca3af]">
                   <div className="flex items-center gap-3">
                     <button
                       onClick={() => setIsPlaying(!isPlaying)}
@@ -311,7 +315,7 @@ export const App: React.FC = () => {
               </div>
 
               {/* Detected Tracks & Transitions Breakdown */}
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Tracklist Table */}
                 <div className="bg-[#15171e] border border-[#232630] rounded-lg p-4">
                   <h4 className="text-xs font-bold text-[#8c909e] uppercase tracking-widest mb-3">

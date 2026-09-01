@@ -47,7 +47,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
   test('User Flow 1: 30-Minute Mix Ingestion & Archive Selection', async ({ page }) => {
     // Verify Brand Header
     await expect(page.locator('h1')).toContainText('SYSTEM CORRUPT');
-    await expect(page.locator('text=MIX ANALYST')).toBeVisible();
+    await expect(page.getByText('MIX ANALYST')).toBeVisible();
 
     // Verify 30-min mix appears in archive sidebar
     const archiveItem = page.locator(`button:has-text("${mix30MinFixture.title}")`);
@@ -60,7 +60,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
 
     // Verify Title & Initial Time Display (00:00 / 30:00)
     await expect(page.locator('h3')).toContainText(mix30MinFixture.title);
-    await expect(page.locator('text=Position: 00:00 / 30:00')).toBeVisible();
+    await expect(page.getByText('Position: 00:00 / 30:00')).toBeVisible();
   });
 
   test('User Flow 2: Long-Set Waveform Timeline Interaction & Scrubbing', async ({ page }) => {
@@ -74,11 +74,11 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
 
     // Click at 50% width (should seek to ~15:00 = 900s)
     await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
-    await expect(page.locator('text=/Position: (14:5[8-9]|15:0[0-2]) \\/ 30:00/')).toBeVisible();
+    await expect(page.getByText(/Position: (14:5[8-9]|15:0[0-2]) \/ 30:00/)).toBeVisible();
 
     // Click at 90% width (should seek to ~27:00 = 1620s near set climax)
     await page.mouse.click(box.x + box.width * 0.9, box.y + box.height * 0.5);
-    await expect(page.locator('text=/Position: (26:5[8-9]|27:0[0-2]) \\/ 30:00/')).toBeVisible();
+    await expect(page.getByText(/Position: (26:5[8-9]|27:0[0-2]) \/ 30:00/)).toBeVisible();
   });
 
   test('User Flow 3: Transport Controls (Play/Pause & Restart)', async ({ page }) => {
@@ -98,17 +98,17 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     const box = await canvas.boundingBox();
     if (box) {
       await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.5);
-      await expect(page.locator('text=Position: 00:00 / 30:00')).not.toBeVisible();
+      await expect(page.getByText('Position: 00:00 / 30:00')).not.toBeVisible();
 
       // Click RESTART
       await page.locator('button:has-text("RESTART")').click();
-      await expect(page.locator('text=Position: 00:00 / 30:00')).toBeVisible();
+      await expect(page.getByText('Position: 00:00 / 30:00')).toBeVisible();
     }
   });
 
   test('User Flow 4: Interactive Tracklist Cue Jumping Across Long Durations', async ({ page }) => {
     // Verify 8 tracks detected
-    await expect(page.locator('text=Detected Tracks (8)')).toBeVisible();
+    await expect(page.getByText('Detected Tracks (8)')).toBeVisible();
 
     // Click Track #4 (Acid Wall Destroyer at 11:15 = 675s)
     const track4 = page.locator('div:has-text("4. Acid Wall Destroyer")').last();
@@ -116,7 +116,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await track4.click();
 
     // Verify time jumped to 11:15
-    await expect(page.locator('text=Position: 11:15 / 30:00')).toBeVisible();
+    await expect(page.getByText('Position: 11:15 / 30:00')).toBeVisible();
 
     // Click Track #7 (Hardtek Ritual Anthem at 24:10 = 1450s)
     const track7 = page.locator('div:has-text("7. Hardtek Ritual Anthem")').last();
@@ -124,12 +124,12 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await track7.click();
 
     // Verify time jumped to 24:10
-    await expect(page.locator('text=Position: 24:10 / 30:00')).toBeVisible();
+    await expect(page.getByText('Position: 24:10 / 30:00')).toBeVisible();
   });
 
   test('User Flow 5: Harmonic Transition Zone Breakdown & Key Shift Inspection', async ({ page }) => {
     // Verify 7 transitions listed
-    await expect(page.locator('text=Harmonic Transitions (7)')).toBeVisible();
+    await expect(page.getByText('Harmonic Transitions (7)')).toBeVisible();
 
     // Inspect Transition #2 (Energy Boost Drop at 07:00 = 420s)
     const trans2 = page.locator('div:has-text("ENERGY_BOOST_DROP")').first();
@@ -139,7 +139,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
 
     // Click Transition #2 and verify position jumps to 07:00
     await trans2.click();
-    await expect(page.locator('text=Position: 07:00 / 30:00')).toBeVisible();
+    await expect(page.getByText('Position: 07:00 / 30:00')).toBeVisible();
   });
 
   test('User Flow 6: Export Actions & YouTube Timestamps Toast Notification', async ({ page }) => {
@@ -162,20 +162,20 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await ytBtn.click();
 
     // Verify UI Toast notification appears
-    const toast = page.locator('text=YouTube timestamps copied to clipboard!');
+    const toast = page.getByText('YouTube timestamps copied to clipboard!');
     await expect(toast).toBeVisible();
   });
 
   test('User Flow 7: Responsive Layouts (Desktop / Tablet / Mobile)', async ({ page }) => {
     // Verify all primary cards are rendered and accessible
-    await expect(page.locator('text=Mix Archive')).toBeVisible();
+    await expect(page.getByText('Mix Archive')).toBeVisible();
     await expect(page.locator('canvas')).toBeVisible();
-    await expect(page.locator('text=Detected Tracks (8)')).toBeVisible();
-    await expect(page.locator('text=Harmonic Transitions (7)')).toBeVisible();
+    await expect(page.getByText('Detected Tracks (8)')).toBeVisible();
+    await expect(page.getByText('Harmonic Transitions (7)')).toBeVisible();
 
     // Test responsive canvas interaction on any viewport
     const canvas = page.locator('canvas');
     await canvas.click({ position: { x: 50, y: 50 } });
-    await expect(page.locator('text=Position:')).toBeVisible();
+    await expect(page.getByText(/Position:/)).toBeVisible();
   });
 });
