@@ -4,6 +4,7 @@ from api.app.models.analysis import AnalysisResult, QualityFinding
 from api.app.models.tracklist import Tracklist, TrackEntry
 from api.app.models.transition import Transition
 from api.app.models.mastering import MasteringPreset, MasteringJob
+from api.app.models.broadcast import BroadcastSync
 
 __all__ = [
     "Media",
@@ -16,5 +17,6 @@ __all__ = [
     "TrackEntry",
     "Transition",
     "MasteringPreset",
-    "MasteringJob"
+    "MasteringJob",
+    "BroadcastSync"
 ]
