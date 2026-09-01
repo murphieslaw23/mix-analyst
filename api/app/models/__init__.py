@@ -1,29 +1,20 @@
-from ..db.session import Base
-from .media import MediaAsset, UploadSession, UploadStatus, Mix
-from .job import Job, JobAttempt, StageRun, JobType, JobStatus, StageStatus
-from .analysis import AnalysisResult
-from .tracklist import TrackSegment, TrackMatch
-from .transition import TransitionEvent
-from sqlalchemy.orm import relationship
-
-Mix.analysis_result = relationship("AnalysisResult", back_populates="mix", uselist=False, cascade="all, delete-orphan")
-Mix.track_segments = relationship("TrackSegment", back_populates="mix", order_by="TrackSegment.segment_index", cascade="all, delete-orphan")
-Mix.transitions = relationship("TransitionEvent", back_populates="mix", order_by="TransitionEvent.transition_index", cascade="all, delete-orphan")
+from api.app.models.media import Media
+from api.app.models.job import Job, JobAttempt, StageRun
+from api.app.models.analysis import AnalysisResult, QualityFinding
+from api.app.models.tracklist import Tracklist, TrackEntry
+from api.app.models.transition import Transition
+from api.app.models.mastering import MasteringPreset, MasteringJob
 
 __all__ = [
-    "Base",
-    "MediaAsset",
-    "UploadSession",
-    "UploadStatus",
-    "Mix",
+    "Media",
     "Job",
     "JobAttempt",
     "StageRun",
-    "JobType",
-    "JobStatus",
-    "StageStatus",
     "AnalysisResult",
-    "TrackSegment",
-    "TrackMatch",
-    "TransitionEvent",
+    "QualityFinding",
+    "Tracklist",
+    "TrackEntry",
+    "Transition",
+    "MasteringPreset",
+    "MasteringJob"
 ]

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.app.config import settings
-from api.app.api.v1 import health, uploads, jobs, mixes, export
+from api.app.api.v1 import health, uploads, jobs, mixes, export, mastering
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,3 +21,4 @@ app.include_router(uploads.router, prefix=settings.API_V1_STR, tags=["uploads"])
 app.include_router(jobs.router, prefix=settings.API_V1_STR, tags=["jobs"])
 app.include_router(mixes.router, prefix=f"{settings.API_V1_STR}/mixes", tags=["mixes"])
 app.include_router(export.router, prefix=f"{settings.API_V1_STR}/mixes", tags=["export"])
+app.include_router(mastering.router, prefix=settings.API_V1_STR, tags=["mastering"])
