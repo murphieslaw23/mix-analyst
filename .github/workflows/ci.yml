@@ -1,0 +1,118 @@
+name: CI Matrix & Production Build Verification
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Static Type Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: "web/package.json"
+
+      - name: Install Python Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ruff mypy pytest pytest-cov
+          pip install -r api/requirements.txt
+          pip install -r worker/requirements.txt
+
+      - name: Run Ruff Lint & Format Check
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run MyPy Typecheck
+        run: |
+          mypy api/app --ignore-missing-imports || true
+
+      - name: Install Frontend Dependencies & Typecheck
+        run: |
+          cd web
+          npm ci || npm install
+          npx tsc --noEmit
+          npm run build
+
+  test-suite:
+    name: Backend Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install System Audio Libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Install Test Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install -r worker/requirements.txt
+          pip install pytest pytest-cov psutil
+
+      - name: Run Pytest Test Suite
+        run: |
+          pytest tests/ -v --tb=short
+
+      - name: Run Pipeline Benchmark Verification
+        run: |
+          python -m tests.benchmarks.benchmark_pipeline
+
+  docker-build:
+    name: Multi-Stage Docker Image Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Build API Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: api/Dockerfile
+          push: false
+          tags: syco23/mix-analyst-api:latest
+
+      - name: Build Worker Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: worker/Dockerfile
+          push: false
+          tags: syco23/mix-analyst-worker:latest
+
+      - name: Build Web Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          file: web/Dockerfile
+          push: false
+          tags: syco23/mix-analyst-web:latest

@@ -1,68 +1,100 @@
+version: '3.8'
+
 services:
-  db:
+  postgres:
     image: postgres:16-alpine
+    container_name: mix-analyst-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: mixanalyst
+      POSTGRES_USER: ${POSTGRES_USER:-mixuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mixpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-mixanalyst}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mixuser} -d ${POSTGRES_DB:-mixanalyst}"]
+      interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - mix-network
 
   redis:
     image: redis:7-alpine
+    container_name: mix-analyst-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - mix-network
 
   api:
-    build: ./api
+    build:
+      context: .
+      file: api/Dockerfile
+    container_name: mix-analyst-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /storage
+      CORS_ORIGINS: '["http://localhost", "http://localhost:3000", "http://localhost:80", "https://syco23.org"]'
     volumes:
-      - ./api/app:/app/app
-      - storage_data:/data/storage
+      - storage_data:/storage
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/mixanalyst
-      - REDIS_URL=redis://redis:6379/0
-      - STORAGE_ROOT=/data/storage
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - mix-network
 
   worker:
-    build: ./worker
-    volumes:
-      - ./worker:/app
-      - storage_data:/data/storage
+    build:
+      context: .
+      file: worker/Dockerfile
+    container_name: mix-analyst-worker
+    restart: unless-stopped
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/mixanalyst
-      - STORAGE_ROOT=/data/storage
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /storage
+    volumes:
+      - storage_data:/storage
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - mix-network
 
   web:
-    build: ./web
-    volumes:
-      - ./web/src:/app/src
+    build:
+      context: ./web
+      file: web/Dockerfile
+    container_name: mix-analyst-web
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "80:80"
     depends_on:
       - api
+    networks:
+      - mix-network
 
 volumes:
   postgres_data:
+  redis_data:
   storage_data:
+
+networks:
+  mix-network:
+    driver: bridge

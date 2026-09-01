@@ -1,12 +1,23 @@
-FROM node:20-alpine
+# Multi-stage Dockerfile for React Web Frontend
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci || npm install
 
 COPY . .
+RUN npm run build
 
-EXPOSE 3000
+# Production NGINX runtime
+FROM nginx:1.25-alpine AS runner
 
-CMD ["npm", "run", "dev", "--", "--host"]
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://localhost:80/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]
