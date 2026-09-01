@@ -7,9 +7,11 @@ from ...db.session import get_db
 from ...models.media import Mix
 from ...models.analysis import AnalysisResult
 from ...models.tracklist import TrackSegment, TrackMatch
+from ...models.transition import TransitionEvent
 from ...schemas.mix import MixOut, MixListResponse, MixUpdateRequest
 from ...schemas.analysis import AnalysisResultOut
-from ...schemas.tracklist import TracklistResponse, TrackSegmentOut
+from ...schemas.tracklist import TracklistResponse
+from ...schemas.transition import TransitionListResponse, TransitionEventOut
 
 router = APIRouter()
 
@@ -75,6 +77,22 @@ def get_mix_tracklist(mix_id: str, db: Session = Depends(get_db)):
         total_tracks=len(segments),
         identified_tracks=identified_count,
         tracks=segments,
+    )
+
+
+@router.get("/{mix_id}/transitions", response_model=TransitionListResponse)
+def get_mix_transitions(mix_id: str, db: Session = Depends(get_db)):
+    """Retrieve detected transition blend regions, cue points, and harmonic compatibility."""
+    mix = db.query(Mix).filter(Mix.id == mix_id).first()
+    if not mix:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+
+    transitions = db.query(TransitionEvent).filter(TransitionEvent.mix_id == mix_id).order_by(TransitionEvent.transition_index.asc()).all()
+
+    return TransitionListResponse(
+        mix_id=mix_id,
+        total_transitions=len(transitions),
+        transitions=transitions,
     )
 
 

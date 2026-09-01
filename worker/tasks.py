@@ -27,8 +27,7 @@ def publish_event(job_id: str, payload: dict) -> None:
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
 def run_analysis_pipeline(self, job_id: str):
     """
-    Execute the real bounded-memory audio analysis & track identification pipeline for a Mix.
-    Calculates BPM, Camelot Key, EBU R128 loudness, segments tracks, and persists results.
+    Execute the real bounded-memory audio analysis, fingerprinting & transition detection pipeline.
     """
     db = SessionLocal()
     hostname = socket.gethostname()
@@ -131,7 +130,7 @@ def run_analysis_pipeline(self, job_id: str):
             },
         )
 
-        # Clear existing track segments and persist new ones (Phase 4)
+        # Clear and persist TrackSegments & TrackMatches (Phase 4)
         db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
         db.commit()
 
@@ -188,6 +187,41 @@ def run_analysis_pipeline(self, job_id: str):
                     },
                 )
 
+        # Clear and persist TransitionEvents (Phase 5)
+        db.execute(text("DELETE FROM transition_events WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.commit()
+
+        for trans in analysis_data.get("transitions", []):
+            trans_id = str(uuid.uuid4())
+            db.execute(
+                text("""
+                    INSERT INTO transition_events (
+                        id, mix_id, transition_index, start_time_seconds,
+                        end_time_seconds, cue_in_time, cue_out_time,
+                        transition_type, energy_delta, tempo_shift_bpm,
+                        camelot_compatibility, confidence, created_at
+                    ) VALUES (
+                        :id, :mix_id, :idx, :start, :end, :cue_in, :cue_out,
+                        :type, :energy, :tempo, :camelot, :conf, :now
+                    )
+                """),
+                {
+                    "id": trans_id,
+                    "mix_id": mix_id,
+                    "idx": trans["transition_index"],
+                    "start": trans["start_time_seconds"],
+                    "end": trans["end_time_seconds"],
+                    "cue_in": trans["cue_in_time"],
+                    "cue_out": trans["cue_out_time"],
+                    "type": trans["transition_type"],
+                    "energy": trans["energy_delta"],
+                    "tempo": trans["tempo_shift_bpm"],
+                    "camelot": trans["camelot_compatibility"],
+                    "conf": trans["confidence"],
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+
         db.commit()
 
         # Finalize Job
@@ -211,27 +245,27 @@ def run_analysis_pipeline(self, job_id: str):
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
-    except Exception as e:\
-        db.rollback()\
-        fail_time = datetime.now(timezone.utc)\
-        error_str = str(e)\
-\
-        db.execute(\
-            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"),\
-            {"id": job_id, "err": error_str, "finish": fail_time},\
-        )\
-        db.execute(\
-            text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),\
-            {"id": job_id, "err": error_str, "finish": fail_time},\
-        )\
-        db.commit()\
-\
-        publish_event(job_id, {\
-            "job_id": job_id,\
-            "status": "FAILED",\
-            "progress_percent": 0.0,\
-            "error_message": error_str,\
-        })\
-        raise e\
-    finally:\
-        db.close()\
+    except Exception as e:
+        db.rollback()
+        fail_time = datetime.now(timezone.utc)
+        error_str = str(e)
+
+        db.execute(
+            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"),
+            {"id": job_id, "err": error_str, "finish": fail_time},
+        )
+        db.execute(
+            text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
+            {"id": job_id, "err": error_str, "finish": fail_time},
+        )
+        db.commit()
+
+        publish_event(job_id, {
+            "job_id": job_id,
+            "status": "FAILED",
+            "progress_percent": 0.0,
+            "error_message": error_str,
+        })
+        raise e
+    finally:
+        db.close()

@@ -14,6 +14,8 @@ import {
   Volume2,
   ListMusic,
   Disc,
+  Shuffle,
+  Zap,
 } from "lucide-react";
 
 interface BpmCandidate {
@@ -59,6 +61,19 @@ interface TrackSegment {
   match?: TrackMatch;
 }
 
+interface TransitionEvent {
+  id: string;
+  transition_index: number;
+  start_time_seconds: number;
+  end_time_seconds: number;
+  cue_in_time: number;
+  cue_out_time: number;
+  transition_type: string;
+  energy_delta: number;
+  camelot_compatibility: string;
+  confidence: number;
+}
+
 interface MixItem {
   id: string;
   title: string;
@@ -88,6 +103,7 @@ function App() {
   const [health, setHealth] = useState<any>(null);
   const [mixes, setMixes] = useState<MixItem[]>([]);
   const [tracklists, setTracklists] = useState<Record<string, TrackSegment[]>>({});
+  const [transitions, setTransitions] = useState<Record<string, TransitionEvent[]>>({});
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadStatusText, setUploadStatusText] = useState<string>("");
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -104,9 +120,9 @@ function App() {
         const data = await mRes.json();
         setMixes(data.items || []);
 
-        // Fetch tracklists for analyzed mixes
         for (const mix of data.items || []) {
           fetchMixTracklist(mix.id);
+          fetchMixTransitions(mix.id);
         }
       }
     } catch (err) {
@@ -126,6 +142,21 @@ function App() {
       }
     } catch (err) {
       console.error(`Failed to fetch tracklist for ${mixId}`, err);
+    }
+  };
+
+  const fetchMixTransitions = async (mixId: string) => {
+    try {
+      const res = await fetch(`/api/v1/mixes/${mixId}/transitions`);
+      if (res.ok) {
+        const data = await res.json();
+        setTransitions((prev) => ({
+          ...prev,
+          [mixId]: data.transitions || [],
+        }));
+      }
+    } catch (err) {
+      console.error(`Failed to fetch transitions for ${mixId}`, err);
     }
   };
 
@@ -394,7 +425,7 @@ function App() {
           )}
         </div>
 
-        {/* Mixes List with Real-time Job Queue & Analysis Card */}
+        {/* Mixes List with Real-time Job Queue, Analysis, Tracklist & Transitions */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-4">
           <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
             <Music className="w-5 h-5 text-emerald-400" />
@@ -411,6 +442,7 @@ function App() {
                 const activeJob = activeJobs[mix.id];
                 const analysis = mix.analysis_result;
                 const tracklist = tracklists[mix.id] || [];
+                const transList = transitions[mix.id] || [];
 
                 return (
                   <div key={mix.id} className="py-4 space-y-4">
@@ -521,13 +553,13 @@ function App() {
                       </div>
                     )}
 
-                    {/* Detected Tracklist & Fingerprints (Phase 4) */}
+                    {/* Detected Tracklist (Phase 4) */}
                     {tracklist.length > 0 && (
                       <div className="bg-slate-950/40 border border-slate-800/60 rounded-lg p-4 space-y-3">
                         <div className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2 font-medium text-slate-300">
                             <ListMusic className="w-4 h-4 text-indigo-400" />
-                            <span>Detected Track Segments ({tracklist.length})</span>
+                            <span>Detected Tracklist ({tracklist.length})</span>
                           </div>
                           <span className="text-slate-500">
                             Acoustic Fingerprints Extracted
@@ -556,6 +588,47 @@ function App() {
                                 <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400">
                                   Confidence {(track.confidence * 100).toFixed(0)}%
                                 </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Transitions & Cue Points (Phase 5) */}
+                    {transList.length > 0 && (
+                      <div className="bg-slate-950/40 border border-slate-800/60 rounded-lg p-4 space-y-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2 font-medium text-slate-300">
+                            <Shuffle className="w-4 h-4 text-amber-400" />
+                            <span>Transitions & Cue Points ({transList.length})</span>
+                          </div>
+                          <span className="text-slate-500">
+                            Beatgrid & Blend Analysis
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {transList.map((trans) => (
+                            <div key={trans.id} className="p-3 bg-slate-900/40 border border-slate-800/60 rounded-lg space-y-2 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                                  Transition #{trans.transition_index}
+                                </span>
+                                <span className="px-2 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800 font-mono text-[10px]">
+                                  {trans.transition_type}
+                                </span>
+                              </div>
+
+                              <div className="text-slate-400 flex justify-between text-[11px]">
+                                <span>Blend Zone: {formatDuration(trans.start_time_seconds)} – {formatDuration(trans.end_time_seconds)}</span>
+                                <span className="text-emerald-400 font-mono">{trans.camelot_compatibility}</span>
+                              </div>
+
+                              <div className="text-slate-500 text-[11px] flex justify-between pt-1 border-t border-slate-800/50 font-mono">
+                                <span>Cue Out: {formatDuration(trans.cue_out_time)}</span>
+                                <span>Cue In: {formatDuration(trans.cue_in_time)}</span>
                               </div>
                             </div>
                           ))}

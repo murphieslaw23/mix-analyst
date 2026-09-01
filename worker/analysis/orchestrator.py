@@ -8,11 +8,12 @@ from .bpm_detector import detect_window_tempo, aggregate_bpm_candidates
 from .key_detector import detect_window_key, aggregate_key_predictions
 from .loudness_analyzer import measure_program_loudness
 from .fingerprinter import partition_mix_segments, generate_audio_fingerprint, query_acoustid_metadata
+from .transition_detector import detect_transitions_between_segments
 
 
 class AudioAnalysisOrchestrator:
     """
-    Orchestrates bounded-memory audio analysis and track fingerprinting across long DJ mixes.
+    Orchestrates bounded-memory audio analysis, track fingerprinting, and transition detection.
     """
 
     def __init__(self, audio_path: Path, duration_seconds: float):
@@ -31,7 +32,7 @@ class AudioAnalysisOrchestrator:
         clipping_detected = 0
 
         for idx, (offset, dur) in enumerate(windows):
-            pct = 15.0 + (idx / len(windows)) * 35.0
+            pct = 15.0 + (idx / len(windows)) * 30.0
             if progress_callback:
                 progress_callback(round(pct, 1), f"Analyzing audio slice {idx + 1}/{len(windows)}")
 
@@ -54,18 +55,18 @@ class AudioAnalysisOrchestrator:
 
         # 3. Aggregate Hypotheses
         if progress_callback:
-            progress_callback(55.0, "Aggregating tempo & harmonic Camelot profiles")
+            progress_callback(50.0, "Aggregating tempo & harmonic Camelot profiles")
         bpm_data = aggregate_bpm_candidates(window_tempos)
         key_data = aggregate_key_predictions(window_keys)
 
         # 4. EBU R128 Loudness Pass
         if progress_callback:
-            progress_callback(65.0, "Executing EBU R128 loudness & true peak pass")
+            progress_callback(60.0, "Executing EBU R128 loudness & true peak pass")
         loudness_data = measure_program_loudness(self.audio_path)
 
         # 5. Track Segmentation & Fingerprinting Pass (Phase 4)
         if progress_callback:
-            progress_callback(75.0, "Segmenting track boundaries and extracting acoustic fingerprints")
+            progress_callback(72.0, "Segmenting track boundaries and extracting acoustic fingerprints")
 
         raw_segments = partition_mix_segments(self.duration_seconds, avg_track_length=240.0)
         analyzed_segments = []
@@ -88,9 +89,19 @@ class AudioAnalysisOrchestrator:
                 "match": metadata_match,
             })
 
-        # 6. Build Quality Findings
+        # 6. Transition & Cue Point Detection (Phase 5)
         if progress_callback:
-            progress_callback(92.0, "Evaluating audio dynamics and quality flags")
+            progress_callback(85.0, "Detecting mix transitions, beatgrid crossovers, and cue points")
+
+        transitions = detect_transitions_between_segments(
+            analyzed_segments,
+            primary_bpm=bpm_data["primary_bpm"],
+            camelot_code=key_data["camelot_code"],
+        )
+
+        # 7. Build Quality Findings
+        if progress_callback:
+            progress_callback(94.0, "Evaluating audio dynamics and quality flags")
 
         quality_findings = []
         if clipping_detected > 0:
@@ -126,4 +137,5 @@ class AudioAnalysisOrchestrator:
             "spectral_summary": spectral_summary,
             "quality_findings": quality_findings,
             "track_segments": analyzed_segments,
+            "transitions": transitions,
         }
