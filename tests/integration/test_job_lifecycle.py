@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from api.app.db.session import Base
 from api.app.models.identity import Project, User
-from api.app.models.job import Job, JobStatus
+from api.app.models.job import Job, JobAttempt, JobStatus
 from api.app.models.media import MediaAsset, Mix
 from api.app.models.outbox import OutboxMessage
 from api.app.schemas.auth import CurrentPrincipal
@@ -136,6 +136,24 @@ def test_worker_stops_before_orchestration_when_cancelled_after_claim(db, princi
         "status": "cancelled",
         "job_id": job_id,
     }
+
+
+@pytest.mark.parametrize("terminal_status", [JobStatus.SUCCEEDED, JobStatus.FAILED])
+def test_terminal_transition_leaves_attempt_running_when_cancellation_wins_race(
+    db, principal, mix, terminal_status
+):
+    from worker.tasks import transition_job_and_attempt
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    assert claim_job_attempt(db, job.id, "worker-a", principal.project_id) is not None
+    db.commit()
+    job.status = JobStatus.CANCELLED
+    db.commit()
+
+    assert transition_job_and_attempt(db, job.id, principal.project_id, terminal_status, "worker failure") is False
+    attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == job.id))
+    assert attempt.status is JobStatus.RUNNING
 
 
 def test_dispatch_failure_leaves_outbox_retryable(db, principal, mix):

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from .celery_app import celery_app
 from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
+from api.app.models.job import JobStatus
 from api.app.services.job_commands import claim_job_attempt
 from api.app.services.job_events import job_event_channel
 
@@ -29,6 +30,64 @@ def require_running_job(db, job_id: str, project_id: str) -> None:
     ).scalar_one_or_none()
     if status != "RUNNING":
         raise JobStopped(f"Job {job_id} is no longer running")
+
+
+def transition_job_and_attempt(db, job_id: str, project_id: str, terminal_status: JobStatus, error: str | None = None) -> bool:
+    """Terminally transition a scoped job and its running attempt together.
+
+    The job update is the authoritative cancellation race gate.  An attempt is
+    updated only after that gate wins, and its query verifies the same project
+    and terminal job state while the job-row lock remains in this transaction.
+    """
+    if terminal_status not in (JobStatus.SUCCEEDED, JobStatus.FAILED):
+        raise ValueError("Only successful or failed terminal transitions are supported")
+
+    finish_time = datetime.now(timezone.utc)
+    if terminal_status is JobStatus.SUCCEEDED:
+        job_result = db.execute(
+            text(
+                "UPDATE jobs SET status = :status, progress_percent = 100.0, "
+                "current_stage = 'Complete', finished_at = :finish "
+                "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING' RETURNING id"
+            ),
+            {"id": job_id, "project_id": project_id, "status": terminal_status.value, "finish": finish_time},
+        ).scalar_one_or_none()
+    else:
+        job_result = db.execute(
+            text(
+                "UPDATE jobs SET status = :status, error_message = :error, finished_at = :finish "
+                "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING' RETURNING id"
+            ),
+            {
+                "id": job_id,
+                "project_id": project_id,
+                "status": terminal_status.value,
+                "error": error,
+                "finish": finish_time,
+            },
+        ).scalar_one_or_none()
+    if job_result is None:
+        return False
+
+    attempt_result = db.execute(
+        text(
+            "UPDATE job_attempts SET status = :status, error_details = :error, finished_at = :finish "
+            "WHERE job_id = :id AND status = 'RUNNING' "
+            "AND EXISTS (SELECT 1 FROM jobs "
+            "WHERE jobs.id = job_attempts.job_id AND jobs.project_id = :project_id AND jobs.status = :status) "
+            "RETURNING id"
+        ),
+        {
+            "id": job_id,
+            "project_id": project_id,
+            "status": terminal_status.value,
+            "error": error,
+            "finish": finish_time,
+        },
+    ).scalar_one_or_none()
+    if attempt_result is None:
+        raise RuntimeError(f"Running job {job_id} has no running attempt to finalize")
+    return True
 
 
 def publish_event(project_id: str, job_id: str, payload: dict) -> None:
@@ -243,17 +302,11 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         require_running_job(db, job_id, project_id)
         db.commit()
 
-        # Finalize Job
-        require_running_job(db, job_id, project_id)
-        finish_time = datetime.now(timezone.utc)
-        db.execute(
-            text("UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
-            {"id": job_id, "project_id": project_id, "finish": finish_time},
-        )
-        db.execute(
-            text("UPDATE job_attempts SET status = 'SUCCEEDED', finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
-            {"id": job_id, "finish": finish_time},
-        )
+        # Finalize the attempt only if this scoped job still wins the
+        # authoritative RUNNING -> SUCCEEDED transition.
+        if not transition_job_and_attempt(db, job_id, project_id, JobStatus.SUCCEEDED):
+            db.rollback()
+            return {"status": "cancelled", "job_id": job_id}
         db.commit()
 
         publish_event(project_id, job_id, {
@@ -270,17 +323,10 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         return {"status": "cancelled", "job_id": job_id}
     except Exception as e:
         db.rollback()
-        fail_time = datetime.now(timezone.utc)
         error_str = str(e)
-
-        db.execute(
-            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
-            {"id": job_id, "project_id": project_id, "err": error_str, "finish": fail_time},
-        )
-        db.execute(
-            text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
-            {"id": job_id, "err": error_str, "finish": fail_time},
-        )
+        if not transition_job_and_attempt(db, job_id, project_id, JobStatus.FAILED, error_str):
+            db.rollback()
+            return {"status": "cancelled", "job_id": job_id}
         db.commit()
 
         publish_event(project_id, job_id, {
