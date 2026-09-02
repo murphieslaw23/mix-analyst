@@ -39,6 +39,7 @@ class JobOut(BaseModel):
     status: str
     progress_percent: float
     current_stage: Optional[str] = None
+    parameters: Dict[str, Any] = Field(default_factory=dict)
     celery_task_id: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime

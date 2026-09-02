@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Text,
+    JSON,
     Enum as SQLEnum,
 )
 from sqlalchemy.orm import relationship
@@ -51,6 +52,7 @@ class Job(Base):
     status = Column(SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True)
     progress_percent = Column(Float, default=0.0, nullable=False)
     current_stage = Column(String(100), nullable=True)
+    parameters = Column(JSON, default=dict, nullable=False)
     celery_task_id = Column(String(100), nullable=True, index=True)
     error_message = Column(Text, nullable=True)
     event_sequence = Column(Integer, default=0, nullable=False)

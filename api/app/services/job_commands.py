@@ -13,7 +13,13 @@ from ..schemas.auth import CurrentPrincipal
 from ..schemas.job import JobCreateRequest
 
 
-TASK_NAME = "tasks.run_analysis_pipeline"
+TASK_NAMES = {
+    JobType.ANALYSIS: "tasks.run_analysis_pipeline",
+    JobType.FINGERPRINT: "tasks.run_analysis_pipeline",
+    JobType.RESTORATION: "tasks.run_dsp_pipeline",
+    JobType.MASTERING: "tasks.run_master_mix",
+    JobType.EXPORT: "tasks.run_export",
+}
 
 JOB_QUEUES = {
     JobType.ANALYSIS: "analysis-cpu",
@@ -46,6 +52,7 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
         status=JobStatus.QUEUED,
         progress_percent=0.0,
         current_stage="Queued",
+        parameters=request.parameters,
     )
     db.add(job)
     db.add(
@@ -64,7 +71,7 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
             payload={
                 "job_id": job.id,
                 "project_id": principal.project_id,
-                "task_name": TASK_NAME,
+                "task_name": TASK_NAMES[job_type],
                 "task_id": f"job_{job.id}",
                 "queue": JOB_QUEUES[job_type],
             },
@@ -99,7 +106,7 @@ def enqueue_retry(db: Session, job: Job) -> JobAttempt:
             payload={
                 "job_id": job.id,
                 "project_id": job.project_id,
-                "task_name": TASK_NAME,
+                "task_name": TASK_NAMES[job.job_type],
                 "task_id": task_id,
                 "queue": JOB_QUEUES[job.job_type],
             },

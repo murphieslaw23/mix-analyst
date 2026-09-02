@@ -29,6 +29,7 @@ celery_app.conf.update(
     task_default_queue="analysis-cpu",
     task_routes={
         "tasks.run_analysis_pipeline": {"queue": "analysis-cpu"},
+        "tasks.run_master_mix": {"queue": "dsp-heavy"},
         "tasks.run_dsp_pipeline": {"queue": "dsp-heavy"},
         "tasks.fetch_metadata": {"queue": "metadata-network"},
         "tasks.run_export": {"queue": "exports"},

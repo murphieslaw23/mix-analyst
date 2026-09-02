@@ -17,6 +17,7 @@ from api.app.main import app
 from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobStatus, JobType
 from api.app.models.media import MediaAsset, Mix, UploadSession, UploadStatus
+from api.app.models.outbox import OutboxMessage
 from api.app.services.audio_probe import AudioProbeResult
 from api.app.services.storage import StorageService
 
@@ -166,6 +167,47 @@ def test_user_cannot_read_another_users_mix(client, user_a_token, user_b_mix):
         headers={"Authorization": f"Bearer {user_a_token}"},
     )
     assert response.status_code == 404
+
+
+def test_authenticated_master_command_is_queued_until_worker_output_exists(client, user_a_token):
+    """The mastering route creates a durable command, never a fake completion."""
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        media = MediaAsset(
+            id="media-a",
+            project_id="project-a",
+            original_filename="owned.wav",
+            storage_path="projects/project-a/artifacts/source/v1/" + "a" * 64,
+            file_size_bytes=1,
+            sha256_hash="a" * 64,
+            duration_seconds=1.0,
+            sample_rate=44100,
+            channels=1,
+            codec="pcm_s16le",
+        )
+        db.add(Mix(id="mix-a", project_id="project-a", title="Owned", media_asset=media, status="ready"))
+        db.commit()
+    finally:
+        db.close()
+
+    response = test_client.post(
+        "/api/v1/mixes/mix-a/master",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        json={"target_lufs": -9.0, "true_peak_ceiling": -1.0},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "QUEUED"
+    assert body["job_type"] == "MASTERING"
+    assert body["parameters"] == {"target_lufs": -9.0, "true_peak_dbtp": -1.0, "algorithm_version": "v1"}
+    db = session_factory()
+    try:
+        outbox = db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == body["id"]).one()
+        assert outbox.payload["task_name"] == "tasks.run_master_mix"
+    finally:
+        db.close()
 
 
 def test_unauthenticated_job_event_stream_is_rejected(client, job, monkeypatch):

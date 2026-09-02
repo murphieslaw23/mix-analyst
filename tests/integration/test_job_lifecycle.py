@@ -1,5 +1,7 @@
 """Integration coverage for durable job commands and worker claims."""
 
+import json
+
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -192,6 +194,44 @@ def test_dispatch_marks_outbox_delivered_only_after_broker_accepts(db, principal
     assert db.get(Job, job.id).celery_task_id == "broker-task-id"
     assert calls[0][1]["args"] == [job.id, principal.project_id]
     assert calls[0][1]["queue"] == "dsp-heavy"
+    assert calls[0][0][0] == "tasks.run_master_mix"
+
+
+def test_master_worker_records_immutable_stage_report(db, principal, mix, monkeypatch, tmp_path):
+    """A claimed mastering job reaches success only after its worker report exists."""
+    import worker.tasks as worker_tasks
+    from tests.fixtures.synthetic_audio import generate_synthetic_audio
+
+    source_key = "projects/project-a/artifacts/source/v1/" + "c" * 64
+    source_path = tmp_path / source_key
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(generate_synthetic_audio(duration_sec=3.0))
+    mix.media_asset.storage_path = source_key
+    job = enqueue_job(
+        db,
+        principal,
+        mix,
+        JobCreateRequest(
+            job_type="MASTERING",
+            parameters={"target_lufs": -9.0, "true_peak_dbtp": -1.0, "algorithm_version": "v1"},
+        ),
+    )
+    db.commit()
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", lambda: db)
+    monkeypatch.setattr(worker_tasks, "STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker_tasks, "publish_event", lambda *_args, **_kwargs: None)
+
+    result = worker_tasks.run_master_mix.run(job.id, principal.project_id)
+
+    assert result["status"] == "ok"
+    stored_job = db.get(Job, job.id)
+    assert stored_job.status is JobStatus.SUCCEEDED
+    stage = stored_job.stage_runs[0]
+    report = json.loads(stage.stage_output)
+    assert stage.status.value == "COMPLETED"
+    assert report["artifact_key"].startswith("projects/project-a/artifacts/mastered/v1/")
+    assert (tmp_path / report["artifact_key"]).is_file()
 
 
 def test_worker_routes_are_explicit_and_loss_safe():

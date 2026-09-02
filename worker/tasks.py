@@ -8,11 +8,13 @@ from sqlalchemy import select, text
 from .celery_app import celery_app
 from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
-from api.app.models.job import Job, JobStatus
+from api.app.models.job import Job, JobStatus, StageRun, StageStatus
 from api.app.models.job_event import JobEvent
+from api.app.services.storage import StorageService
 from api.app.services.job_commands import claim_job_attempt
 from api.app.services.job_events import event_notification, publish_event
 from api.app.services.job_events_store import complete_job_attempt, record_job_event
+from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
 
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
 
@@ -135,6 +137,167 @@ def transition_job_and_attempt(
         },
     )
     return True
+
+
+@celery_app.task(bind=True, name="tasks.run_master_mix")
+def run_master_mix(self, job_id: str, project_id: str):
+    """Run a MASTERING command as an immutable worker-owned artifact stage."""
+    db = SessionLocal()
+    hostname = socket.gethostname()
+    stage_id: str | None = None
+    try:
+        if claim_job_attempt(db, job_id, hostname, project_id) is None:
+            db.rollback()
+            return {"status": "already_claimed", "job_id": job_id}
+        running_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
+        if running_job is None:
+            raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
+        if running_job.job_type.value != "MASTERING":
+            raise RuntimeError(f"Job {job_id} is not a mastering command")
+        running_event = record_job_event(
+            db,
+            running_job,
+            "update",
+            {
+                "job_id": job_id,
+                "status": JobStatus.RUNNING.value,
+                "progress_percent": running_job.progress_percent,
+                "current_stage": running_job.current_stage,
+            },
+        )
+        db.commit()
+        publish_event(project_id, job_id, event_notification(running_event))
+
+        job_row = db.execute(
+            text(
+                """
+                SELECT j.id, j.parameters, a.storage_path
+                FROM jobs j
+                JOIN mixes m ON m.id = j.mix_id AND m.project_id = j.project_id
+                JOIN media_assets a ON a.id = m.media_asset_id AND a.project_id = j.project_id
+                WHERE j.id = :id AND j.project_id = :project_id
+                """
+            ),
+            {"id": job_id, "project_id": project_id},
+        ).fetchone()
+        if job_row is None:
+            raise RuntimeError(f"Mastering job {job_id} was not found in its project")
+
+        source_key = job_row.storage_path
+        if not source_key.startswith(f"projects/{project_id}/"):
+            raise RuntimeError("Mastering source artifact is outside the owning project")
+        source_path = StorageService(STORAGE_ROOT).object_path(source_key)
+        parameters = job_row.parameters if isinstance(job_row.parameters, dict) else json.loads(job_row.parameters or "{}")
+        settings = MasterSettings(
+            target_lufs=float(parameters.get("target_lufs", -9.0)),
+            true_peak_dbtp=float(parameters.get("true_peak_dbtp", -1.0)),
+            project_id=project_id,
+            storage_root=Path(STORAGE_ROOT),
+            algorithm_version=str(parameters.get("algorithm_version", "v1")),
+        )
+        stage = StageRun(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            stage_name="master_mix",
+            stage_version=settings.algorithm_version,
+            status=StageStatus.RUNNING,
+            progress_percent=5.0,
+        )
+        stage_id = stage.id
+        db.add(stage)
+
+        def progress_tracker(percent: float, stage_name: str) -> None:
+            require_running_job(db, job_id, project_id)
+            updated = db.execute(
+                text(
+                    "UPDATE jobs SET current_stage = :stage, progress_percent = :pct "
+                    "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"
+                ),
+                {"id": job_id, "project_id": project_id, "stage": stage_name, "pct": percent},
+            )
+            if updated.rowcount != 1:
+                raise JobStopped(f"Job {job_id} is no longer running")
+            progress_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
+            if progress_job is None:
+                raise JobStopped(f"Job {job_id} is outside project {project_id}")
+            progress_event = record_job_event(
+                db,
+                progress_job,
+                "update",
+                {
+                    "job_id": job_id,
+                    "status": JobStatus.RUNNING.value,
+                    "progress_percent": percent,
+                    "current_stage": stage_name,
+                },
+            )
+            db.commit()
+            publish_event(project_id, job_id, event_notification(progress_event))
+
+        progress_tracker(5.0, "Mastering")
+        require_running_job(db, job_id, project_id)
+        result = run_master_mix_stage(source_path, settings)
+        require_running_job(db, job_id, project_id)
+        stage = db.get(StageRun, stage_id)
+        if stage is None:
+            raise RuntimeError(f"Mastering stage for job {job_id} was not persisted")
+        stage.status = StageStatus.COMPLETED
+        stage.progress_percent = 100.0
+        stage.finished_at = datetime.now(timezone.utc)
+        stage.stage_output = json.dumps(
+            {
+                "artifact_key": result.artifact_key,
+                "integrated_lufs": result.integrated_lufs,
+                "true_peak_dbtp": result.true_peak_dbtp,
+                "algorithm_version": result.algorithm_version,
+            }
+        )
+        progress_tracker(95.0, "Mastered")
+
+        if not complete_job_attempt(db, job_id, project_id, hostname):
+            db.rollback()
+            return {"status": "cancelled", "job_id": job_id}
+        terminal_event = latest_job_event(db, job_id, project_id)
+        db.commit()
+        publish_event(project_id, job_id, event_notification(terminal_event))
+        return {
+            "status": "ok",
+            "job_id": job_id,
+            "master": {
+                "artifact_key": result.artifact_key,
+                "integrated_lufs": result.integrated_lufs,
+                "true_peak_dbtp": result.true_peak_dbtp,
+                "algorithm_version": result.algorithm_version,
+            },
+        }
+    except JobStopped:
+        db.rollback()
+        if stage_id is not None:
+            stage = db.get(StageRun, stage_id)
+            if stage is not None:
+                stage.status = StageStatus.FAILED
+                stage.error_message = "Cancelled before mastering completed"
+                stage.finished_at = datetime.now(timezone.utc)
+                db.commit()
+        return {"status": "cancelled", "job_id": job_id}
+    except Exception as exc:
+        db.rollback()
+        if stage_id is not None:
+            stage = db.get(StageRun, stage_id)
+            if stage is not None:
+                stage.status = StageStatus.FAILED
+                stage.error_message = str(exc)
+                stage.finished_at = datetime.now(timezone.utc)
+                db.commit()
+        if not transition_job_and_attempt(db, job_id, project_id, hostname, JobStatus.FAILED, str(exc)):
+            db.rollback()
+            return {"status": "cancelled", "job_id": job_id}
+        terminal_event = latest_job_event(db, job_id, project_id)
+        db.commit()
+        publish_event(project_id, job_id, event_notification(terminal_event))
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
