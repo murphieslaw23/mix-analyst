@@ -255,10 +255,38 @@ def test_cancelled_job_cannot_be_overwritten_by_late_worker(event_client, job):
         cancelled_job = request_cancellation(db, db.get(Job, job.id))
         db.commit()
 
-        assert complete_job_attempt(db, cancelled_job.id, "worker-a") is False
+        assert complete_job_attempt(db, cancelled_job.id, "project-a", "worker-a") is False
         assert db.get(Job, job.id).status is JobStatus.CANCELLED
         cancellation_event = db.scalar(select(JobEvent).where(JobEvent.job_id == job.id))
         assert cancellation_event.sequence == 1
         assert cancellation_event.payload["status"] == "CANCELLED"
+    finally:
+        db.close()
+
+
+def test_completion_requires_owned_claimed_attempt_and_records_terminal_event(event_client, job):
+    from api.app.models.job_event import JobEvent
+    from api.app.services.job_events_store import complete_job_attempt
+
+    _, session_factory = event_client
+    db = session_factory()
+    try:
+        assert complete_job_attempt(db, job.id, "project-b", "worker-a") is False
+        assert complete_job_attempt(db, job.id, "project-a", "worker-b") is False
+        assert db.get(Job, job.id).status is JobStatus.RUNNING
+        assert db.scalars(select(JobEvent).where(JobEvent.job_id == job.id)).all() == []
+
+        assert complete_job_attempt(db, job.id, "project-a", "worker-a") is True
+        db.commit()
+
+        completed_job = db.get(Job, job.id)
+        completed_attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == job.id))
+        completion_event = db.scalar(
+            select(JobEvent).where(JobEvent.job_id == job.id, JobEvent.project_id == "project-a")
+        )
+        assert completed_job.status is JobStatus.SUCCEEDED
+        assert completed_attempt.status is JobStatus.SUCCEEDED
+        assert completion_event.sequence == 1
+        assert completion_event.payload["status"] == "SUCCEEDED"
     finally:
         db.close()

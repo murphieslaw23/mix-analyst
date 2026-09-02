@@ -2,10 +2,10 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import exists, select, update
 from sqlalchemy.orm import Session
 
-from ..models.job import Job, JobStatus
+from ..models.job import Job, JobAttempt, JobStatus
 from ..models.job_event import JobEvent
 
 
@@ -74,22 +74,65 @@ def request_cancellation(db: Session, job: Job) -> Job:
     return job
 
 
-def complete_job_attempt(db: Session, job_id: str, worker_name: str) -> bool:
-    """Mark a running job successful only while its authoritative state permits it.
+def complete_job_attempt(db: Session, job_id: str, project_id: str, worker_name: str) -> bool:
+    """Finalize only the running attempt claimed by this trusted worker.
 
-    ``worker_name`` is part of the worker-facing contract; ownership of the
-    running attempt is finalized by the scoped worker transition that calls
-    this guard.  The conditional job update is the cancellation race gate.
+    The owning project and claim identity are part of the terminal transition
+    predicate, not merely routing metadata. The success event is inserted in
+    this transaction so a worker cannot commit a terminal state without a
+    replayable terminal event.
     """
-    del worker_name
-    result = db.execute(
+    claimed_attempt = exists(
+        select(JobAttempt.id).where(
+            JobAttempt.job_id == job_id,
+            JobAttempt.status == JobStatus.RUNNING,
+            JobAttempt.worker_hostname == worker_name,
+        )
+    )
+    completed_job_id = db.execute(
         update(Job)
-        .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+        .where(
+            Job.id == job_id,
+            Job.project_id == project_id,
+            Job.status == JobStatus.RUNNING,
+            claimed_attempt,
+        )
         .values(
             status=JobStatus.SUCCEEDED,
             progress_percent=100.0,
             current_stage="Complete",
             finished_at=datetime.now(timezone.utc),
         )
+        .returning(Job.id)
+    ).scalar_one_or_none()
+    if completed_job_id is None:
+        return False
+
+    completed_attempt_id = db.execute(
+        update(JobAttempt)
+        .where(
+            JobAttempt.job_id == completed_job_id,
+            JobAttempt.status == JobStatus.RUNNING,
+            JobAttempt.worker_hostname == worker_name,
+        )
+        .values(status=JobStatus.SUCCEEDED, finished_at=datetime.now(timezone.utc))
+        .returning(JobAttempt.id)
+    ).scalar_one_or_none()
+    if completed_attempt_id is None:
+        raise RuntimeError(f"Running job {job_id} has no attempt claimed by {worker_name}")
+
+    job = db.scalar(select(Job).where(Job.id == completed_job_id, Job.project_id == project_id))
+    if job is None:
+        raise RuntimeError(f"Completed job {job_id} is outside project {project_id}")
+    record_job_event(
+        db,
+        job,
+        "update",
+        {
+            "job_id": job_id,
+            "status": JobStatus.SUCCEEDED.value,
+            "progress_percent": 100.0,
+            "current_stage": "Complete",
+        },
     )
-    return result.rowcount == 1
+    return True

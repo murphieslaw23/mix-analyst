@@ -151,7 +151,7 @@ def test_terminal_transition_leaves_attempt_running_when_cancellation_wins_race(
     job.status = JobStatus.CANCELLED
     db.commit()
 
-    assert transition_job_and_attempt(db, job.id, principal.project_id, terminal_status, "worker failure") is False
+    assert transition_job_and_attempt(db, job.id, principal.project_id, "worker-a", terminal_status, "worker failure") is False
     attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == job.id))
     assert attempt.status is JobStatus.RUNNING
 
