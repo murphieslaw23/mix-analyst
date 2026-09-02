@@ -1,6 +1,7 @@
 import os
 import json
 import socket
+import tempfile
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
@@ -10,11 +11,14 @@ from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
 from api.app.models.job import Job, JobStatus, StageRun, StageStatus
 from api.app.models.job_event import JobEvent
+from api.app.models.artifact import Artifact as ArtifactRecord
 from api.app.services.storage import StorageService
 from api.app.services.job_commands import claim_job_attempt
 from api.app.services.job_events import event_notification, publish_event
 from api.app.services.job_events_store import complete_job_attempt, record_job_event
 from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
+from .stages.tag_mix import Artifact as StageArtifact, tag_mix
+from .stages.generate_waveform import generate_waveform
 
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
 
@@ -44,6 +48,56 @@ def latest_job_event(db, job_id: str, project_id: str) -> JobEvent:
     if event is None:
         raise RuntimeError(f"Job {job_id} has no durable event in project {project_id}")
     return event
+
+
+def owner_scoped_artifact_key(project_id: str, relative_key: str) -> str:
+    """Attach a pure-stage identity to its owner's immutable key namespace."""
+    if not relative_key.startswith("artifacts/"):
+        raise ValueError("artifact key must be a relative artifact identity")
+    return f"projects/{project_id}/{relative_key}"
+
+
+def persist_immutable_payload(storage_root: str, key: str, payload: bytes) -> None:
+    """Link a completed immutable payload once, preserving retry idempotency."""
+    storage = StorageService(storage_root)
+    destination = storage.object_path(key)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = storage.object_path(".staging")
+    staging.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix="artifact-", dir=staging)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if destination.read_bytes() != payload:
+                raise RuntimeError("immutable artifact key already contains different bytes")
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def persist_artifact_record(db, *, project_id: str, mix_id: str, artifact: StageArtifact, key: str, report: dict | None = None):
+    """Store one artifact reference, rejecting collisions rather than replacing it."""
+    existing = db.scalar(select(ArtifactRecord).where(ArtifactRecord.project_id == project_id, ArtifactRecord.key == key))
+    if existing is not None:
+        immutable_fields = ("mix_id", "role", "sha256", "algorithm_version", "media_type", "byte_length")
+        expected = (mix_id, artifact.role, artifact.sha256, artifact.algorithm_version, artifact.media_type, artifact.byte_length)
+        actual = tuple(getattr(existing, field) for field in immutable_fields)
+        if actual != expected:
+            raise RuntimeError("immutable artifact record conflicts with its existing identity")
+        return existing
+    record = ArtifactRecord(
+        id=str(uuid.uuid4()), project_id=project_id, mix_id=mix_id, role=artifact.role, key=key,
+        sha256=artifact.sha256, algorithm_version=artifact.algorithm_version, media_type=artifact.media_type,
+        byte_length=artifact.byte_length, report=report,
+    )
+    db.add(record)
+    return record
 
 
 def transition_job_and_attempt(
@@ -333,7 +387,8 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         # 1. Fetch Job and Mix details
         job_row = db.execute(
             text("""
-                SELECT j.id, j.mix_id, m.media_asset_id, a.storage_path, a.duration_seconds
+                SELECT j.id, j.mix_id, m.media_asset_id, a.storage_path, a.duration_seconds,
+                       a.original_filename, a.sha256_hash, a.file_size_bytes, a.mime_type
                 FROM jobs j
                 JOIN mixes m ON j.mix_id = m.id AND m.project_id = j.project_id
                 JOIN media_assets a ON m.media_asset_id = a.id AND a.project_id = j.project_id
@@ -349,7 +404,9 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         media_asset_id = job_row.media_asset_id
         storage_rel_path = job_row.storage_path
         duration_seconds = float(job_row.duration_seconds)
-        audio_abs_path = Path(STORAGE_ROOT) / storage_rel_path
+        if not storage_rel_path.startswith(f"projects/{project_id}/"):
+            raise RuntimeError("Analysis source artifact is outside the owning project")
+        audio_abs_path = StorageService(STORAGE_ROOT).object_path(storage_rel_path)
 
         def progress_tracker(pct: float, stage_name: str):
             require_running_job(db, job_id, project_id)
@@ -525,6 +582,52 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
                     "now": datetime.now(timezone.utc),
                 },
             )
+
+        # Metadata and waveform results are separate immutable objects. The
+        # pure stages return relative identities; this worker adds project scope.
+        require_running_job(db, job_id, project_id)
+        source_artifact = StageArtifact(
+            role="source", key=storage_rel_path, sha256=job_row.sha256_hash, algorithm_version="v1",
+            media_type=job_row.mime_type or "application/octet-stream", byte_length=int(job_row.file_size_bytes),
+        )
+        persist_artifact_record(db, project_id=project_id, mix_id=mix_id, artifact=source_artifact, key=storage_rel_path)
+
+        tag_stage = StageRun(id=str(uuid.uuid4()), job_id=job_id, stage_name="tag_mix", stage_version="v1",
+                             status=StageStatus.RUNNING, progress_percent=0.0)
+        db.add(tag_stage)
+        progress_tracker(82.0, "Generating metadata report")
+        tagged_mix = tag_mix(audio_abs_path, source_artifact, job_row.original_filename, "v1")
+        require_running_job(db, job_id, project_id)
+        metadata_key = owner_scoped_artifact_key(project_id, tagged_mix.metadata_artifact.key)
+        persist_immutable_payload(STORAGE_ROOT, metadata_key, tagged_mix.payload)
+        persist_artifact_record(
+            db, project_id=project_id, mix_id=mix_id, artifact=tagged_mix.metadata_artifact, key=metadata_key,
+            report={"suggested_download_name": tagged_mix.suggested_download_name, **tagged_mix.report.as_dict()},
+        )
+        tag_stage.status = StageStatus.COMPLETED
+        tag_stage.progress_percent = 100.0
+        tag_stage.finished_at = datetime.now(timezone.utc)
+        tag_stage.stage_output = json.dumps({"artifact_key": metadata_key, "suggested_download_name": tagged_mix.suggested_download_name})
+
+        waveform_stage = StageRun(id=str(uuid.uuid4()), job_id=job_id, stage_name="generate_waveform", stage_version="v1",
+                                  status=StageStatus.RUNNING, progress_percent=0.0)
+        db.add(waveform_stage)
+        progress_tracker(90.0, "Generating waveform artifact")
+        waveform = generate_waveform(audio_abs_path, points=2048, algorithm_version="v1")
+        require_running_job(db, job_id, project_id)
+        waveform_key = owner_scoped_artifact_key(project_id, waveform.key)
+        persist_immutable_payload(STORAGE_ROOT, waveform_key, waveform.payload)
+        waveform_descriptor = StageArtifact(role=waveform.role, key=waveform.key, sha256=waveform.sha256,
+                                             algorithm_version=waveform.algorithm_version, media_type=waveform.media_type,
+                                             byte_length=waveform.byte_length)
+        persist_artifact_record(
+            db, project_id=project_id, mix_id=mix_id, artifact=waveform_descriptor, key=waveform_key,
+            report={"points": waveform.points, "duration_seconds": waveform.duration_seconds},
+        )
+        waveform_stage.status = StageStatus.COMPLETED
+        waveform_stage.progress_percent = 100.0
+        waveform_stage.finished_at = datetime.now(timezone.utc)
+        waveform_stage.stage_output = json.dumps({"artifact_key": waveform_key, "points": waveform.points})
 
         require_running_job(db, job_id, project_id)
         db.commit()

@@ -12,6 +12,7 @@ from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobAttempt, JobStatus
 from api.app.models.media import MediaAsset, Mix
 from api.app.models.outbox import OutboxMessage
+from api.app.models.artifact import Artifact
 from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.job import JobCreateRequest
 from api.app.services.job_commands import claim_job_attempt, enqueue_job
@@ -232,6 +233,51 @@ def test_master_worker_records_immutable_stage_report(db, principal, mix, monkey
     assert stage.status.value == "COMPLETED"
     assert report["artifact_key"].startswith("projects/project-a/artifacts/mastered/v1/")
     assert (tmp_path / report["artifact_key"]).is_file()
+
+
+def test_analysis_worker_persists_owner_scoped_metadata_and_waveform_artifacts(db, principal, mix, monkeypatch, tmp_path):
+    """The durable analysis command stores stage reports only after artifacts exist."""
+    import worker.tasks as worker_tasks
+    from tests.fixtures.synthetic_audio import generate_synthetic_audio
+
+    source_key = "projects/project-a/artifacts/source/v1/" + "e" * 64
+    source_path = tmp_path / source_key
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(generate_synthetic_audio(duration_sec=2.0, bpm=150.0))
+    mix.media_asset.storage_path = source_key
+    mix.media_asset.sha256_hash = "e" * 64
+    mix.media_asset.file_size_bytes = source_path.stat().st_size
+    mix.media_asset.mime_type = "audio/wav"
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+
+    class DeterministicOrchestrator:
+        def __init__(self, *_args):
+            pass
+
+        def execute_pipeline(self, progress_callback):
+            progress_callback(60.0, "Stub analysis")
+            return {
+                "primary_bpm": 150.0, "bpm_confidence": 1.0, "bpm_candidates": [],
+                "detected_key": "A", "camelot_code": "11A", "key_confidence": 1.0,
+                "integrated_lufs": -12.0, "loudness_range_lra": 4.0, "true_peak_db": -1.0,
+                "spectral_summary": {}, "quality_findings": [], "track_segments": [], "transitions": [],
+            }
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", lambda: db)
+    monkeypatch.setattr(worker_tasks, "STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker_tasks, "publish_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker_tasks, "AudioAnalysisOrchestrator", DeterministicOrchestrator)
+
+    assert worker_tasks.run_analysis_pipeline.run(job.id, principal.project_id)["status"] == "ok"
+    artifacts = db.query(Artifact).filter(Artifact.mix_id == mix.id).all()
+    by_role = {artifact.role: artifact for artifact in artifacts}
+    assert {"source", "metadata", "waveform"} <= set(by_role)
+    assert by_role["metadata"].key.startswith("projects/project-a/artifacts/metadata/v1/")
+    assert by_role["waveform"].key.startswith("projects/project-a/artifacts/waveform/v1/")
+    assert by_role["metadata"].report["suggested_download_name"].endswith(".wav")
+    assert (tmp_path / by_role["metadata"].key).is_file()
+    assert (tmp_path / by_role["waveform"].key).is_file()
 
 
 def test_worker_routes_are_explicit_and_loss_safe():

@@ -94,3 +94,4 @@ class Mix(Base):
     analysis_result = relationship("AnalysisResult", back_populates="mix", uselist=False, cascade="all, delete-orphan")
     track_segments = relationship("TrackSegment", back_populates="mix", cascade="all, delete-orphan")
     transitions = relationship("TransitionEvent", back_populates="mix", cascade="all, delete-orphan")
+    artifacts = relationship("Artifact", back_populates="mix", cascade="all, delete-orphan")

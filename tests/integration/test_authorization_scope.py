@@ -18,6 +18,7 @@ from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobStatus, JobType
 from api.app.models.media import MediaAsset, Mix, UploadSession, UploadStatus
 from api.app.models.outbox import OutboxMessage
+from api.app.models.artifact import Artifact
 from api.app.services.audio_probe import AudioProbeResult
 from api.app.services.storage import StorageService
 
@@ -209,6 +210,50 @@ def test_authenticated_master_command_is_queued_until_worker_output_exists(clien
     finally:
         db.close()
 
+
+def test_mix_artifacts_are_presented_as_owner_scoped_metadata(client, user_a_token):
+    """Artifact responses expose an API download route, never a host path."""
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        media = MediaAsset(
+            id="artifact-media-a", project_id="project-a", original_filename="Owned Mix.wav",
+            storage_path="projects/project-a/artifacts/source/v1/" + "c" * 64,
+            file_size_bytes=4, sha256_hash="c" * 64, duration_seconds=1.0,
+            sample_rate=44100, channels=1, codec="pcm_s16le",
+        )
+        mix = Mix(id="artifact-mix-a", project_id="project-a", title="Owned", media_asset=media, status="ready")
+        db.add(mix)
+        db.flush()
+        db.add_all(
+            [
+                Artifact(
+                    id="artifact-source-a", project_id="project-a", mix_id=mix.id, role="source",
+                    key=media.storage_path, sha256="c" * 64, algorithm_version="v1", media_type="audio/wav", byte_length=4,
+                ),
+                Artifact(
+                    id="artifact-metadata-a", project_id="project-a", mix_id=mix.id, role="metadata",
+                    key="projects/project-a/artifacts/metadata/v1/" + "c" * 64, sha256="d" * 64,
+                    algorithm_version="v1", media_type="application/json", byte_length=4,
+                    report={"suggested_download_name": "Owned Mix [Tekno].wav", "genre": "Tekno"},
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = test_client.get(
+        "/api/v1/mixes/artifact-mix-a", headers={"Authorization": f"Bearer {user_a_token}"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["suggested_download_name"] == "Owned Mix [Tekno].wav"
+    source = next(item for item in body["artifacts"] if item["role"] == "source")
+    assert source["key"].startswith("projects/project-a/")
+    assert source["download_url"] == "/api/v1/mixes/artifact-mix-a/artifacts/artifact-source-a/download"
+    assert "/tmp/" not in source["download_url"]
 
 def test_unauthenticated_job_event_stream_is_rejected(client, job, monkeypatch):
     async def one_event(_job_id):

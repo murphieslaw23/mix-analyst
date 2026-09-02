@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, List
 from .analysis import AnalysisResultOut
+from .artifact import ArtifactOut
 
 
 class MediaAssetOut(BaseModel):
@@ -30,6 +31,8 @@ class MixOut(BaseModel):
     updated_at: datetime
     media_asset: MediaAssetOut
     analysis_result: Optional[AnalysisResultOut] = None
+    artifacts: List[ArtifactOut] = []
+    suggested_download_name: Optional[str] = None
 
     class Config:
         from_attributes = True

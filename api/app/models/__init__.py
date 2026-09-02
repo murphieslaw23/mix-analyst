@@ -9,6 +9,7 @@ from api.app.models.transition import TransitionEvent
 from api.app.models.mastering import MasteringPreset, MasteringJob
 from api.app.models.broadcast import BroadcastSync
 from api.app.models.stems import StemJob
+from api.app.models.artifact import Artifact
 
 __all__ = [
     "MediaAsset",
@@ -27,6 +28,7 @@ __all__ = [
     "MasteringJob",
     "BroadcastSync",
     "StemJob",
+    "Artifact",
     "Project",
     "User",
 ]
