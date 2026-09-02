@@ -37,4 +37,4 @@ RUN mkdir -p /storage && chown -R appuser:appuser /app /storage
 
 USER appuser
 
-CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "analysis,mastering,exports"]
+CMD ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "--concurrency=2", "-Q", "analysis-cpu,dsp-heavy,metadata-network,exports"]

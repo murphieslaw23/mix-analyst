@@ -59,6 +59,7 @@ class Job(Base):
 
     stage_runs = relationship("StageRun", back_populates="job", cascade="all, delete-orphan", order_by="StageRun.started_at")
     attempts = relationship("JobAttempt", back_populates="job", cascade="all, delete-orphan", order_by="JobAttempt.attempt_number")
+    outbox_messages = relationship("OutboxMessage", back_populates="job", cascade="all, delete-orphan")
 
 
 class JobAttempt(Base):

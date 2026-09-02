@@ -37,7 +37,7 @@ services:
   api:
     build:
       context: .
-      file: api/Dockerfile
+      dockerfile: api/Dockerfile
     container_name: mix-analyst-api
     restart: unless-stopped
     environment:
@@ -62,7 +62,7 @@ services:
   worker:
     build:
       context: .
-      file: worker/Dockerfile
+      dockerfile: worker/Dockerfile
     container_name: mix-analyst-worker
     restart: unless-stopped
     environment:
@@ -81,10 +81,31 @@ services:
     networks:
       - mix-network
 
+  outbox-dispatcher:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: mix-analyst-outbox-dispatcher
+    restart: unless-stopped
+    command: ["python", "-m", "worker.outbox_dispatcher"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      OUTBOX_POLL_SECONDS: ${OUTBOX_POLL_SECONDS:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mix-network
+
   web:
     build:
       context: ./web
-      file: web/Dockerfile
+      dockerfile: web/Dockerfile
     container_name: mix-analyst-web
     restart: unless-stopped
     ports:

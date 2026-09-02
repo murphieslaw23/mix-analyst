@@ -9,6 +9,7 @@ from sqlalchemy import text
 from .celery_app import celery_app
 from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
+from api.app.services.job_commands import claim_job_attempt
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
@@ -31,9 +32,14 @@ def run_analysis_pipeline(self, job_id: str):
     """
     db = SessionLocal()
     hostname = socket.gethostname()
-    start_time = datetime.now(timezone.utc)
-
     try:
+        # A broker message is at-least-once.  The conditional claim lets only
+        # one worker begin, including after a dispatcher restart/redelivery.
+        if claim_job_attempt(db, job_id, hostname) is None:
+            db.rollback()
+            return {"status": "already_claimed", "job_id": job_id}
+        db.commit()
+
         # 1. Fetch Job and Mix details
         job_row = db.execute(
             text("""
@@ -55,20 +61,9 @@ def run_analysis_pipeline(self, job_id: str):
         duration_seconds = float(job_row.duration_seconds)
         audio_abs_path = Path(STORAGE_ROOT) / storage_rel_path
 
-        # Transition Job to RUNNING
-        db.execute(
-            text("UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = 'Initializing' WHERE id = :id"),
-            {"id": job_id, "now": start_time},
-        )
-        db.execute(
-            text("UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"),
-            {"id": job_id, "host": hostname, "now": start_time},
-        )
-        db.commit()
-
         def progress_tracker(pct: float, stage_name: str):
             db.execute(
-                text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id"),
+                text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND status = 'RUNNING'"),
                 {"id": job_id, "stage": stage_name, "pct": pct},
             )
             db.commit()
@@ -227,7 +222,7 @@ def run_analysis_pipeline(self, job_id: str):
         # Finalize Job
         finish_time = datetime.now(timezone.utc)
         db.execute(
-            text("UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id"),
+            text("UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id AND status = 'RUNNING'"),
             {"id": job_id, "finish": finish_time},
         )
         db.execute(
@@ -251,7 +246,7 @@ def run_analysis_pipeline(self, job_id: str):
         error_str = str(e)
 
         db.execute(
-            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"),
+            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id AND status = 'RUNNING'"),
             {"id": job_id, "err": error_str, "finish": fail_time},
         )
         db.execute(

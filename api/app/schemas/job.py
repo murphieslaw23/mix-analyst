@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+
+from ..models.job import JobType
 
 
 class StageRunOut(BaseModel):
@@ -43,11 +45,12 @@ class JobOut(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     stage_runs: List[StageRunOut] = []
+    attempts: List[JobAttemptOut] = []
 
     class Config:
         from_attributes = True
 
 
 class JobCreateRequest(BaseModel):
-    job_type: str = "ANALYSIS"
-    parameters: Dict[str, Any] = {}
+    job_type: JobType = JobType.ANALYSIS
+    parameters: Dict[str, Any] = Field(default_factory=dict)
