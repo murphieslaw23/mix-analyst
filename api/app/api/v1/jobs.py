@@ -5,10 +5,12 @@ from celery import Celery
 import uuid
 
 from ...db.session import get_db
+from ..deps import get_current_principal, require_owned_job, require_owned_mix
 from ...config import settings
 from ...models.media import Mix
 from ...models.job import Job, JobType, JobStatus, JobAttempt
 from ...schemas.job import JobOut, JobCreateRequest
+from ...schemas.auth import CurrentPrincipal
 from ...services.job_events import stream_job_events
 
 router = APIRouter()
@@ -20,16 +22,16 @@ def create_mix_job(
     mix_id: str,
     req: JobCreateRequest,
     db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     """Dispatch an asynchronous analysis/processing job for a mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+    mix = require_owned_mix(db, principal, mix_id)
 
     job_id = str(uuid.uuid4())
     job = Job(
         id=job_id,
         mix_id=mix.id,
+        project_id=principal.project_id,
         job_type=JobType[req.job_type.upper()] if req.job_type.upper() in JobType.__members__ else JobType.ANALYSIS,
         status=JobStatus.QUEUED,
         progress_percent=0.0,
@@ -69,17 +71,23 @@ def create_mix_job(
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
-def get_job(job_id: str, db: Session = Depends(get_db)):
+def get_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Get the current status and stage runs for a job."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    return job
+    return require_owned_job(db, principal, job_id)
 
 
 @router.get("/jobs/{job_id}/events")
-async def get_job_events(job_id: str):
+async def get_job_events(
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Subscribe to real-time Server-Sent Events (SSE) for job progress."""
+    require_owned_job(db, principal, job_id)
     return StreamingResponse(
         stream_job_events(job_id),
         media_type="text/event-stream",
@@ -92,11 +100,13 @@ async def get_job_events(job_id: str):
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobOut)
-def cancel_job(job_id: str, db: Session = Depends(get_db)):
+def cancel_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Cancel an active or queued job."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    job = require_owned_job(db, principal, job_id)
 
     if job.status in [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED]:
         return job
@@ -115,11 +125,13 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobOut)
-def retry_job(job_id: str, db: Session = Depends(get_db)):
+def retry_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Retry a failed or cancelled job as a new attempt."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    job = require_owned_job(db, principal, job_id)
 
     if job.status not in [JobStatus.FAILED, JobStatus.CANCELLED]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only failed or cancelled jobs can be retried")

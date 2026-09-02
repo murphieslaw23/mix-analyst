@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     debug: bool = Field(False, validation_alias="DEBUG")
     api_v1_prefix: str = Field("/api/v1", validation_alias="API_V1_PREFIX")
 
+    # Authentication
+    auth_jwt_secret: str = Field("development-only-secret-change-me-32", validation_alias="AUTH_JWT_SECRET")
+    auth_jwt_algorithm: str = Field("HS256", validation_alias="AUTH_JWT_ALGORITHM")
+
     # CORS
     web_origin: str = Field("http://localhost:3000", validation_alias="WEB_ORIGIN")
     allowed_origins: Set[str] = Field(

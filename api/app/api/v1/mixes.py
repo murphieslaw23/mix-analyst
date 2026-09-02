@@ -4,6 +4,7 @@ from typing import List
 import json
 
 from ...db.session import get_db
+from ..deps import get_current_principal, require_owned_mix
 from ...models.media import Mix
 from ...models.analysis import AnalysisResult
 from ...models.tracklist import TrackSegment, TrackMatch
@@ -12,29 +13,39 @@ from ...schemas.mix import MixOut, MixListResponse, MixUpdateRequest
 from ...schemas.analysis import AnalysisResultOut
 from ...schemas.tracklist import TracklistResponse
 from ...schemas.transition import TransitionListResponse, TransitionEventOut
+from ...schemas.auth import CurrentPrincipal
 
 router = APIRouter()
 
 
 @router.get("", response_model=MixListResponse)
-def list_mixes(db: Session = Depends(get_db)):
+def list_mixes(
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """List all analyzed and registered DJ mixes."""
-    mixes = db.query(Mix).order_by(Mix.created_at.desc()).all()
+    mixes = db.query(Mix).filter(Mix.project_id == principal.project_id).order_by(Mix.created_at.desc()).all()
     return MixListResponse(total=len(mixes), items=mixes)
 
 
 @router.get("/{mix_id}", response_model=MixOut)
-def get_mix(mix_id: str, db: Session = Depends(get_db)):
+def get_mix(
+    mix_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Get metadata for a specific mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
-    return mix
+    return require_owned_mix(db, principal, mix_id)
 
 
 @router.get("/{mix_id}/analysis", response_model=AnalysisResultOut)
-def get_mix_analysis(mix_id: str, db: Session = Depends(get_db)):
+def get_mix_analysis(
+    mix_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Retrieve full audio analysis metrics (BPM, key, Camelot, loudness, quality) for a mix."""
+    require_owned_mix(db, principal, mix_id)
     analysis = db.query(AnalysisResult).filter(AnalysisResult.mix_id == mix_id).first()
     if not analysis:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis results not found for this mix")
@@ -63,11 +74,13 @@ def get_mix_analysis(mix_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{mix_id}/tracklist", response_model=TracklistResponse)
-def get_mix_tracklist(mix_id: str, db: Session = Depends(get_db)):
+def get_mix_tracklist(
+    mix_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Retrieve detected track segments and identified song metadata for a mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+    require_owned_mix(db, principal, mix_id)
 
     segments = db.query(TrackSegment).filter(TrackSegment.mix_id == mix_id).order_by(TrackSegment.segment_index.asc()).all()
     identified_count = sum(1 for s in segments if s.match is not None)
@@ -81,11 +94,13 @@ def get_mix_tracklist(mix_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{mix_id}/transitions", response_model=TransitionListResponse)
-def get_mix_transitions(mix_id: str, db: Session = Depends(get_db)):
+def get_mix_transitions(
+    mix_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Retrieve detected transition blend regions, cue points, and harmonic compatibility."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+    require_owned_mix(db, principal, mix_id)
 
     transitions = db.query(TransitionEvent).filter(TransitionEvent.mix_id == mix_id).order_by(TransitionEvent.transition_index.asc()).all()
 
@@ -97,11 +112,14 @@ def get_mix_transitions(mix_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{mix_id}", response_model=MixOut)
-def update_mix(mix_id: str, req: MixUpdateRequest, db: Session = Depends(get_db)):
+def update_mix(
+    mix_id: str,
+    req: MixUpdateRequest,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Update title or artist metadata for a mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+    mix = require_owned_mix(db, principal, mix_id)
 
     if req.title is not None:
         mix.title = req.title
@@ -114,11 +132,13 @@ def update_mix(mix_id: str, req: MixUpdateRequest, db: Session = Depends(get_db)
 
 
 @router.delete("/{mix_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_mix(mix_id: str, db: Session = Depends(get_db)):
+def delete_mix(
+    mix_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Delete a mix and its associated database records."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+    mix = require_owned_mix(db, principal, mix_id)
 
     db.delete(mix)
     db.commit()

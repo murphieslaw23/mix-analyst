@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.app.config import settings
 from api.app.api.v1 import health, uploads, jobs, mixes
+import api.app.models  # noqa: F401 - registers the complete SQLAlchemy metadata
 
 app = FastAPI(
     title=settings.app_name,

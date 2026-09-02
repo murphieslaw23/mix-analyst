@@ -1,5 +1,6 @@
 from api.app.models.media import MediaAsset, Mix, UploadSession
 from api.app.models.job import Job, JobAttempt, StageRun
+from api.app.models.identity import Project, User
 from api.app.models.analysis import AnalysisResult
 from api.app.models.tracklist import TrackMatch, TrackSegment
 from api.app.models.transition import TransitionEvent
@@ -21,5 +22,7 @@ __all__ = [
     "MasteringPreset",
     "MasteringJob",
     "BroadcastSync",
-    "StemJob"
+    "StemJob",
+    "Project",
+    "User",
 ]

@@ -27,6 +27,7 @@ class MediaAsset(Base):
     __tablename__ = "media_assets"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     original_filename = Column(String(255), nullable=False)
     storage_path = Column(String(512), nullable=False, unique=True)
     file_size_bytes = Column(BigInteger, nullable=False)
@@ -67,6 +68,7 @@ class Mix(Base):
     __tablename__ = "mixes"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     artist = Column(String(255), nullable=True)
     media_asset_id = Column(String(36), ForeignKey("media_assets.id"), nullable=False)

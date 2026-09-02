@@ -45,6 +45,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     mix_id = Column(String(36), ForeignKey("mixes.id"), nullable=False, index=True)
     job_type = Column(SQLEnum(JobType), default=JobType.ANALYSIS, nullable=False)
     status = Column(SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True)
