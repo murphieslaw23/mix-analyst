@@ -20,6 +20,7 @@ from api.app.services.job_events_store import complete_job_attempt, record_job_e
 from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
 from .stages.tag_mix import Artifact as StageArtifact, tag_mix
 from .stages.generate_waveform import generate_waveform
+from .services.metrics import record_job_finished, record_job_started, started_at
 
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
 
@@ -206,6 +207,7 @@ def run_master_mix(self, job_id: str, project_id: str):
     db = SessionLocal()
     hostname = socket.gethostname()
     stage_id: str | None = None
+    metric_started = started_at()
     try:
         if claim_job_attempt(db, job_id, hostname, project_id) is None:
             db.rollback()
@@ -215,6 +217,7 @@ def run_master_mix(self, job_id: str, project_id: str):
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
         if running_job.job_type.value != "MASTERING":
             raise RuntimeError(f"Job {job_id} is not a mastering command")
+        record_job_started(running_job.job_type.value)
         running_event = record_job_event(
             db,
             running_job,
@@ -322,6 +325,7 @@ def run_master_mix(self, job_id: str, project_id: str):
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
+        record_job_finished("MASTERING", metric_started, "succeeded")
         return {
             "status": "ok",
             "job_id": job_id,
@@ -344,6 +348,7 @@ def run_master_mix(self, job_id: str, project_id: str):
         return {"status": "cancelled", "job_id": job_id}
     except Exception as exc:
         db.rollback()
+        record_job_finished("MASTERING", metric_started, "failed")
         if stage_id is not None:
             stage = db.get(StageRun, stage_id)
             if stage is not None:
@@ -370,6 +375,8 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
     """
     db = SessionLocal()
     hostname = socket.gethostname()
+    metric_started = started_at()
+    metric_job_type = "ANALYSIS"
     try:
         # A broker message is at-least-once.  The conditional claim lets only
         # one worker begin, including after a dispatcher restart/redelivery.
@@ -379,6 +386,8 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         running_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
         if running_job is None:
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
+        metric_job_type = running_job.job_type.value
+        record_job_started(running_job.job_type.value)
         running_event = record_job_event(
             db,
             running_job,
@@ -650,6 +659,7 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
+        record_job_finished(metric_job_type, metric_started, "succeeded")
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
@@ -658,6 +668,7 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         return {"status": "cancelled", "job_id": job_id}
     except Exception as e:
         db.rollback()
+        record_job_finished(metric_job_type, metric_started, "failed")
         error_str = str(e)
         if not transition_job_and_attempt(db, job_id, project_id, hostname, JobStatus.FAILED, error_str):
             db.rollback()

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models.job import Job, JobStatus
 from ..models.job_event import JobEvent
+from .metrics import record_counter
 
 
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
@@ -59,6 +60,9 @@ async def stream_job_events(
     occurs after subscription and on each wakeup or timeout, so a missed
     Pub/Sub message cannot make a committed event disappear.
     """
+    record_counter("sse.reconnect")
+    if last_event_id > 0:
+        record_counter("sse.replay")
     last_sequence = last_event_id
     terminal_delivered = False
 

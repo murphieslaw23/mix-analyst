@@ -44,8 +44,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
       STORAGE_DIR: /storage
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-4294967296}
       MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
+      MIN_STORAGE_FREE_BYTES: ${MIN_STORAGE_FREE_BYTES:-5368709120}
       UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
+      # Empty by default: metrics stay denied until operators explicitly opt in.
+      OPERATOR_USER_IDS: ${OPERATOR_USER_IDS:-}
       CORS_ORIGINS: '["http://localhost", "http://localhost:3000", "http://localhost:80", "https://syco23.org"]'
     volumes:
       - storage_data:/storage
@@ -56,6 +60,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    cpus: "1.0"
+    mem_limit: 1g
+    pids_limit: 256
     networks:
       - mix-network
 
@@ -65,11 +78,14 @@ services:
       dockerfile: worker/Dockerfile
     container_name: mix-analyst-worker
     restart: unless-stopped
+    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-1}", "-Q", "analysis-cpu,dsp-heavy,metadata-network,exports"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
       STORAGE_DIR: /storage
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-4294967296}
       MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
+      MIN_STORAGE_FREE_BYTES: ${MIN_STORAGE_FREE_BYTES:-5368709120}
       UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
     volumes:
       - storage_data:/storage
@@ -78,6 +94,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # DSP is CPU and memory intensive. Scale this service horizontally rather
+    # than increasing concurrency inside a memory-capped container.
+    cpus: "2.0"
+    mem_limit: 6g
+    pids_limit: 256
+    stop_grace_period: 1m
     networks:
       - mix-network
 

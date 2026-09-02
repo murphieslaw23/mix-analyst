@@ -12,6 +12,7 @@ from ..models.media import Mix
 from ..models.outbox import OutboxMessage
 from ..schemas.auth import CurrentPrincipal
 from ..schemas.job import JobCreateRequest
+from .metrics import record_counter
 
 
 TASK_NAMES = {
@@ -85,6 +86,10 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
     )
     enqueue_job_dispatch(db, job, attempt_number=1)
     db.flush()
+    record_counter(
+        "job.enqueued",
+        tags={"job_type": job_type.value, "queue": JOB_QUEUES[job_type], "status": "queued"},
+    )
     return job
 
 
@@ -132,6 +137,10 @@ def enqueue_retry(
     db.refresh(job)
     enqueue_job_dispatch(db, job, attempt_number=attempt_number)
     db.flush()
+    record_counter(
+        "job.enqueued",
+        tags={"job_type": job.job_type.value, "queue": JOB_QUEUES[job.job_type], "status": "queued"},
+    )
     return attempt
 
 

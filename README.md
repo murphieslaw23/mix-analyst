@@ -98,3 +98,28 @@ docker compose up --build -d
 - **FastAPI Backend**: `http://localhost:8000/docs`
 - **PostgreSQL**: `localhost:5432`
 - **Redis Queue**: `localhost:6379`
+
+## Operations
+
+- `GET /api/v1/health/live` proves the API process can respond. It deliberately
+  does not depend on PostgreSQL, Redis, or storage so an orchestrator can
+  restart a stuck process without amplifying a dependency outage.
+- `GET /api/v1/health/ready` returns `503` unless PostgreSQL accepts a query,
+  Redis answers `PING`, and the mounted storage is writable with at least
+  `MIN_STORAGE_FREE_BYTES` available (5 GiB by default). Docker Compose uses
+  this readiness probe for the API service.
+- `GET /api/v1/metrics` is Prometheus text and requires a valid bearer token
+  whose subject appears in the server-side comma-separated `OPERATOR_USER_IDS`
+  allowlist. Leaving that setting unset denies all metrics requests.
+- Metrics are aggregate-only. Their only labels are fixed `job_type`, `status`,
+  `stage`, and `queue` values; filenames, media metadata, project IDs, tokens,
+  storage keys, and request-provided label values are rejected by the metrics
+  boundary.
+
+The Compose worker is limited to one Celery process (`WORKER_CONCURRENCY=1`),
+2 CPUs, and 6 GiB memory because DSP work is CPU/memory intensive. Scale worker
+containers for throughput rather than raising concurrency in one constrained
+process. Upload admission remains bounded to `MAX_UPLOAD_SIZE_BYTES` (4 GiB by
+default) and 8 MiB chunks. Host-run tests mock dependency failures; they do not
+prove the Compose PostgreSQL/Redis/storage readiness path, which should be
+checked with `docker compose up` in a deployment-capable environment.

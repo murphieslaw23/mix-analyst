@@ -20,6 +20,7 @@ from ...schemas.upload import (
     UploadStatusResponse,
 )
 from ...services.storage import StorageService
+from ...services.metrics import record_counter
 from ...services.upload_sessions import (
     UploadExpiredError,
     UploadLifecycleError,
@@ -48,6 +49,7 @@ def _http_error(exc: UploadLifecycleError) -> HTTPException:
     if isinstance(exc, UploadExpiredError):
         return HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc))
     if isinstance(exc, UploadTooLargeError):
+        record_counter("upload.rejected", tags={"stage": "upload", "status": "rejected"})
         return HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc))
     if isinstance(exc, UploadValidationError):
         return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
