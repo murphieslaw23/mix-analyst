@@ -18,6 +18,7 @@ from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobStatus, JobType
 from api.app.models.media import MediaAsset, Mix, UploadSession, UploadStatus
 from api.app.services.audio_probe import AudioProbeResult
+from api.app.services.storage import StorageService
 
 
 def _bearer_token(user_id: str, project_id: str) -> str:
@@ -216,9 +217,10 @@ def test_user_cannot_append_to_another_users_upload_session(client, user_a_token
     assert response.status_code == 404
 
 
-def test_upload_completion_assigns_the_principal_project(client, user_b_token, user_b_upload, monkeypatch):
+def test_upload_completion_assigns_the_principal_project(client, user_b_token, monkeypatch, tmp_path):
+    monkeypatch.setattr("api.app.api.v1.uploads.storage", StorageService(str(tmp_path / "storage")))
     monkeypatch.setattr(
-        "api.app.api.v1.uploads.probe_audio",
+        "api.app.services.upload_sessions.probe_audio",
         lambda _path: AudioProbeResult(
             duration_seconds=1.0,
             sample_rate=44100,
@@ -226,15 +228,23 @@ def test_upload_completion_assigns_the_principal_project(client, user_b_token, u
             codec="pcm_s16le",
         ),
     )
-    monkeypatch.setattr("api.app.api.v1.uploads.storage.compute_sha256", lambda _path: "a" * 64)
-    monkeypatch.setattr(
-        "api.app.api.v1.uploads.storage.finalize_asset",
-        lambda _path, asset_id, _filename: (f"assets/audio/{asset_id}.wav", _path),
-    )
 
     test_client, session_factory = client
+    initialized = test_client.post(
+        "/api/v1",
+        headers={"Authorization": f"Bearer {user_b_token}"},
+        json={"filename": "other-user.wav", "total_size_bytes": 5, "content_type": "audio/wav"},
+    )
+    assert initialized.status_code == 201
+    upload = initialized.json()
+    appended = test_client.patch(
+        upload["upload_url"],
+        headers={"Authorization": f"Bearer {user_b_token}", "Upload-Offset": "0"},
+        content=b"audio",
+    )
+    assert appended.status_code == 200
     response = test_client.post(
-        f"/api/v1/{user_b_upload.id}/complete",
+        f"{upload['upload_url']}/complete",
         headers={"Authorization": f"Bearer {user_b_token}"},
         json={"title": "Owned mix"},
     )

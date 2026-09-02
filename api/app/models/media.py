@@ -52,8 +52,16 @@ class UploadSession(Base):
     filename = Column(String(255), nullable=False)
     total_size_bytes = Column(BigInteger, nullable=False)
     bytes_received = Column(BigInteger, default=0, nullable=False)
+    # ``offset`` is the authoritative append position.  ``bytes_received`` is
+    # retained for the existing response contract and is always updated with it.
+    offset = Column(BigInteger, default=0, nullable=False)
     chunk_size = Column(BigInteger, default=5 * 1024 * 1024, nullable=False)
     sha256_hash = Column(String(64), nullable=True)
+    content_type = Column(String(100), default="application/octet-stream", nullable=False)
+    quarantine_key = Column(String(512), default="", nullable=False)
+    expires_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    # Kept only to allow the migration to leave old rows inspectable.  New
+    # uploads never persist or consume an absolute filesystem path.
     temp_path = Column(String(512), nullable=False)
     status = Column(SQLEnum(UploadStatus), default=UploadStatus.PENDING, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

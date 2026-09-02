@@ -36,8 +36,10 @@ class Settings(BaseSettings):
 
     # Storage
     storage_root: str = Field("/data/storage", validation_alias="STORAGE_DIR")
-    max_upload_size_bytes: int = Field(4 * 1024 * 1024 * 1024, validation_alias="MAX_UPLOAD_SIZE_BYTES")
-    default_chunk_size_bytes: int = Field(5 * 1024 * 1024, validation_alias="DEFAULT_CHUNK_SIZE_BYTES")
+    max_upload_size_bytes: int = Field(4 * 1024 * 1024 * 1024, gt=0, validation_alias="MAX_UPLOAD_SIZE_BYTES")
+    max_chunk_size_bytes: int = Field(8 * 1024 * 1024, gt=0, validation_alias="MAX_CHUNK_SIZE_BYTES")
+    default_chunk_size_bytes: int = Field(5 * 1024 * 1024, gt=0, validation_alias="DEFAULT_CHUNK_SIZE_BYTES")
+    upload_session_ttl_seconds: int = Field(24 * 60 * 60, gt=0, validation_alias="UPLOAD_SESSION_TTL_SECONDS")
 
 
 @lru_cache()
