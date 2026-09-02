@@ -1,34 +1,39 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Set
 
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
-    app_name: str = "Mix Analyst"
-    debug: bool = False
-    api_v1_prefix: str = "/api/v1"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    app_name: str = Field("Mix Analyst", validation_alias="APP_NAME")
+    debug: bool = Field(False, validation_alias="DEBUG")
+    api_v1_prefix: str = Field("/api/v1", validation_alias="API_V1_PREFIX")
 
     # CORS
-    web_origin: str = "http://localhost:3000"
-    allowed_origins: Set[str] = {"http://localhost:3000", "http://localhost:5173"}
+    web_origin: str = Field("http://localhost:3000", validation_alias="WEB_ORIGIN")
+    allowed_origins: Set[str] = Field(
+        {"http://localhost:3000", "http://localhost:5173"},
+        validation_alias="CORS_ORIGINS",
+    )
 
     # Database
-    database_url: str = "postgresql://postgres:postgres@db:5432/mixanalyst"
+    database_url: str = Field(
+        "postgresql://postgres:postgres@db:5432/mixanalyst",
+        validation_alias="DATABASE_URL",
+    )
 
     # Redis / Celery
-    redis_url: str = "redis://redis:6379/0"
-    celery_broker_url: str = "redis://redis:6379/0"
-    celery_result_backend: str = "redis://redis:6379/0"
+    redis_url: str = Field("redis://redis:6379/0", validation_alias="REDIS_URL")
+    celery_broker_url: str = Field("redis://redis:6379/0", validation_alias="CELERY_BROKER_URL")
+    celery_result_backend: str = Field("redis://redis:6379/0", validation_alias="CELERY_RESULT_BACKEND")
 
     # Storage
-    storage_root: str = "/data/storage"
-    max_upload_size_bytes: int = 4 * 1024 * 1024 * 1024  # 4 GB max per mix
-    default_chunk_size_bytes: int = 5 * 1024 * 1024      # 5 MB per chunk
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
+    storage_root: str = Field("/data/storage", validation_alias="STORAGE_DIR")
+    max_upload_size_bytes: int = Field(4 * 1024 * 1024 * 1024, validation_alias="MAX_UPLOAD_SIZE_BYTES")
+    default_chunk_size_bytes: int = Field(5 * 1024 * 1024, validation_alias="DEFAULT_CHUNK_SIZE_BYTES")
 
 
 @lru_cache()

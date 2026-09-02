@@ -21,7 +21,7 @@ class MasteringJob(Base):
     __tablename__ = "mastering_jobs"
 
     id = Column(String, primary_key=True, index=True)
-    media_id = Column(String, ForeignKey("media.id"), nullable=False, index=True)
+    media_id = Column(String, ForeignKey("media_assets.id"), nullable=False, index=True)
     preset_id = Column(String, ForeignKey("mastering_presets.id"), nullable=True)
     status = Column(String, default="pending")  # pending, processing, completed, failed
     input_lufs = Column(Float, nullable=True)

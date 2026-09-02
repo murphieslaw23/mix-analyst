@@ -7,7 +7,7 @@ class StemJob(Base):
     __tablename__ = "stem_jobs"
 
     id = Column(String, primary_key=True, index=True)
-    media_id = Column(String, ForeignKey("media.id"), nullable=False, index=True)
+    media_id = Column(String, ForeignKey("media_assets.id"), nullable=False, index=True)
     model_name = Column(String, default="htdemucs")
     status = Column(String, default="pending")  # pending, processing, completed, failed
     drums_path = Column(String, nullable=True)
