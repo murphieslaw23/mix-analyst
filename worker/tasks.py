@@ -82,11 +82,17 @@ def persist_immutable_payload(storage_root: str, key: str, payload: bytes) -> No
 
 
 def persist_artifact_record(db, *, project_id: str, mix_id: str, artifact: StageArtifact, key: str, report: dict | None = None):
-    """Store one artifact reference, rejecting collisions rather than replacing it."""
-    existing = db.scalar(select(ArtifactRecord).where(ArtifactRecord.project_id == project_id, ArtifactRecord.key == key))
+    """Attach an immutable object to one mix without replacing other attachments."""
+    existing = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.project_id == project_id,
+            ArtifactRecord.mix_id == mix_id,
+            ArtifactRecord.key == key,
+        )
+    )
     if existing is not None:
-        immutable_fields = ("mix_id", "role", "sha256", "algorithm_version", "media_type", "byte_length")
-        expected = (mix_id, artifact.role, artifact.sha256, artifact.algorithm_version, artifact.media_type, artifact.byte_length)
+        immutable_fields = ("role", "sha256", "algorithm_version", "media_type", "byte_length")
+        expected = (artifact.role, artifact.sha256, artifact.algorithm_version, artifact.media_type, artifact.byte_length)
         actual = tuple(getattr(existing, field) for field in immutable_fields)
         if actual != expected:
             raise RuntimeError("immutable artifact record conflicts with its existing identity")

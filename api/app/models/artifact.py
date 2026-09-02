@@ -11,7 +11,10 @@ from ..db.session import Base
 
 class Artifact(Base):
     __tablename__ = "artifacts"
-    __table_args__ = (UniqueConstraint("project_id", "key", name="uq_artifacts_project_key"),)
+    # Object keys identify immutable physical bytes within a project, while a
+    # row is an attachment of those bytes to one mix. Multiple mixes may share
+    # a deduplicated source and its deterministic derived artifacts.
+    __table_args__ = (UniqueConstraint("project_id", "mix_id", "key", name="uq_artifacts_project_mix_key"),)
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
