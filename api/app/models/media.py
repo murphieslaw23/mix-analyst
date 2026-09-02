@@ -48,6 +48,7 @@ class UploadSession(Base):
     __tablename__ = "upload_sessions"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     filename = Column(String(255), nullable=False)
     total_size_bytes = Column(BigInteger, nullable=False)
     bytes_received = Column(BigInteger, default=0, nullable=False)

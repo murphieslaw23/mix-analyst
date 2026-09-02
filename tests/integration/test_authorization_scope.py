@@ -14,8 +14,10 @@ from sqlalchemy.pool import StaticPool
 
 from api.app.db.session import Base, get_db
 from api.app.main import app
+from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobStatus, JobType
-from api.app.models.media import MediaAsset, Mix
+from api.app.models.media import MediaAsset, Mix, UploadSession, UploadStatus
+from api.app.services.audio_probe import AudioProbeResult
 
 
 def _bearer_token(user_id: str, project_id: str) -> str:
@@ -36,6 +38,19 @@ def client():
     )
     session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
     Base.metadata.create_all(bind=engine)
+    db = session_factory()
+    try:
+        db.add_all(
+            [
+                User(id="user-a"),
+                User(id="user-b"),
+                Project(id="project-a", owner_id="user-a"),
+                Project(id="project-b", owner_id="user-b"),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
 
     def override_get_db():
         db = session_factory()
@@ -46,7 +61,7 @@ def client():
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        with TestClient(app) as test_client:
+        with TestClient(app, raise_server_exceptions=False) as test_client:
             yield test_client, session_factory
     finally:
         app.dependency_overrides.clear()
@@ -119,6 +134,30 @@ def job(client, user_b_mix):
         db.close()
 
 
+@pytest.fixture
+def user_b_upload(client, tmp_path):
+    _, session_factory = client
+    upload_file = tmp_path / "other-user.wav"
+    upload_file.write_bytes(b"audio")
+    db = session_factory()
+    try:
+        upload_session = UploadSession(
+            id="upload-b",
+            filename="other-user.wav",
+            total_size_bytes=5,
+            bytes_received=5,
+            chunk_size=5,
+            temp_path=str(upload_file),
+            status=UploadStatus.UPLOADING,
+        )
+        upload_session.project_id = "project-b"
+        db.add(upload_session)
+        db.commit()
+        return upload_session
+    finally:
+        db.close()
+
+
 def test_user_cannot_read_another_users_mix(client, user_a_token, user_b_mix):
     test_client, _ = client
     response = test_client.get(
@@ -136,3 +175,76 @@ def test_unauthenticated_job_event_stream_is_rejected(client, job, monkeypatch):
     test_client, _ = client
     response = test_client.get(f"/api/v1/jobs/{job.id}/events")
     assert response.status_code == 401
+
+
+def test_user_cannot_read_another_users_upload_session(client, user_a_token, user_b_upload):
+    test_client, _ = client
+    response = test_client.get(
+        f"/api/v1/{user_b_upload.id}",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+    )
+    assert response.status_code == 404
+
+
+def test_unauthenticated_upload_status_is_rejected(client, user_b_upload):
+    test_client, _ = client
+    response = test_client.get(f"/api/v1/{user_b_upload.id}")
+    assert response.status_code == 401
+
+
+def test_unauthenticated_upload_initialization_is_rejected(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "api.app.api.v1.uploads.storage.create_upload_session_file",
+        lambda _session_id: tmp_path / "unauthenticated-upload.tmp",
+    )
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1",
+        json={"filename": "unauthenticated.wav", "total_size_bytes": 5, "chunk_size": 5},
+    )
+    assert response.status_code == 401
+
+
+def test_user_cannot_append_to_another_users_upload_session(client, user_a_token, user_b_upload):
+    test_client, _ = client
+    response = test_client.patch(
+        f"/api/v1/{user_b_upload.id}",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        data={"offset": "5"},
+        files={"file": ("chunk.wav", b"x", "audio/wav")},
+    )
+    assert response.status_code == 404
+
+
+def test_upload_completion_assigns_the_principal_project(client, user_b_token, user_b_upload, monkeypatch):
+    monkeypatch.setattr(
+        "api.app.api.v1.uploads.probe_audio",
+        lambda _path: AudioProbeResult(
+            duration_seconds=1.0,
+            sample_rate=44100,
+            channels=2,
+            codec="pcm_s16le",
+        ),
+    )
+    monkeypatch.setattr("api.app.api.v1.uploads.storage.compute_sha256", lambda _path: "a" * 64)
+    monkeypatch.setattr(
+        "api.app.api.v1.uploads.storage.finalize_asset",
+        lambda _path, asset_id, _filename: (f"assets/audio/{asset_id}.wav", _path),
+    )
+
+    test_client, session_factory = client
+    response = test_client.post(
+        f"/api/v1/{user_b_upload.id}/complete",
+        headers={"Authorization": f"Bearer {user_b_token}"},
+        json={"title": "Owned mix"},
+    )
+
+    assert response.status_code == 200
+    db = session_factory()
+    try:
+        media = db.query(MediaAsset).filter(MediaAsset.id == response.json()["media_asset_id"]).one()
+        mix = db.query(Mix).filter(Mix.id == response.json()["mix_id"]).one()
+        assert media.project_id == "project-b"
+        assert mix.project_id == "project-b"
+    finally:
+        db.close()

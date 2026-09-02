@@ -4,6 +4,7 @@ from pathlib import Path
 import uuid
 
 from ...db.session import get_db
+from ..deps import get_current_principal, require_owned_upload_session
 from ...config import settings
 from ...models.media import UploadSession, UploadStatus, MediaAsset, Mix
 from ...services.storage import StorageService
@@ -16,13 +17,18 @@ from ...schemas.upload import (
     UploadCompleteResponse,
     UploadStatusResponse,
 )
+from ...schemas.auth import CurrentPrincipal
 
 router = APIRouter()
 storage = StorageService(settings.storage_root)
 
 
 @router.post("", response_model=UploadInitResponse, status_code=status.HTTP_201_CREATED)
-def init_upload(req: UploadInitRequest, db: Session = Depends(get_db)):
+def init_upload(
+    req: UploadInitRequest,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Initialize a new resumable upload session."""
     if req.total_size_bytes > settings.max_upload_size_bytes:
         raise HTTPException(
@@ -35,6 +41,7 @@ def init_upload(req: UploadInitRequest, db: Session = Depends(get_db)):
 
     upload_session = UploadSession(
         id=session_id,
+        project_id=principal.project_id,
         filename=req.filename,
         total_size_bytes=req.total_size_bytes,
         chunk_size=req.chunk_size,
@@ -61,11 +68,10 @@ async def upload_chunk(
     file: UploadFile = File(...),
     offset: int = Form(...),
     db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     """Append a chunk to the active upload session."""
-    upload_session = db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    if not upload_session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     if upload_session.status in [UploadStatus.COMPLETED, UploadStatus.FAILED]:
         raise HTTPException(
@@ -106,11 +112,10 @@ def complete_upload(
     upload_id: str,
     req: UploadCompleteRequest,
     db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     """Finalize the upload, probe audio validity with ffprobe, and create the MediaAsset and Mix."""
-    upload_session = db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    if not upload_session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     temp_path = Path(upload_session.temp_path)
     if not temp_path.exists():
@@ -144,6 +149,7 @@ def complete_upload(
     # Persist MediaAsset
     media_asset = MediaAsset(
         id=asset_id,
+        project_id=principal.project_id,
         original_filename=upload_session.filename,
         storage_path=rel_path,
         file_size_bytes=actual_size,
@@ -160,6 +166,7 @@ def complete_upload(
     # Derive mix title from request or original filename
     mix_title = req.title.strip() if req.title and req.title.strip() else Path(upload_session.filename).stem
     mix = Mix(
+        project_id=principal.project_id,
         title=mix_title,
         artist=req.artist.strip() if req.artist and req.artist.strip() else None,
         media_asset_id=media_asset.id,
@@ -187,11 +194,13 @@ def complete_upload(
 
 
 @router.get("/{upload_id}", response_model=UploadStatusResponse)
-def get_upload_status(upload_id: str, db: Session = Depends(get_db)):
+def get_upload_status(
+    upload_id: str,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
     """Get status of an active or completed upload session."""
-    upload_session = db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    if not upload_session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     progress = 0.0
     if upload_session.total_size_bytes > 0:

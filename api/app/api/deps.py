@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..db.session import get_db
 from ..models.job import Job
-from ..models.media import Mix
+from ..models.media import Mix, UploadSession
 from ..schemas.auth import CurrentPrincipal
 from ..services.auth import decode_principal_token
 
@@ -46,3 +46,15 @@ def require_owned_job(db: Session, principal: CurrentPrincipal, job_id: str) -> 
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     return job
+
+
+def require_owned_upload_session(db: Session, principal: CurrentPrincipal, upload_id: str) -> UploadSession:
+    upload_session = db.scalar(
+        select(UploadSession).where(
+            UploadSession.id == upload_id,
+            UploadSession.project_id == principal.project_id,
+        )
+    )
+    if upload_session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+    return upload_session
