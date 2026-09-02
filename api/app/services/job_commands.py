@@ -88,8 +88,39 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
     return job
 
 
-def enqueue_retry(db: Session, job: Job) -> JobAttempt:
-    """Durably requeue a terminal job and create its next dispatch command."""
+def enqueue_retry(
+    db: Session,
+    job: Job,
+    terminal_statuses: tuple[JobStatus, ...] = (JobStatus.FAILED, JobStatus.CANCELLED),
+) -> JobAttempt | None:
+    """Atomically requeue a terminal job and append exactly one dispatch command.
+
+    The state transition is the retry claim. A stale or concurrent caller sees
+    no returned row and must not manufacture another attempt/outbox command.
+    """
+    claimed_job_id = db.execute(
+        update(Job)
+        .where(
+            Job.id == job.id,
+            Job.project_id == job.project_id,
+            Job.status.in_(terminal_statuses),
+        )
+        .values(
+            status=JobStatus.QUEUED,
+            progress_percent=0.0,
+            current_stage="Re-queued",
+            error_message=None,
+            started_at=None,
+            finished_at=None,
+        )
+        .returning(Job.id)
+    ).scalar_one_or_none()
+    if claimed_job_id is None:
+        return None
+
+    # The conditional transition above has claimed this job. Its batch parent
+    # (when applicable) holds the sibling retry serialization lock, and the
+    # job row itself protects ordinary single-job retry callers.
     attempt_number = (db.scalar(select(func.max(JobAttempt.attempt_number)).where(JobAttempt.job_id == job.id)) or 0) + 1
     attempt = JobAttempt(
         id=str(uuid.uuid4()),
@@ -98,12 +129,7 @@ def enqueue_retry(db: Session, job: Job) -> JobAttempt:
         status=JobStatus.QUEUED,
     )
     db.add(attempt)
-    job.status = JobStatus.QUEUED
-    job.progress_percent = 0.0
-    job.current_stage = "Re-queued"
-    job.error_message = None
-    job.started_at = None
-    job.finished_at = None
+    db.refresh(job)
     enqueue_job_dispatch(db, job, attempt_number=attempt_number)
     db.flush()
     return attempt
@@ -161,5 +187,13 @@ def claim_job_attempt(db: Session, job_id: str, worker_name: str, project_id: st
     attempt.status = JobStatus.RUNNING
     attempt.worker_hostname = worker_name
     attempt.started_at = now
+    if batch_id is not None:
+        # Avoid a module import cycle at definition time: batch commands use
+        # this module to create their children. The recompute shares this claim
+        # transaction, so the stored parent cannot remain QUEUED after a child
+        # commits RUNNING.
+        from .batches import recompute_batch_status
+
+        recompute_batch_status(db, batch_id)
     db.flush()
     return attempt

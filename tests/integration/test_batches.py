@@ -18,7 +18,7 @@ from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobAttempt, JobStatus
 from api.app.models.media import MediaAsset, Mix
 from api.app.models.outbox import OutboxMessage
-from api.app.services.job_commands import claim_job_attempt
+from api.app.services.job_commands import claim_job_attempt, enqueue_retry
 from api.app.services.batches import advance_batch_after_terminal_job
 
 
@@ -143,6 +143,13 @@ def test_batch_retry_requeues_only_selected_failed_children(client, token, owned
     )
     assert response.status_code == 200, response.text
 
+    repeated = test_client.post(
+        f"/api/v1/batches/{batch['id']}/retry",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"job_ids": [failed_id]},
+    )
+    assert repeated.status_code == 400
+
     db = session_factory()
     try:
         assert db.get(Job, successful_id).status is JobStatus.SUCCEEDED
@@ -197,10 +204,48 @@ def test_batch_worker_claims_respect_persisted_parallelism(client, token, owned_
         jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
         assert claim_job_attempt(db, jobs[0].id, "worker-a", "project-a") is not None
         db.commit()
+        assert db.get(Batch, batch["id"]).status.value == "RUNNING"
         assert claim_job_attempt(db, jobs[1].id, "worker-b", "project-a") is None
         assert db.get(Job, jobs[1].id).status is JobStatus.QUEUED
     finally:
         db.close()
+
+
+def test_stale_retry_caller_cannot_append_a_second_attempt_or_outbox_command(client, token, owned_mix_ids):
+    test_client, session_factory = client
+    batch = _create_batch(test_client, token, owned_mix_ids)
+    seed = session_factory()
+    try:
+        failed = seed.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()[0]
+        failed.status = JobStatus.FAILED
+        seed.commit()
+        failed_id = failed.id
+    finally:
+        seed.close()
+
+    stale_session = session_factory()
+    winning_session = session_factory()
+    try:
+        stale_job = stale_session.get(Job, failed_id)
+        winning_job = winning_session.get(Job, failed_id)
+        assert enqueue_retry(winning_session, winning_job, terminal_statuses=(JobStatus.FAILED,)) is not None
+        winning_session.commit()
+
+        # This models a second retry request that read FAILED before the first
+        # request committed. The conditional FAILED -> QUEUED update must win
+        # before attempt/outbox creation, so it cannot create a duplicate.
+        assert enqueue_retry(stale_session, stale_job, terminal_statuses=(JobStatus.FAILED,)) is None
+        stale_session.rollback()
+    finally:
+        stale_session.close()
+        winning_session.close()
+
+    verify = session_factory()
+    try:
+        assert verify.query(JobAttempt).filter(JobAttempt.job_id == failed_id).count() == 2
+        assert verify.query(OutboxMessage).filter(OutboxMessage.aggregate_id == failed_id).count() == 2
+    finally:
+        verify.close()
 
 
 def test_terminal_batch_child_refreshes_parent_and_redelivers_one_waiting_child(client, token, owned_mix_ids):

@@ -113,8 +113,20 @@ def retry_batch_items(db: Session, batch: Batch, job_ids: list[str]) -> Batch:
     unique_ids = list(dict.fromkeys(job_ids))
     if len(unique_ids) != len(job_ids):
         raise ValueError("Each batch job can be selected only once")
+    # Lock the owner-scoped parent first, then its selected children. The parent
+    # gives all retry requests for this batch one serialization point; locks on
+    # the rows make the selection explicit for databases with row locking.
+    locked_batch = db.scalar(
+        select(Batch)
+        .where(Batch.id == batch.id, Batch.project_id == batch.project_id)
+        .with_for_update()
+    )
+    if locked_batch is None:
+        raise PermissionError("Batch does not belong to the current project")
     children = db.scalars(
-        select(Job).where(Job.batch_id == batch.id, Job.project_id == batch.project_id, Job.id.in_(unique_ids))
+        select(Job)
+        .where(Job.batch_id == locked_batch.id, Job.project_id == locked_batch.project_id, Job.id.in_(unique_ids))
+        .with_for_update()
     ).all()
     if len(children) != len(unique_ids):
         raise PermissionError("One or more jobs do not belong to this batch")
@@ -122,8 +134,9 @@ def retry_batch_items(db: Session, batch: Batch, job_ids: list[str]) -> Batch:
         if child.status is not JobStatus.FAILED:
             raise ValueError("Only failed batch jobs can be retried")
     for child in children:
-        enqueue_retry(db, child)
-    return recompute_batch_status(db, batch.id)
+        if enqueue_retry(db, child, terminal_statuses=(JobStatus.FAILED,)) is None:
+            raise ValueError("Only failed batch jobs can be retried")
+    return recompute_batch_status(db, locked_batch.id)
 
 
 def advance_batch_after_terminal_job(db: Session, job_id: str, project_id: str) -> None:

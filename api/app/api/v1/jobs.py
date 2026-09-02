@@ -101,7 +101,8 @@ def retry_job(
     if job.status not in [JobStatus.FAILED, JobStatus.CANCELLED]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only failed or cancelled jobs can be retried")
 
-    enqueue_retry(db, job)
+    if enqueue_retry(db, job) is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only failed or cancelled jobs can be retried")
     if job.batch_id is not None:
         recompute_batch_status(db, job.batch_id)
     db.commit()
