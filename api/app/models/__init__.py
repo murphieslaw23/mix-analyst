@@ -10,6 +10,7 @@ from api.app.models.mastering import MasteringPreset, MasteringJob
 from api.app.models.broadcast import BroadcastSync
 from api.app.models.stems import StemJob
 from api.app.models.artifact import Artifact
+from api.app.models.batch import Batch
 
 __all__ = [
     "MediaAsset",
@@ -29,6 +30,7 @@ __all__ = [
     "BroadcastSync",
     "StemJob",
     "Artifact",
+    "Batch",
     "Project",
     "User",
 ]

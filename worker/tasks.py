@@ -14,6 +14,7 @@ from api.app.models.job_event import JobEvent
 from api.app.models.artifact import Artifact as ArtifactRecord
 from api.app.services.storage import StorageService
 from api.app.services.job_commands import claim_job_attempt
+from api.app.services.batches import advance_batch_after_terminal_job
 from api.app.services.job_events import event_notification, publish_event
 from api.app.services.job_events_store import complete_job_attempt, record_job_event
 from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
@@ -317,6 +318,7 @@ def run_master_mix(self, job_id: str, project_id: str):
         if not complete_job_attempt(db, job_id, project_id, hostname):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        advance_batch_after_terminal_job(db, job_id, project_id)
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
@@ -352,6 +354,7 @@ def run_master_mix(self, job_id: str, project_id: str):
         if not transition_job_and_attempt(db, job_id, project_id, hostname, JobStatus.FAILED, str(exc)):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        advance_batch_after_terminal_job(db, job_id, project_id)
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
@@ -643,6 +646,7 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         if not complete_job_attempt(db, job_id, project_id, hostname):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        advance_batch_after_terminal_job(db, job_id, project_id)
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
@@ -658,6 +662,7 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         if not transition_job_and_attempt(db, job_id, project_id, hostname, JobStatus.FAILED, error_str):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        advance_batch_after_terminal_job(db, job_id, project_id)
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))

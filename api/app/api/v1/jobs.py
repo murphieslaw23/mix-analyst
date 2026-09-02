@@ -10,6 +10,7 @@ from ...schemas.auth import CurrentPrincipal
 from ...services.job_commands import enqueue_job, enqueue_retry
 from ...services.job_events import event_notification, publish_event, stream_job_events
 from ...services.job_events_store import request_cancellation
+from ...services.batches import recompute_batch_status
 
 router = APIRouter()
 
@@ -78,6 +79,8 @@ def cancel_job(
     was_cancellable = job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
 
     job = request_cancellation(db, job)
+    if job.batch_id is not None:
+        recompute_batch_status(db, job.batch_id)
     db.commit()
     db.refresh(job)
     cancellation_event = job.events[-1] if was_cancellable and job.events else None
@@ -99,6 +102,8 @@ def retry_job(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only failed or cancelled jobs can be retried")
 
     enqueue_retry(db, job)
+    if job.batch_id is not None:
+        recompute_batch_status(db, job.batch_id)
     db.commit()
     db.refresh(job)
     return job

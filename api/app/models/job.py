@@ -48,6 +48,7 @@ class Job(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     mix_id = Column(String(36), ForeignKey("mixes.id"), nullable=False, index=True)
+    batch_id = Column(String(36), ForeignKey("batches.id"), nullable=True, index=True)
     job_type = Column(SQLEnum(JobType), default=JobType.ANALYSIS, nullable=False)
     status = Column(SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True)
     progress_percent = Column(Float, default=0.0, nullable=False)
@@ -64,6 +65,7 @@ class Job(Base):
     attempts = relationship("JobAttempt", back_populates="job", cascade="all, delete-orphan", order_by="JobAttempt.attempt_number")
     outbox_messages = relationship("OutboxMessage", back_populates="job", cascade="all, delete-orphan")
     events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan", order_by="JobEvent.sequence")
+    batch = relationship("Batch", back_populates="jobs")
 
 
 class JobAttempt(Base):

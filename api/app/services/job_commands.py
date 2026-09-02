@@ -7,6 +7,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..models.job import Job, JobAttempt, JobStatus, JobType
+from ..models.batch import Batch
 from ..models.media import Mix
 from ..models.outbox import OutboxMessage
 from ..schemas.auth import CurrentPrincipal
@@ -32,6 +33,25 @@ JOB_QUEUES = {
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def enqueue_job_dispatch(db: Session, job: Job, attempt_number: int) -> OutboxMessage:
+    """Append the canonical durable broker command for an existing queued job."""
+    task_id = f"job_{job.id}" if attempt_number == 1 else f"job_{job.id}_att_{attempt_number}"
+    message = OutboxMessage(
+        project_id=job.project_id,
+        aggregate_id=job.id,
+        kind="job.dispatch",
+        payload={
+            "job_id": job.id,
+            "project_id": job.project_id,
+            "task_name": TASK_NAMES[job.job_type],
+            "task_id": task_id,
+            "queue": JOB_QUEUES[job.job_type],
+        },
+    )
+    db.add(message)
+    return message
 
 
 def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: JobCreateRequest) -> Job:
@@ -63,20 +83,7 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
             status=JobStatus.QUEUED,
         )
     )
-    db.add(
-        OutboxMessage(
-            project_id=principal.project_id,
-            aggregate_id=job.id,
-            kind="job.dispatch",
-            payload={
-                "job_id": job.id,
-                "project_id": principal.project_id,
-                "task_name": TASK_NAMES[job_type],
-                "task_id": f"job_{job.id}",
-                "queue": JOB_QUEUES[job_type],
-            },
-        )
-    )
+    enqueue_job_dispatch(db, job, attempt_number=1)
     db.flush()
     return job
 
@@ -97,21 +104,7 @@ def enqueue_retry(db: Session, job: Job) -> JobAttempt:
     job.error_message = None
     job.started_at = None
     job.finished_at = None
-    task_id = f"job_{job.id}_att_{attempt_number}"
-    db.add(
-        OutboxMessage(
-            project_id=job.project_id,
-            aggregate_id=job.id,
-            kind="job.dispatch",
-            payload={
-                "job_id": job.id,
-                "project_id": job.project_id,
-                "task_name": TASK_NAMES[job.job_type],
-                "task_id": task_id,
-                "queue": JOB_QUEUES[job.job_type],
-            },
-        )
-    )
+    enqueue_job_dispatch(db, job, attempt_number=attempt_number)
     db.flush()
     return attempt
 
@@ -123,6 +116,26 @@ def claim_job_attempt(db: Session, job_id: str, worker_name: str, project_id: st
     delivery, a second worker, or a cancellation that won the race all receive
     no claim and therefore cannot replace a terminal cancelled status.
     """
+    # A parent-row lock serializes sibling claims on PostgreSQL. The count is
+    # therefore durable server-side state, never a worker-local semaphore.
+    batch_id = db.scalar(select(Job.batch_id).where(Job.id == job_id, Job.project_id == project_id))
+    if batch_id is not None:
+        batch = db.scalar(
+            select(Batch)
+            .where(Batch.id == batch_id, Batch.project_id == project_id)
+            .with_for_update()
+        )
+        if batch is None:
+            raise RuntimeError(f"Batch {batch_id} for job {job_id} is outside project {project_id}")
+        running_count = db.scalar(
+            select(func.count()).select_from(Job).where(
+                Job.batch_id == batch.id,
+                Job.status == JobStatus.RUNNING,
+            )
+        )
+        if running_count >= batch.max_parallelism:
+            return None
+
     now = utcnow()
     claimed_job_id = db.execute(
         update(Job)

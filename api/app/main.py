@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.app.config import settings
-from api.app.api.v1 import health, uploads, jobs, mixes, mastering
+from api.app.api.v1 import batches, health, uploads, jobs, mixes, mastering
 import api.app.models  # noqa: F401 - registers the complete SQLAlchemy metadata
 
 app = FastAPI(
@@ -22,3 +22,4 @@ app.include_router(uploads.router, prefix=settings.api_v1_prefix, tags=["uploads
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
 app.include_router(mixes.router, prefix=f"{settings.api_v1_prefix}/mixes", tags=["mixes"])
 app.include_router(mastering.router, prefix=settings.api_v1_prefix, tags=["mastering"])
+app.include_router(batches.router, prefix=settings.api_v1_prefix, tags=["batches"])
