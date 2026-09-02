@@ -53,6 +53,7 @@ class Job(Base):
     current_stage = Column(String(100), nullable=True)
     celery_task_id = Column(String(100), nullable=True, index=True)
     error_message = Column(Text, nullable=True)
+    event_sequence = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
@@ -60,6 +61,7 @@ class Job(Base):
     stage_runs = relationship("StageRun", back_populates="job", cascade="all, delete-orphan", order_by="StageRun.started_at")
     attempts = relationship("JobAttempt", back_populates="job", cascade="all, delete-orphan", order_by="JobAttempt.attempt_number")
     outbox_messages = relationship("OutboxMessage", back_populates="job", cascade="all, delete-orphan")
+    events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan", order_by="JobEvent.sequence")
 
 
 class JobAttempt(Base):

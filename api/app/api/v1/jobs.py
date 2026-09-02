@@ -1,19 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from celery import Celery
 
 from ...db.session import get_db
 from ..deps import get_current_principal, require_owned_job, require_owned_mix
-from ...config import settings
 from ...models.job import JobStatus
 from ...schemas.job import JobOut, JobCreateRequest
 from ...schemas.auth import CurrentPrincipal
 from ...services.job_commands import enqueue_job, enqueue_retry
-from ...services.job_events import stream_job_events
+from ...services.job_events import event_notification, publish_event, stream_job_events
+from ...services.job_events_store import request_cancellation
 
 router = APIRouter()
-celery_client = Celery("mix_analyst_client", broker=settings.celery_broker_url)
 
 
 @router.post("/mixes/{mix_id}/jobs", response_model=JobOut, status_code=status.HTTP_201_CREATED)
@@ -45,13 +43,21 @@ def get_job(
 @router.get("/jobs/{job_id}/events")
 async def get_job_events(
     job_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     """Subscribe to real-time Server-Sent Events (SSE) for job progress."""
     job = require_owned_job(db, principal, job_id)
+    raw_last_event_id = request.headers.get("Last-Event-ID", "0")
+    try:
+        last_event_id = int(raw_last_event_id)
+        if last_event_id < 0:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Last-Event-ID must be a non-negative integer") from None
     return StreamingResponse(
-        stream_job_events(job.project_id, job.id),
+        stream_job_events(db, job.project_id, job.id, last_event_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -69,20 +75,14 @@ def cancel_job(
 ):
     """Cancel an active or queued job."""
     job = require_owned_job(db, principal, job_id)
+    was_cancellable = job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
 
-    if job.status in [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED]:
-        return job
-
-    if job.celery_task_id:
-        try:
-            celery_client.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
-        except Exception:
-            pass
-
-    job.status = JobStatus.CANCELLED
-    job.error_message = "Cancelled by user request"
+    job = request_cancellation(db, job)
     db.commit()
     db.refresh(job)
+    cancellation_event = job.events[-1] if was_cancellable and job.events else None
+    if cancellation_event is not None:
+        publish_event(job.project_id, job.id, event_notification(cancellation_event))
     return job
 
 

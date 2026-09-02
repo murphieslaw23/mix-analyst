@@ -1,40 +1,136 @@
+"""Replayable SSE delivery for durable project-scoped job events."""
+
+import asyncio
 import json
+from collections.abc import AsyncGenerator
+
+import redis
 import redis.asyncio as aioredis
-from typing import AsyncGenerator
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from ..config import settings
+from ..models.job import Job, JobStatus
+from ..models.job_event import JobEvent
+
+
+TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 
 
 def job_event_channel(project_id: str, job_id: str) -> str:
-    """Namespace transient events by their authenticated project and job."""
+    """Namespace transient wakeups by their authenticated project and job."""
     return f"project:{project_id}:job:{job_id}:events"
 
 
-async def stream_job_events(project_id: str, job_id: str) -> AsyncGenerator[str, None]:
-    """Stream real-time Server-Sent Events (SSE) for a specific job from Redis pub/sub."""
+def event_notification(event: JobEvent) -> dict:
+    """Build the transient Redis wakeup only after the event transaction commits."""
+    return {"sequence": event.sequence, "event_type": event.event_type, "payload": event.payload}
+
+
+def publish_event(project_id: str, job_id: str, payload: dict) -> None:
+    """Publish a post-commit wakeup; durable storage remains the event source."""
+    client = redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        client.publish(job_event_channel(project_id, job_id), json.dumps(payload))
+    except Exception as exc:
+        print(f"Failed to publish Redis event: {exc}")
+    finally:
+        client.close()
+
+
+def encode_sse_event(event: JobEvent) -> str:
+    """Encode a durable event with its replay cursor before its data."""
+    return f"id: {event.sequence}\nevent: {event.event_type}\ndata: {json.dumps(event.payload)}\n\n"
+
+
+def is_terminal_event(event: JobEvent) -> bool:
+    return event.payload.get("status") in TERMINAL_STATUSES
+
+
+async def stream_job_events(
+    db: Session,
+    project_id: str,
+    job_id: str,
+    last_event_id: int = 0,
+) -> AsyncGenerator[str, None]:
+    """Replay committed rows after a cursor, then reliably tail later rows.
+
+    Redis is a wakeup optimization, never the event source. A database read
+    occurs after subscription and on each wakeup or timeout, so a missed
+    Pub/Sub message cannot make a committed event disappear.
+    """
+    last_sequence = last_event_id
+    terminal_delivered = False
+
+    def pending_events() -> list[JobEvent]:
+        db.expire_all()
+        return list(
+            db.scalars(
+                select(JobEvent)
+                .where(
+                    JobEvent.project_id == project_id,
+                    JobEvent.job_id == job_id,
+                    JobEvent.sequence > last_sequence,
+                )
+                .order_by(JobEvent.sequence)
+            )
+        )
+
+    def replay_pending() -> list[str]:
+        nonlocal last_sequence, terminal_delivered
+        encoded = []
+        for event in pending_events():
+            if event.sequence <= last_sequence:
+                continue
+            last_sequence = event.sequence
+            encoded.append(encode_sse_event(event))
+            if is_terminal_event(event):
+                terminal_delivered = True
+                break
+        return encoded
+
+    def job_is_terminal() -> bool:
+        status = db.scalar(
+            select(Job.status).where(Job.id == job_id, Job.project_id == project_id)
+        )
+        return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED)
+
+    for encoded in replay_pending():
+        yield encoded
+    if terminal_delivered or job_is_terminal():
+        return
+
     client = aioredis.from_url(settings.redis_url, decode_responses=True)
     pubsub = client.pubsub()
-    channel = job_event_channel(project_id, job_id)
-    await pubsub.subscribe(channel)
-
+    subscribed = False
     try:
-        # Initial connect ping
-        yield f"event: connect\ndata: {json.dumps({'job_id': job_id, 'message': 'Connected to event stream'})}\n\n"
+        try:
+            await pubsub.subscribe(job_event_channel(project_id, job_id))
+            subscribed = True
+        except Exception:
+            # Persisted rows remain replayable even when the optional Redis
+            # acceleration layer is unavailable.
+            await client.aclose()
+
+        # Close the replay/subscription race with another ordered DB read.
+        for encoded in replay_pending():
+            yield encoded
+        if terminal_delivered or job_is_terminal():
+            return
 
         while True:
-            msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-            if msg:
-                raw_data = msg["data"]
-                yield f"event: update\ndata: {raw_data}\n\n"
-                try:
-                    parsed = json.loads(raw_data)
-                    if parsed.get("status") in ["SUCCEEDED", "FAILED", "CANCELLED"]:
-                        yield f"event: close\ndata: {json.dumps({'job_id': job_id, 'status': parsed.get('status')})}\n\n"
-                        break
-                except Exception:
-                    pass
+            if subscribed:
+                await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             else:
-                # Periodic keepalive comment
+                await asyncio.sleep(1.0)
+            encoded_events = replay_pending()
+            for encoded in encoded_events:
+                yield encoded
+            if terminal_delivered or job_is_terminal():
+                return
+            if not encoded_events:
                 yield ": keepalive\n\n"
     finally:
-        await pubsub.unsubscribe(channel)
-        await client.aclose()
+        if subscribed:
+            await pubsub.unsubscribe(job_event_channel(project_id, job_id))
+            await client.aclose()

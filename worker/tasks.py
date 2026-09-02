@@ -1,7 +1,6 @@
 import os
 import json
 import socket
-import redis
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
@@ -9,13 +8,12 @@ from sqlalchemy import text
 from .celery_app import celery_app
 from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
-from api.app.models.job import JobStatus
+from api.app.models.job import Job, JobStatus
 from api.app.services.job_commands import claim_job_attempt
-from api.app.services.job_events import job_event_channel
+from api.app.services.job_events import event_notification, publish_event
+from api.app.services.job_events_store import record_job_event
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 
 class JobStopped(Exception):
@@ -87,16 +85,22 @@ def transition_job_and_attempt(db, job_id: str, project_id: str, terminal_status
     ).scalar_one_or_none()
     if attempt_result is None:
         raise RuntimeError(f"Running job {job_id} has no running attempt to finalize")
+
+    job = db.get(Job, job_id)
+    db.refresh(job)
+    record_job_event(
+        db,
+        job,
+        "update",
+        {
+            "job_id": job_id,
+            "status": terminal_status.value,
+            "progress_percent": job.progress_percent,
+            "current_stage": job.current_stage,
+            "error_message": error,
+        },
+    )
     return True
-
-
-def publish_event(project_id: str, job_id: str, payload: dict) -> None:
-    """Publish a real-time job event to the Redis pub/sub channel."""
-    try:
-        channel = job_event_channel(project_id, job_id)
-        redis_client.publish(channel, json.dumps(payload))
-    except Exception as e:
-        print(f"Failed to publish Redis event: {e}")
 
 
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
@@ -112,7 +116,20 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         if claim_job_attempt(db, job_id, hostname, project_id) is None:
             db.rollback()
             return {"status": "already_claimed", "job_id": job_id}
+        running_job = db.get(Job, job_id)
+        running_event = record_job_event(
+            db,
+            running_job,
+            "update",
+            {
+                "job_id": job_id,
+                "status": JobStatus.RUNNING.value,
+                "progress_percent": running_job.progress_percent,
+                "current_stage": running_job.current_stage,
+            },
+        )
         db.commit()
+        publish_event(project_id, job_id, event_notification(running_event))
 
         # 1. Fetch Job and Mix details
         job_row = db.execute(
@@ -137,17 +154,26 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
 
         def progress_tracker(pct: float, stage_name: str):
             require_running_job(db, job_id, project_id)
-            db.execute(
+            progress_result = db.execute(
                 text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
                 {"id": job_id, "project_id": project_id, "stage": stage_name, "pct": pct},
             )
+            if progress_result.rowcount != 1:
+                raise JobStopped(f"Job {job_id} is no longer running")
+            progress_job = db.get(Job, job_id)
+            progress_event = record_job_event(
+                db,
+                progress_job,
+                "update",
+                {
+                    "job_id": job_id,
+                    "status": JobStatus.RUNNING.value,
+                    "progress_percent": pct,
+                    "current_stage": stage_name,
+                },
+            )
             db.commit()
-            publish_event(project_id, job_id, {
-                "job_id": job_id,
-                "status": "RUNNING",
-                "progress_percent": pct,
-                "current_stage": stage_name,
-            })
+            publish_event(project_id, job_id, event_notification(progress_event))
 
         # Run real orchestrator. Its progress callbacks provide cooperative
         # cancellation checkpoints during bounded processing.
@@ -307,14 +333,9 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         if not transition_job_and_attempt(db, job_id, project_id, JobStatus.SUCCEEDED):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        terminal_event = db.query(Job).filter(Job.id == job_id).one().events[-1]
         db.commit()
-
-        publish_event(project_id, job_id, {
-            "job_id": job_id,
-            "status": "SUCCEEDED",
-            "progress_percent": 100.0,
-            "current_stage": "Complete",
-        })
+        publish_event(project_id, job_id, event_notification(terminal_event))
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
@@ -327,14 +348,9 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         if not transition_job_and_attempt(db, job_id, project_id, JobStatus.FAILED, error_str):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        terminal_event = db.query(Job).filter(Job.id == job_id).one().events[-1]
         db.commit()
-
-        publish_event(project_id, job_id, {
-            "job_id": job_id,
-            "status": "FAILED",
-            "progress_percent": 0.0,
-            "error_message": error_str,
-        })
+        publish_event(project_id, job_id, event_notification(terminal_event))
         raise e
     finally:
         db.close()
