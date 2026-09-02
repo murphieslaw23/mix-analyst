@@ -88,7 +88,7 @@ def init_upload(
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     try:
-        cleanup_expired_uploads(db, storage)
+        cleanup_expired_uploads(db, storage, principal.project_id)
         return create_upload_session(
             db,
             principal,

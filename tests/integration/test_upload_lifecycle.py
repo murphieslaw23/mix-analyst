@@ -9,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -22,9 +23,11 @@ from api.app.api.v1 import uploads as upload_routes
 from api.app.db.session import Base, get_db
 from api.app.main import app
 from api.app.models.identity import Project, User
-from api.app.models.media import UploadSession, UploadStatus
+from api.app.models.media import MediaAsset, Mix, UploadSession, UploadStatus
+from api.app.schemas.auth import CurrentPrincipal
 from api.app.services.audio_probe import AudioProbeResult
-from api.app.services.storage import StorageService
+from api.app.services.storage import StorageService, derived_object_key
+from api.app.services.upload_sessions import finalize_upload
 
 
 def _bearer_token(user_id: str, project_id: str) -> str:
@@ -167,6 +170,112 @@ def test_finalization_promotes_validated_quarantine_object_to_derived_key(lifecy
         db.close()
 
 
+def test_same_project_duplicate_finalization_reuses_asset_and_cleans_redundant_quarantine(
+    lifecycle_client, user_a_token, monkeypatch
+):
+    """Dropping final-key deduplication creates two assets or leaves the second quarantine object."""
+    client, session_factory, storage = lifecycle_client
+    monkeypatch.setattr(
+        "api.app.services.upload_sessions.probe_audio",
+        lambda _path: AudioProbeResult(duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"),
+    )
+    first = _start_upload(client, user_a_token, filename="first.wav", size=4)
+    second = _start_upload(client, user_a_token, filename="second.wav", size=4)
+    for upload in (first, second):
+        appended = client.patch(
+            upload["upload_url"],
+            headers={"Authorization": f"Bearer {user_a_token}", "Upload-Offset": "0"},
+            content=b"same",
+        )
+        assert appended.status_code == 200, appended.text
+
+    first_complete = client.post(
+        f"{first['upload_url']}/complete",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        json={"title": "First"},
+    )
+    second_complete = client.post(
+        f"{second['upload_url']}/complete",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        json={"title": "Second"},
+    )
+
+    assert first_complete.status_code == 200, first_complete.text
+    assert second_complete.status_code == 200, second_complete.text
+    assert first_complete.json()["media_asset_id"] == second_complete.json()["media_asset_id"]
+    db = session_factory()
+    try:
+        second_session = db.get(UploadSession, second["upload_id"])
+        assert db.query(MediaAsset).count() == 1
+        assert db.query(Mix).count() == 2
+        assert second_session.status is UploadStatus.COMPLETED
+        assert not storage.object_exists(second_session.quarantine_key)
+    finally:
+        db.close()
+
+
+def test_finalization_recovers_from_same_final_key_insert_race(lifecycle_client, user_a_token, monkeypatch):
+    """Removing the savepoint/reload path turns a concurrent winner into a 500 and leaked quarantine object."""
+    client, session_factory, storage = lifecycle_client
+    monkeypatch.setattr(
+        "api.app.services.upload_sessions.probe_audio",
+        lambda _path: AudioProbeResult(duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"),
+    )
+    upload = _start_upload(client, user_a_token, size=4)
+    appended = client.patch(
+        upload["upload_url"],
+        headers={"Authorization": f"Bearer {user_a_token}", "Upload-Offset": "0"},
+        content=b"race",
+    )
+    assert appended.status_code == 200, appended.text
+
+    sha256_hash = hashlib.sha256(b"race").hexdigest()
+    final_key = derived_object_key("project-a", sha256_hash, "source", "v1")
+    db = session_factory()
+    try:
+        session = db.get(UploadSession, upload["upload_id"])
+        quarantine_key = session.quarantine_key
+        db.rollback()
+        final_path = storage.path_for_key(final_key)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        os.link(storage.path_for_key(quarantine_key), final_path)
+
+        original_begin_nested = db.begin_nested
+
+        def winner_arrives_after_initial_lookup():
+            db.execute(
+                MediaAsset.__table__.insert().values(
+                    id="concurrent-winner",
+                    project_id="project-a",
+                    original_filename="winner.wav",
+                    storage_path=final_key,
+                    file_size_bytes=4,
+                    sha256_hash=sha256_hash,
+                    mime_type="audio/wav",
+                    duration_seconds=1.0,
+                    sample_rate=44100,
+                    channels=2,
+                    codec="pcm_s16le",
+                )
+            )
+            return original_begin_nested()
+
+        monkeypatch.setattr(db, "begin_nested", winner_arrives_after_initial_lookup)
+        finalized = finalize_upload(
+            db,
+            CurrentPrincipal(user_id="user-a", project_id="project-a"),
+            upload["upload_id"],
+            storage,
+        )
+
+        assert finalized.media_asset.id == "concurrent-winner"
+        assert finalized.mix.media_asset_id == "concurrent-winner"
+        assert not storage.object_exists(quarantine_key)
+        assert storage.object_exists(final_key)
+    finally:
+        db.close()
+
+
 def test_expired_session_is_aborted_and_quarantine_is_cleaned(lifecycle_client, user_a_token):
     """Removing expiry cleanup would leave an upload writable and its object present."""
     client, session_factory, storage = lifecycle_client
@@ -193,6 +302,31 @@ def test_expired_session_is_aborted_and_quarantine_is_cleaned(lifecycle_client, 
         assert db.get(UploadSession, upload["upload_id"]).status is UploadStatus.ABORTED
     finally:
         db.close()
+
+
+def test_new_upload_does_not_cleanup_expired_session_from_another_project(
+    lifecycle_client, user_a_token, user_b_token
+):
+    """Removing the cleanup project predicate aborts and deletes B's upload when A starts one."""
+    client, session_factory, storage = lifecycle_client
+    upload_b = _start_upload(client, user_b_token, size=4)
+    db = session_factory()
+    try:
+        session_b = db.get(UploadSession, upload_b["upload_id"])
+        session_b.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        quarantine_key_b = session_b.quarantine_key
+        db.commit()
+    finally:
+        db.close()
+
+    _start_upload(client, user_a_token, size=4)
+
+    db = session_factory()
+    try:
+        assert db.get(UploadSession, upload_b["upload_id"]).status is UploadStatus.PENDING
+    finally:
+        db.close()
+    assert storage.object_exists(quarantine_key_b)
 
 
 def test_cross_project_upload_session_remains_not_found(lifecycle_client, user_a_token, user_b_token):

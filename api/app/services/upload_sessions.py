@@ -9,6 +9,7 @@ from typing import BinaryIO
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models.media import MediaAsset, Mix, UploadSession, UploadStatus
@@ -247,22 +248,32 @@ def finalize_upload(
         existing_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
         is_deduplicated = existing_asset is not None
         if existing_asset is None:
-            media_asset = MediaAsset(
-                project_id=principal.project_id,
-                original_filename=upload.filename,
-                storage_path=final_key,
-                file_size_bytes=upload.total_size_bytes,
-                sha256_hash=sha256_hash,
-                mime_type=upload.content_type,
-                duration_seconds=probe_result.duration_seconds,
-                sample_rate=probe_result.sample_rate,
-                channels=probe_result.channels,
-                codec=probe_result.codec,
-                bit_rate=probe_result.bit_rate,
-                format_name=probe_result.format_name,
-            )
-            db.add(media_asset)
-            db.flush()
+            try:
+                # A second same-project finalization can select before the
+                # first transaction commits. Keep its unique-key collision to
+                # a savepoint so the outer transaction can reuse the winner.
+                with db.begin_nested():
+                    media_asset = MediaAsset(
+                        project_id=principal.project_id,
+                        original_filename=upload.filename,
+                        storage_path=final_key,
+                        file_size_bytes=upload.total_size_bytes,
+                        sha256_hash=sha256_hash,
+                        mime_type=upload.content_type,
+                        duration_seconds=probe_result.duration_seconds,
+                        sample_rate=probe_result.sample_rate,
+                        channels=probe_result.channels,
+                        codec=probe_result.codec,
+                        bit_rate=probe_result.bit_rate,
+                        format_name=probe_result.format_name,
+                    )
+                    db.add(media_asset)
+                    db.flush()
+            except IntegrityError:
+                media_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
+                if media_asset is None:
+                    raise UploadLifecycleError("Final asset conflict could not be resolved") from None
+                is_deduplicated = True
         else:
             media_asset = existing_asset
         mix = Mix(
@@ -302,11 +313,17 @@ def finalize_upload(
     return FinalizedUpload(media_asset=db.get(MediaAsset, media_asset_id), mix=db.get(Mix, mix_id))
 
 
-def cleanup_expired_uploads(db: Session, storage: StorageService, now: datetime | None = None) -> int:
-    """Abort expired active sessions and remove their quarantined objects."""
+def cleanup_expired_uploads(
+    db: Session,
+    storage: StorageService,
+    project_id: str,
+    now: datetime | None = None,
+) -> int:
+    """Abort this project's expired sessions and remove their quarantine objects."""
     cutoff = now or _now()
     expired_ids = db.scalars(
         select(UploadSession.id).where(
+            UploadSession.project_id == project_id,
             UploadSession.status.in_((UploadStatus.PENDING, UploadStatus.UPLOADING)),
             UploadSession.expires_at <= cutoff,
         )
@@ -315,7 +332,11 @@ def cleanup_expired_uploads(db: Session, storage: StorageService, now: datetime 
     cleanup_keys: list[str] = []
     for session_id in expired_ids:
         with db.begin():
-            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
+            upload = db.scalar(
+                select(UploadSession)
+                .where(UploadSession.id == session_id, UploadSession.project_id == project_id)
+                .with_for_update()
+            )
             if upload is not None and upload.status in {UploadStatus.PENDING, UploadStatus.UPLOADING} and _is_expired(upload, cutoff):
                 upload.status = UploadStatus.ABORTED
                 if upload.quarantine_key:
