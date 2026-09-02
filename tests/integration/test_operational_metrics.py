@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 from api.app.db.session import Base, get_db
 from api.app.main import app
 from api.app.models.identity import Project, User
+from api.app.services import metrics as metrics_service
 from api.app.services.metrics import record_counter
 
 
@@ -82,3 +83,34 @@ def test_metrics_requires_explicit_operator_and_never_renders_sensitive_labels(c
     assert "filename" not in response.text
     assert "project-a" not in response.text
     assert "upload_rejected" in response.text
+
+
+def test_worker_metric_is_visible_from_operator_api_scrape(client, monkeypatch):
+    """A worker process writes shared counters; an API process reads that hash."""
+    from worker.services import metrics as worker_metrics
+
+    class SharedMetricsRedis:
+        def __init__(self):
+            self.values = {}
+
+        def hincrby(self, key, field, value):
+            self.values[(key, field)] = self.values.get((key, field), 0) + value
+
+        def hgetall(self, key):
+            return {field: value for (stored_key, field), value in self.values.items() if stored_key == key}
+
+        def close(self):
+            pass
+
+    shared = SharedMetricsRedis()
+    monkeypatch.setattr(metrics_service, "_metrics_redis_client", lambda: shared)
+    monkeypatch.setattr("api.app.api.v1.metrics._queue_depths", lambda: [("analysis-cpu", 0)])
+
+    worker_metrics.record_job_finished("MASTERING", start_time=worker_metrics.time.monotonic() - 1, status="failed")
+    metrics_service._counters.clear()  # Model an independent API process with no worker memory.
+
+    response = client.get("/api/v1/metrics", headers={"Authorization": f"Bearer {_token('operator')}"})
+    assert response.status_code == 200
+    assert 'mix_analyst_job_stage_duration_ms{job_type="MASTERING",stage="mastering",status="failed"}' in response.text
+    assert 'mix_analyst_job_failed{job_type="MASTERING",stage="mastering",status="failed"}' in response.text
+    assert "mix_analyst_counter_backend_available 1" in response.text

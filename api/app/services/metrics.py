@@ -1,4 +1,4 @@
-"""Small, bounded in-process metrics registry.
+"""Bounded metrics registry with Redis aggregation across API and workers.
 
 Metrics deliberately have a much narrower data contract than application
 events.  In particular, no caller may attach an identifier, filename, storage
@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
+import json
 from threading import Lock
+
+import redis
+
+from ..config import settings
 
 
 ALLOWED_TAGS = frozenset({"job_type", "status", "stage", "queue"})
@@ -33,6 +38,7 @@ ALLOWED_COUNTERS = frozenset(
 
 _counters: dict[tuple[str, tuple[tuple[str, str], ...]], int] = defaultdict(int)
 _lock = Lock()
+_COUNTER_HASH_KEY = "mix-analyst:metrics:v1:counters"
 
 
 def _validated_tags(tags: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
@@ -46,17 +52,84 @@ def _validated_tags(tags: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
 
 
 def record_counter(name: str, value: int = 1, tags: Mapping[str, str] = {}) -> None:
-    """Record an approved counter without accepting customer data as labels."""
+    """Record an approved counter without accepting customer data as labels.
+
+    Redis is the deployment's shared broker and aggregation backend, so every
+    API worker and Celery process contributes to one bounded hash. Telemetry
+    must not make uploads or DSP fail: if Redis is temporarily unavailable the
+    process retains only its own fallback sample and a scrape reports that the
+    shared backend is unavailable.
+    """
     if name not in ALLOWED_COUNTERS:
         raise ValueError("unsupported metric name")
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("metric value must be a non-negative integer")
     key = (name, _validated_tags(tags))
-    with _lock:
-        _counters[key] += value
+    try:
+        client = _metrics_redis_client()
+        try:
+            client.hincrby(_COUNTER_HASH_KEY, _metric_field(*key), value)
+        finally:
+            client.close()
+    except Exception:
+        with _lock:
+            _counters[key] += value
 
 
 def counter_samples() -> list[tuple[str, int, dict[str, str]]]:
-    """Return a copy suitable for rendering by the authenticated API only."""
+    """Return process-local fallback samples when shared aggregation is down."""
     with _lock:
         return [(name, value, dict(tags)) for (name, tags), value in sorted(_counters.items())]
+
+
+def shared_counter_samples() -> tuple[list[tuple[str, int, dict[str, str]]], bool]:
+    """Read only valid, fixed identities from the shared aggregation hash."""
+    try:
+        client = _metrics_redis_client()
+        try:
+            stored = client.hgetall(_COUNTER_HASH_KEY)
+        finally:
+            client.close()
+    except Exception:
+        return counter_samples(), False
+
+    samples = []
+    for field, raw_value in stored.items():
+        decoded = _metric_from_field(field)
+        if decoded is None:
+            continue
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value >= 0:
+            name, tags = decoded
+            samples.append((name, value, dict(tags)))
+    return sorted(samples, key=lambda sample: (sample[0], tuple(sorted(sample[2].items())))), True
+
+
+def _metrics_redis_client():
+    return redis.from_url(
+        settings.redis_url, decode_responses=True, socket_connect_timeout=0.1, socket_timeout=0.1
+    )
+
+
+def _metric_field(name: str, tags: tuple[tuple[str, str], ...]) -> str:
+    """Encode only a prevalidated identity; no request value reaches Redis."""
+    return json.dumps([name, list(tags)], separators=(",", ":"))
+
+
+def _metric_from_field(field: str) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+    """Treat unexpected Redis contents as untrusted and never expose them."""
+    try:
+        name, raw_tags = json.loads(field)
+        if not isinstance(name, str) or not isinstance(raw_tags, list):
+            return None
+        tags = dict(raw_tags)
+        if len(tags) != len(raw_tags) or not all(isinstance(key, str) for key in tags):
+            return None
+        if name not in ALLOWED_COUNTERS:
+            return None
+        return name, _validated_tags(tags)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None

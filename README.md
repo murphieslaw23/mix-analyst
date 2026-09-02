@@ -114,7 +114,10 @@ docker compose up --build -d
 - Metrics are aggregate-only. Their only labels are fixed `job_type`, `status`,
   `stage`, and `queue` values; filenames, media metadata, project IDs, tokens,
   storage keys, and request-provided label values are rejected by the metrics
-  boundary.
+  boundary. API and worker counters are atomically aggregated in a fixed Redis
+  hash so an operator scrape sees all processes. If that shared backend is
+  unavailable, `mix_analyst_counter_backend_available 0` marks the scrape as
+  incomplete rather than presenting a process-local total as fleet-wide.
 
 The Compose worker is limited to one Celery process (`WORKER_CONCURRENCY=1`),
 2 CPUs, and 6 GiB memory because DSP work is CPU/memory intensive. Scale worker

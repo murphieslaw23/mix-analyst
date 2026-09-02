@@ -16,7 +16,7 @@ from ...db.session import get_db
 from ...models.job import Job
 from ...models.outbox import OutboxMessage
 from ...schemas.auth import CurrentPrincipal
-from ...services.metrics import counter_samples
+from ...services.metrics import shared_counter_samples
 from ..deps import get_current_principal
 
 
@@ -62,8 +62,10 @@ def metrics(
 ):
     """Expose aggregate operational state without project or media labels."""
     lines = []
-    for name, value, tags in counter_samples():
+    counter_metrics, shared_metrics_available = shared_counter_samples()
+    for name, value, tags in counter_metrics:
         lines.append(_sample(name.replace(".", "_"), value, tags))
+    lines.append(_sample("counter_backend_available", int(shared_metrics_available)))
 
     for job_type, job_status, count in db.execute(
         select(Job.job_type, Job.status, func.count()).group_by(Job.job_type, Job.status)
