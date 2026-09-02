@@ -10,23 +10,38 @@ from .celery_app import celery_app
 from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
 from api.app.services.job_commands import claim_job_attempt
+from api.app.services.job_events import job_event_channel
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 
-def publish_event(job_id: str, payload: dict) -> None:
+class JobStopped(Exception):
+    """The authoritative job state no longer permits worker-side processing."""
+
+
+def require_running_job(db, job_id: str, project_id: str) -> None:
+    """Stop cooperative work once cancellation or another terminal state wins."""
+    status = db.execute(
+        text("SELECT status FROM jobs WHERE id = :id AND project_id = :project_id"),
+        {"id": job_id, "project_id": project_id},
+    ).scalar_one_or_none()
+    if status != "RUNNING":
+        raise JobStopped(f"Job {job_id} is no longer running")
+
+
+def publish_event(project_id: str, job_id: str, payload: dict) -> None:
     """Publish a real-time job event to the Redis pub/sub channel."""
     try:
-        channel = f"job:{job_id}:events"
+        channel = job_event_channel(project_id, job_id)
         redis_client.publish(channel, json.dumps(payload))
     except Exception as e:
         print(f"Failed to publish Redis event: {e}")
 
 
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
-def run_analysis_pipeline(self, job_id: str):
+def run_analysis_pipeline(self, job_id: str, project_id: str):
     """
     Execute the real bounded-memory audio analysis, fingerprinting & transition detection pipeline.
     """
@@ -35,7 +50,7 @@ def run_analysis_pipeline(self, job_id: str):
     try:
         # A broker message is at-least-once.  The conditional claim lets only
         # one worker begin, including after a dispatcher restart/redelivery.
-        if claim_job_attempt(db, job_id, hostname) is None:
+        if claim_job_attempt(db, job_id, hostname, project_id) is None:
             db.rollback()
             return {"status": "already_claimed", "job_id": job_id}
         db.commit()
@@ -45,11 +60,11 @@ def run_analysis_pipeline(self, job_id: str):
             text("""
                 SELECT j.id, j.mix_id, m.media_asset_id, a.storage_path, a.duration_seconds
                 FROM jobs j
-                JOIN mixes m ON j.mix_id = m.id
-                JOIN media_assets a ON m.media_asset_id = a.id
-                WHERE j.id = :id
+                JOIN mixes m ON j.mix_id = m.id AND m.project_id = j.project_id
+                JOIN media_assets a ON m.media_asset_id = a.id AND a.project_id = j.project_id
+                WHERE j.id = :id AND j.project_id = :project_id
             """),
-            {"id": job_id},
+            {"id": job_id, "project_id": project_id},
         ).fetchone()
 
         if not job_row:
@@ -62,23 +77,27 @@ def run_analysis_pipeline(self, job_id: str):
         audio_abs_path = Path(STORAGE_ROOT) / storage_rel_path
 
         def progress_tracker(pct: float, stage_name: str):
+            require_running_job(db, job_id, project_id)
             db.execute(
-                text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND status = 'RUNNING'"),
-                {"id": job_id, "stage": stage_name, "pct": pct},
+                text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
+                {"id": job_id, "project_id": project_id, "stage": stage_name, "pct": pct},
             )
             db.commit()
-            publish_event(job_id, {
+            publish_event(project_id, job_id, {
                 "job_id": job_id,
                 "status": "RUNNING",
                 "progress_percent": pct,
                 "current_stage": stage_name,
             })
 
-        # Run real orchestrator
+        # Run real orchestrator. Its progress callbacks provide cooperative
+        # cancellation checkpoints during bounded processing.
+        require_running_job(db, job_id, project_id)
         orchestrator = AudioAnalysisOrchestrator(audio_abs_path, duration_seconds)
         analysis_data = orchestrator.execute_pipeline(progress_callback=progress_tracker)
 
         # Persist AnalysisResult in DB
+        require_running_job(db, job_id, project_id)
         analysis_id = f"analysis_{mix_id}"
         db.execute(
             text("""
@@ -126,10 +145,12 @@ def run_analysis_pipeline(self, job_id: str):
         )
 
         # Clear and persist TrackSegments & TrackMatches (Phase 4)
+        require_running_job(db, job_id, project_id)
         db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
         db.commit()
 
         for seg in analysis_data.get("track_segments", []):
+            require_running_job(db, job_id, project_id)
             seg_id = str(uuid.uuid4())
             db.execute(
                 text("""
@@ -183,10 +204,12 @@ def run_analysis_pipeline(self, job_id: str):
                 )
 
         # Clear and persist TransitionEvents (Phase 5)
+        require_running_job(db, job_id, project_id)
         db.execute(text("DELETE FROM transition_events WHERE mix_id = :mix_id"), {"mix_id": mix_id})
         db.commit()
 
         for trans in analysis_data.get("transitions", []):
+            require_running_job(db, job_id, project_id)
             trans_id = str(uuid.uuid4())
             db.execute(
                 text("""
@@ -217,13 +240,15 @@ def run_analysis_pipeline(self, job_id: str):
                 },
             )
 
+        require_running_job(db, job_id, project_id)
         db.commit()
 
         # Finalize Job
+        require_running_job(db, job_id, project_id)
         finish_time = datetime.now(timezone.utc)
         db.execute(
-            text("UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id AND status = 'RUNNING'"),
-            {"id": job_id, "finish": finish_time},
+            text("UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
+            {"id": job_id, "project_id": project_id, "finish": finish_time},
         )
         db.execute(
             text("UPDATE job_attempts SET status = 'SUCCEEDED', finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
@@ -231,7 +256,7 @@ def run_analysis_pipeline(self, job_id: str):
         )
         db.commit()
 
-        publish_event(job_id, {
+        publish_event(project_id, job_id, {
             "job_id": job_id,
             "status": "SUCCEEDED",
             "progress_percent": 100.0,
@@ -240,14 +265,17 @@ def run_analysis_pipeline(self, job_id: str):
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
+    except JobStopped:
+        db.rollback()
+        return {"status": "cancelled", "job_id": job_id}
     except Exception as e:
         db.rollback()
         fail_time = datetime.now(timezone.utc)
         error_str = str(e)
 
         db.execute(
-            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id AND status = 'RUNNING'"),
-            {"id": job_id, "err": error_str, "finish": fail_time},
+            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
+            {"id": job_id, "project_id": project_id, "err": error_str, "finish": fail_time},
         )
         db.execute(
             text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
@@ -255,7 +283,7 @@ def run_analysis_pipeline(self, job_id: str):
         )
         db.commit()
 
-        publish_event(job_id, {
+        publish_event(project_id, job_id, {
             "job_id": job_id,
             "status": "FAILED",
             "progress_percent": 0.0,

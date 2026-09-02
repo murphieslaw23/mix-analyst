@@ -49,9 +49,9 @@ async def get_job_events(
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     """Subscribe to real-time Server-Sent Events (SSE) for job progress."""
-    require_owned_job(db, principal, job_id)
+    job = require_owned_job(db, principal, job_id)
     return StreamingResponse(
-        stream_job_events(job_id),
+        stream_job_events(job.project_id, job.id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

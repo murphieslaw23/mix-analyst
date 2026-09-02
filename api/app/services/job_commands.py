@@ -34,6 +34,9 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
     The caller owns the transaction boundary.  In particular, no broker call is
     made here: the outbox row cannot become visible without the matching job.
     """
+    if mix.project_id != principal.project_id:
+        raise PermissionError("Mix does not belong to the current project")
+
     job_type = JobType(request.job_type)
     job = Job(
         id=str(uuid.uuid4()),
@@ -55,10 +58,12 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
     )
     db.add(
         OutboxMessage(
+            project_id=principal.project_id,
             aggregate_id=job.id,
             kind="job.dispatch",
             payload={
                 "job_id": job.id,
+                "project_id": principal.project_id,
                 "task_name": TASK_NAME,
                 "task_id": f"job_{job.id}",
                 "queue": JOB_QUEUES[job_type],
@@ -88,10 +93,12 @@ def enqueue_retry(db: Session, job: Job) -> JobAttempt:
     task_id = f"job_{job.id}_att_{attempt_number}"
     db.add(
         OutboxMessage(
+            project_id=job.project_id,
             aggregate_id=job.id,
             kind="job.dispatch",
             payload={
                 "job_id": job.id,
+                "project_id": job.project_id,
                 "task_name": TASK_NAME,
                 "task_id": task_id,
                 "queue": JOB_QUEUES[job.job_type],
@@ -102,7 +109,7 @@ def enqueue_retry(db: Session, job: Job) -> JobAttempt:
     return attempt
 
 
-def claim_job_attempt(db: Session, job_id: str, worker_name: str) -> JobAttempt | None:
+def claim_job_attempt(db: Session, job_id: str, worker_name: str, project_id: str) -> JobAttempt | None:
     """Atomically transition a queued job and exactly one queued attempt to running.
 
     The conditional update is the concurrency guard.  A duplicate broker
@@ -112,7 +119,7 @@ def claim_job_attempt(db: Session, job_id: str, worker_name: str) -> JobAttempt 
     now = utcnow()
     claimed_job_id = db.execute(
         update(Job)
-        .where(Job.id == job_id, Job.status == JobStatus.QUEUED)
+        .where(Job.id == job_id, Job.project_id == project_id, Job.status == JobStatus.QUEUED)
         .values(status=JobStatus.RUNNING, started_at=now, current_stage="Initializing")
         .returning(Job.id)
     ).scalar_one_or_none()

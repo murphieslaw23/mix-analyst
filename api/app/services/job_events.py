@@ -4,11 +4,16 @@ from typing import AsyncGenerator
 from ..config import settings
 
 
-async def stream_job_events(job_id: str) -> AsyncGenerator[str, None]:
+def job_event_channel(project_id: str, job_id: str) -> str:
+    """Namespace transient events by their authenticated project and job."""
+    return f"project:{project_id}:job:{job_id}:events"
+
+
+async def stream_job_events(project_id: str, job_id: str) -> AsyncGenerator[str, None]:
     """Stream real-time Server-Sent Events (SSE) for a specific job from Redis pub/sub."""
     client = aioredis.from_url(settings.redis_url, decode_responses=True)
     pubsub = client.pubsub()
-    channel = f"job:{job_id}:events"
+    channel = job_event_channel(project_id, job_id)
     await pubsub.subscribe(channel)
 
     try:

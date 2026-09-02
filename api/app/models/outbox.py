@@ -13,6 +13,7 @@ class OutboxMessage(Base):
     __tablename__ = "outbox_messages"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     aggregate_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
     kind = Column(String(100), nullable=False, index=True)
     payload = Column(JSON, nullable=False)

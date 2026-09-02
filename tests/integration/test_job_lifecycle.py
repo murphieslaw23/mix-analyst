@@ -60,7 +60,9 @@ def test_create_job_persists_outbox_before_broker_publish(db, principal, mix):
     outbox = db.scalar(select(OutboxMessage).where(OutboxMessage.aggregate_id == job.id))
     assert outbox is not None
     assert outbox.kind == "job.dispatch"
+    assert outbox.project_id == principal.project_id
     assert outbox.payload["job_id"] == job.id
+    assert outbox.payload["project_id"] == principal.project_id
     assert outbox.payload["queue"] == "analysis-cpu"
     assert job.status is JobStatus.QUEUED
 
@@ -69,8 +71,8 @@ def test_only_one_worker_claims_queued_attempt(db, principal, mix):
     job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
     db.commit()
 
-    assert claim_job_attempt(db, job.id, "worker-a") is not None
-    assert claim_job_attempt(db, job.id, "worker-b") is None
+    assert claim_job_attempt(db, job.id, "worker-a", principal.project_id) is not None
+    assert claim_job_attempt(db, job.id, "worker-b", principal.project_id) is None
     assert db.get(Job, job.id).status is JobStatus.RUNNING
 
 
@@ -80,8 +82,60 @@ def test_claim_does_not_replace_cancelled_job(db, principal, mix):
     job.status = JobStatus.CANCELLED
     db.commit()
 
-    assert claim_job_attempt(db, job.id, "worker-a") is None
+    assert claim_job_attempt(db, job.id, "worker-a", principal.project_id) is None
     assert db.get(Job, job.id).status is JobStatus.CANCELLED
+
+
+def test_enqueue_job_rejects_mix_from_another_project(db, principal):
+    foreign_mix = Mix(id="mix-b", project_id="project-b", title="Foreign mix", media_asset_id="media-b", status="ready")
+
+    with pytest.raises(PermissionError, match="current project"):
+        enqueue_job(db, principal, foreign_mix, JobCreateRequest(job_type="ANALYSIS"))
+
+
+def test_worker_scope_and_cancellation_checks_are_authoritative(db, principal, mix):
+    from worker.tasks import JobStopped, require_running_job
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    assert claim_job_attempt(db, job.id, "worker-a", principal.project_id) is not None
+    db.commit()
+
+    require_running_job(db, job.id, principal.project_id)
+    with pytest.raises(JobStopped):
+        require_running_job(db, job.id, "project-b")
+
+    job.status = JobStatus.CANCELLED
+    db.commit()
+    with pytest.raises(JobStopped):
+        require_running_job(db, job.id, principal.project_id)
+
+
+def test_worker_stops_before_orchestration_when_cancelled_after_claim(db, principal, mix, monkeypatch):
+    import worker.tasks as worker_tasks
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    job_id = job.id
+    real_claim = worker_tasks.claim_job_attempt
+
+    def claim_then_cancel(session, job_id, worker_name, project_id):
+        attempt = real_claim(session, job_id, worker_name, project_id)
+        session.get(Job, job_id).status = JobStatus.CANCELLED
+        return attempt
+
+    class UnexpectedOrchestrator:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("cancelled job entered audio orchestration")
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", lambda: db)
+    monkeypatch.setattr(worker_tasks, "claim_job_attempt", claim_then_cancel)
+    monkeypatch.setattr(worker_tasks, "AudioAnalysisOrchestrator", UnexpectedOrchestrator)
+
+    assert worker_tasks.run_analysis_pipeline.run(job_id, principal.project_id) == {
+        "status": "cancelled",
+        "job_id": job_id,
+    }
 
 
 def test_dispatch_failure_leaves_outbox_retryable(db, principal, mix):
@@ -118,6 +172,7 @@ def test_dispatch_marks_outbox_delivered_only_after_broker_accepts(db, principal
     assert outbox.delivered_at is not None
     assert outbox.delivery_attempts == 1
     assert db.get(Job, job.id).celery_task_id == "broker-task-id"
+    assert calls[0][1]["args"] == [job.id, principal.project_id]
     assert calls[0][1]["queue"] == "dsp-heavy"
 
 
@@ -129,3 +184,10 @@ def test_worker_routes_are_explicit_and_loss_safe():
     assert {"analysis-cpu", "dsp-heavy", "metadata-network", "exports"}.issubset(
         {queue.name for queue in celery_app.conf.task_queues}
     )
+
+
+def test_transient_event_channels_are_project_namespaced():
+    from api.app.services.job_events import job_event_channel
+
+    assert job_event_channel("project-a", "job-a") == "project:project-a:job:job-a:events"
+    assert job_event_channel("project-a", "job-a") != job_event_channel("project-b", "job-a")
