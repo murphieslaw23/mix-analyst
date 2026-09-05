@@ -1,4 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+
+const webDirectory = fileURLToPath(new URL(".", import.meta.url));
 
 /**
  * PWA lifecycle assertions must use the production bundle: Vite development
@@ -16,9 +19,12 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: {
-    command: "pnpm build && pnpm preview -- --host 127.0.0.1 --port 4173",
+    // Always exercise the bundle produced for this run. Reusing a developer's
+    // preview process can leave PWA lifecycle tests pointed at stale assets.
+    command: "pnpm build && node tests/support/pwa-preview-server.mjs",
+    cwd: webDirectory,
     url: "http://127.0.0.1:4173",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
