@@ -23,23 +23,28 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'Desktop-Chrome',
+      // This is the only desktop browser engine in this matrix: Chromium.
+      name: 'Desktop-Chromium',
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1440, height: 900 },
       },
     },
     {
-      name: 'Tablet-iPad',
+      // Viewport/user-agent emulation only; this does not constitute WebKit coverage.
+      name: 'Chromium-iPad-viewport',
       use: {
         ...devices['iPad (gen 7)'],
+        browserName: 'chromium',
         viewport: { width: 768, height: 1024 },
       },
     },
     {
-      name: 'Mobile-Portrait',
+      // Viewport/user-agent emulation only; this does not constitute Mobile Safari coverage.
+      name: 'Chromium-iPhone-viewport',
       use: {
         ...devices['iPhone 14'],
+        browserName: 'chromium',
         viewport: { width: 390, height: 844 },
       },
     },
