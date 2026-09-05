@@ -79,6 +79,9 @@ h1 { max-width: 12ch; margin: 0; font-family: Impact, Haettenschweiler, "Arial N
 .status-badge--failed { border-color: var(--danger); color: var(--danger); }
 .status-badge--cancelled { border-color: var(--text-muted); color: var(--text-muted); }
 .jobs-list { display: grid; gap: var(--space-4); margin: var(--space-8) 0 0; padding: 0; list-style: none; }
+.jobs-page__count { margin: var(--space-6) 0 calc(var(--space-4) * -1); color: var(--text-muted); font-size: 0.875rem; }
+.jobs-page__pagination { display: grid; gap: var(--space-4); margin-top: var(--space-5); }
+.jobs-page__pagination > .button { width: 100%; }
 .job-card { display: grid; gap: var(--space-4); padding: var(--space-5); border: 1px solid var(--border-iron); border-radius: 0.75rem; background: var(--surface-inset); }
 .job-card__summary { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .job-card__eyebrow { margin: 0 0 var(--space-1); color: var(--text-muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }

@@ -93,6 +93,37 @@ test.describe("Jobs progress and recovery", () => {
     expect(requests).toBeGreaterThanOrEqual(2);
   });
 
+  test("a live stream that stops yielding is recovered through server polling", async ({ page }) => {
+    let requests = 0;
+    await page.route(/\/api\/v1\/jobs\/job-1$/, async (route) => {
+      requests += 1;
+      await route.fulfill({ contentType: "application/json", json: job("RUNNING", { progress_percent: requests > 1 ? 64 : 42 }) });
+    });
+    // Playwright routes cannot hold an SSE response body open, so model the
+    // browser transport directly: headers arrive, then the body never emits a
+    // chunk until the hook's own AbortSignal closes it.
+    await page.addInitScript(() => {
+      const browserFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.includes("/api/v1/jobs/job-1/events")) {
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+            },
+          });
+          return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+        }
+        return browserFetch(input, init);
+      };
+    });
+    await page.goto("/jobs/job-1");
+    await expect(page.getByText("Live progress connected.")).toBeVisible();
+    await expect(page.getByText("Live progress is unavailable. Checking the server every few seconds.")).toBeVisible({ timeout: 16_000 });
+    await expect(page.getByRole("progressbar", { name: "Mastering progress" })).toHaveAttribute("value", "64", { timeout: 24_000 });
+    expect(requests).toBeGreaterThanOrEqual(2);
+  });
+
   test("a reconnect sends the server-supported Last-Event-ID cursor", async ({ page }) => {
     let eventRequests = 0;
     let replayCursor: string | undefined;
@@ -119,6 +150,22 @@ test.describe("Jobs progress and recovery", () => {
     await page.goto("/jobs");
     await expect(page.getByRole("list", { name: "1 job" })).toBeVisible();
     await expect(page.getByRole("link", { name: "View job" })).toHaveAttribute("href", "/jobs/job-1");
+  });
+
+  test("the jobs list loads the next authenticated page without hiding later jobs", async ({ page }) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => job("RUNNING", { id: `job-${index + 1}` }));
+    await page.route("**/api/v1/jobs?page=1&limit=20", async (route) => {
+      await route.fulfill({ contentType: "application/json", json: { items: firstPage, total: 21 } });
+    });
+    await page.route("**/api/v1/jobs?page=2&limit=20", async (route) => {
+      await route.fulfill({ contentType: "application/json", json: { items: [job("FAILED", { id: "job-21" })], total: 21 } });
+    });
+    await page.goto("/jobs");
+    await expect(page.getByText("Showing 20 of 21 jobs.")).toBeVisible();
+    await page.getByRole("button", { name: "Load more jobs" }).click();
+    await expect(page.getByText("Showing 21 of 21 jobs.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "View job" })).toHaveCount(21);
+    await expect(page.getByRole("link", { name: "View job" }).nth(20)).toHaveAttribute("href", "/jobs/job-21");
   });
 
   test("job detail reflows at a 390 pixel viewport", async ({ page }) => {

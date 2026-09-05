@@ -17,6 +17,10 @@ interface ParsedSseEvent {
 
 const POLL_INTERVAL_MS = 5_000;
 const RECONNECT_INTERVAL_MS = 5_000;
+// A successful HTTP connection can still wedge behind a proxy or suspended
+// worker. Keepalive comments count as activity, so healthy quiet streams do
+// not get mistaken for a stalled one.
+const STREAM_STALL_TIMEOUT_MS = 12_000;
 
 function cursorStorageKey(jobId: string) {
   return `syco23:job-event-cursor:${jobId}`;
@@ -58,6 +62,7 @@ async function consumeSse(
   cursor: number,
   signal: AbortSignal,
   onEvent: (event: ParsedSseEvent) => void,
+  onChunk: () => void,
 ): Promise<void> {
   const headers = new Headers({ Accept: "text/event-stream" });
   if (cursor > 0) headers.set("Last-Event-ID", String(cursor));
@@ -76,6 +81,9 @@ async function consumeSse(
     while (!signal.aborted) {
       const next = await reader.read();
       if (next.done) return;
+      // SSE comments are intentional transport keepalives. Reset the caller's
+      // watchdog for every bytes chunk before trying to parse event fields.
+      onChunk();
       buffer += decoder.decode(next.value, { stream: true });
       const blocks = buffer.split(/\r?\n\r?\n/);
       buffer = blocks.pop() ?? "";
@@ -165,19 +173,44 @@ export function useJobEvents(jobId: string | undefined) {
         setConnection("closed");
         return;
       }
+      // Do not give the stream a reference to the lifecycle controller. A
+      // stalled connection should recover into polling, while unmount/retry
+      // still shuts the stream down through this short-lived controller.
+      const streamController = new AbortController();
+      const abortStreamForLifecycle = () => streamController.abort();
+      controller.signal.addEventListener("abort", abortStreamForLifecycle, { once: true });
+      let stallTimer: number | undefined;
+      let stalled = false;
+      const resetStallWatchdog = () => {
+        if (stallTimer !== undefined) window.clearTimeout(stallTimer);
+        stallTimer = window.setTimeout(() => {
+          stalled = true;
+          streamController.abort();
+        }, STREAM_STALL_TIMEOUT_MS);
+      };
       try {
         setConnection("live");
-        await consumeSse(jobId, readCursor(jobId), controller.signal, (event) => {
+        // Start the watchdog before fetch resolves as well: a connection that
+        // never returns headers is just as stale as an open stream with no
+        // bytes. Every event or comment bytes chunk resets this deadline.
+        resetStallWatchdog();
+        await consumeSse(jobId, readCursor(jobId), streamController.signal, (event) => {
           if (event.id !== null) saveCursor(jobId, event.id);
           // Even valid JSON from the stream is deliberately not merged into UI
           // state. A GET observes the current attempt after retry/cancellation.
           void refreshAuthoritatively();
-        });
+        }, resetStallWatchdog);
         const afterClose = await refreshAuthoritatively();
         if (!disposed && !controller.signal.aborted && afterClose && !isTerminalStatus(afterClose.status)) fallBackToPolling();
         else if (!disposed && !controller.signal.aborted) setConnection("closed");
       } catch {
-        if (!disposed && !controller.signal.aborted) fallBackToPolling();
+        // An abort from lifecycle teardown is not a transport failure. An abort
+        // from this stream's watchdog is, and must recover without cancelling
+        // future reconnects or the polling lifecycle.
+        if (!disposed && !controller.signal.aborted && (stalled || !streamController.signal.aborted)) fallBackToPolling();
+      } finally {
+        if (stallTimer !== undefined) window.clearTimeout(stallTimer);
+        controller.signal.removeEventListener("abort", abortStreamForLifecycle);
       }
     };
 
