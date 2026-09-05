@@ -3,9 +3,10 @@ import { LibraryPage } from "../features/library/LibraryPage";
 import { MixDetailPage } from "../features/library/MixDetailPage";
 import { JobDetailPage } from "../features/jobs/JobDetailPage";
 import { JobsPage } from "../features/jobs/JobsPage";
+import { BatchDetailPage } from "../features/batches/BatchDetailPage";
 import { ProcessPage } from "../features/process/ProcessPage";
 import { AppShell } from "./AppShell";
-import { JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, PROCESS_ROUTE } from "./routes";
+import { BATCHES_ROUTE, JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, PROCESS_ROUTE } from "./routes";
 
 interface PlaceholderPageProps {
   eyebrow: string;
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: PROCESS_ROUTE, element: <ProcessPage /> },
       { path: JOBS_ROUTE, element: <JobsPage /> },
       { path: `${JOBS_ROUTE}/:jobId`, element: <JobDetailPage /> },
+      { path: `${BATCHES_ROUTE}/:batchId`, element: <BatchDetailPage /> },
       { path: LIBRARY_ROUTE, element: <LibraryPage /> },
       { path: `${LIBRARY_ROUTE}/:mixId`, element: <MixDetailPage /> },
       { path: MORE_ROUTE, element: <MorePage /> },

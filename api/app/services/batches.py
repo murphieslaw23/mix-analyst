@@ -10,6 +10,7 @@ from ..models.job import Job, JobAttempt, JobStatus, JobType
 from ..models.media import Mix
 from ..schemas.auth import CurrentPrincipal
 from ..schemas.batch import BatchCreateRequest
+from .mastering_presets import resolve_mastering_parameters
 from ..schemas.job import JobCreateRequest
 from .job_commands import enqueue_job, enqueue_job_dispatch, enqueue_retry
 
@@ -87,15 +88,35 @@ def create_batch(db: Session, principal: CurrentPrincipal, request: BatchCreateR
     if len(by_id) != len(mix_ids):
         raise PermissionError("One or more mixes do not belong to the current project")
 
-    batch = Batch(project_id=principal.project_id, preset=request.preset, max_parallelism=request.max_parallelism)
+    requested_preset = dict(request.preset)
+    # Resolve familiar preset identifiers on the server, exactly as the
+    # single-mix command does. This persists the effective values for every
+    # child rather than treating a UI selection as an inert label.
+    preset_id = requested_preset.get("preset_id")
+    if isinstance(preset_id, str):
+        target_lufs = requested_preset.get("target_lufs")
+        true_peak_dbtp = requested_preset.get("true_peak_dbtp")
+        if (target_lufs is not None and (isinstance(target_lufs, bool) or not isinstance(target_lufs, (int, float)))) or (
+            true_peak_dbtp is not None and (isinstance(true_peak_dbtp, bool) or not isinstance(true_peak_dbtp, (int, float)))
+        ):
+            raise ValueError("Preset loudness overrides must be numeric")
+        parameters = resolve_mastering_parameters(
+            db,
+            principal,
+            preset_id,
+            target_lufs=target_lufs,
+            true_peak_dbtp=true_peak_dbtp,
+        )
+    else:
+        parameters = {
+            "target_lufs": -9.0,
+            "true_peak_dbtp": -1.0,
+            "algorithm_version": "v1",
+            **requested_preset,
+        }
+    batch = Batch(project_id=principal.project_id, preset=parameters, max_parallelism=request.max_parallelism)
     db.add(batch)
     db.flush()
-    parameters = {
-        "target_lufs": -9.0,
-        "true_peak_dbtp": -1.0,
-        "algorithm_version": "v1",
-        **request.preset,
-    }
     for mix_id in mix_ids:
         child = enqueue_job(
             db,

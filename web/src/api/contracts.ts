@@ -150,6 +150,7 @@ export interface UploadCompleteDto {
 export interface JobDto {
   id: string;
   mix_id: string;
+  batch_id: string | null;
   job_type: string;
   status: string;
   progress_percent: number;
@@ -190,4 +191,19 @@ export interface JobListDto {
   items: JobDto[];
   total: number;
   next_cursor: string | null;
+}
+
+/** Durable aggregate returned by the owner-scoped batch endpoints. */
+export interface BatchDto {
+  id: string;
+  status: string;
+  total_count: number;
+  completed_count: number;
+  failed_count: number;
+  cancelled_count: number;
+  items: JobDto[];
+  preset: Record<string, unknown>;
+  max_parallelism: number;
+  created_at: string;
+  updated_at: string;
 }

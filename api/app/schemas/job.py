@@ -35,6 +35,9 @@ class JobAttemptOut(BaseModel):
 class JobOut(BaseModel):
     id: str
     mix_id: str
+    # Child jobs retain the durable parent identifier so the UI can link to
+    # aggregate recovery without deriving it from transient browser state.
+    batch_id: Optional[str] = None
     job_type: str
     status: str
     progress_percent: float

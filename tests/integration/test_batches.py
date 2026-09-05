@@ -160,6 +160,22 @@ def test_batch_retry_requeues_only_selected_failed_children(client, token, owned
         db.close()
 
 
+def test_batch_preset_id_persists_effective_server_parameters(client, token, owned_mix_ids):
+    test_client, session_factory = client
+    response = test_client.post(
+        "/api/v1/batches",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"mix_ids": owned_mix_ids, "preset": {"preset_id": "club_broadcast"}, "max_parallelism": 2},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["preset"]["preset_id"] == "club_broadcast"
+    assert body["preset"]["preset_name"] == "Club Broadcast"
+    assert body["preset"]["target_lufs"] == -14.0
+    assert all(item["parameters"]["preset_id"] == "club_broadcast" for item in body["items"])
+    assert all(item["batch_id"] == body["id"] for item in body["items"])
+
+
 def test_batch_aggregate_is_persisted_and_cross_project_access_is_denied(client, token, other_token, owned_mix_ids):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids)

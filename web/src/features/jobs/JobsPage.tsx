@@ -8,7 +8,7 @@ import { Button } from "../../components/ui/Button";
 import { Progress } from "../../components/ui/Progress";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { StatusBadge } from "../../components/ui/StatusBadge";
-import { JOBS_ROUTE } from "../../app/routes";
+import { BATCHES_ROUTE, JOBS_ROUTE } from "../../app/routes";
 import { asJobListDto, toJobViewModels, type JobViewModel } from "./jobAdapters";
 
 type JobsResource =
@@ -125,6 +125,7 @@ export function JobsPage() {
                 <Progress label={`${job.typeLabel} progress`} value={job.progressPercent} />
                 <p className="job-card__time">Started {formatTime(job.createdAt)}</p>
                 <Link className="button button--secondary" to={`${JOBS_ROUTE}/${encodeURIComponent(job.id)}`}>View job</Link>
+                {job.batchId ? <Link className="job-card__batch-link" to={`${BATCHES_ROUTE}/${encodeURIComponent(job.batchId)}`}>View batch recovery</Link> : null}
               </li>
             ))}
           </ol>

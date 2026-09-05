@@ -7,6 +7,7 @@ const statusLabels: Record<string, string> = {
   RUNNING: "Running",
   SUCCEEDED: "Complete",
   FAILED: "Failed",
+  PARTIAL_FAILED: "Partial failure",
   CANCELLED: "Cancelled",
   PENDING: "Pending",
   COMPLETED: "Complete",

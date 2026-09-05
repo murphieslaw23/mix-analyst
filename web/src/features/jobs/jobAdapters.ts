@@ -25,6 +25,7 @@ export interface JobAttemptViewModel {
 export interface JobViewModel {
   id: string;
   mixId: string;
+  batchId: string | null;
   type: string;
   typeLabel: string;
   status: JobStatus;
@@ -46,6 +47,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNullableString(value: unknown): value is string | null {
   return typeof value === "string" || value === null;
+}
+
+function isOptionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || isNullableString(value);
 }
 
 function isStageRunDto(value: unknown): value is StageRunDto {
@@ -76,6 +81,9 @@ export function asJobDto(value: unknown): JobDto {
   if (!isRecord(value)
     || typeof value.id !== "string"
     || typeof value.mix_id !== "string"
+    // Older deployments omit this additive link. Treat it as no parent until
+    // the API rolls forward, rather than rejecting an otherwise durable job.
+    || !isOptionalNullableString(value.batch_id)
     || typeof value.job_type !== "string"
     || typeof value.status !== "string"
     || typeof value.progress_percent !== "number"
@@ -126,6 +134,7 @@ export function toJobViewModel(job: JobDto): JobViewModel {
   return {
     id: job.id,
     mixId: job.mix_id,
+    batchId: job.batch_id ?? null,
     type: job.job_type,
     typeLabel: typeLabel(job.job_type),
     status: job.status as JobStatus,
