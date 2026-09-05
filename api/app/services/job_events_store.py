@@ -2,11 +2,25 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.orm import Session
 
 from ..models.job import Job, JobAttempt, JobStatus
 from ..models.job_event import JobEvent
+
+
+def database_current_timestamp(db: Session):
+    """Return a timestamp evaluated where the conditional SQL executes.
+
+    PostgreSQL's ``CURRENT_TIMESTAMP``/``now()`` is fixed at transaction
+    start, which is too old if a terminal update waits for a row lock. Its
+    volatile ``clock_timestamp()`` is evaluated at the predicate boundary.
+    SQLite has a single-writer model, so its statement-level
+    ``CURRENT_TIMESTAMP`` provides the corresponding portable behavior.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        return func.clock_timestamp()
+    return func.current_timestamp()
 
 
 def record_job_event(db: Session, job: Job, event_type: str, payload: dict) -> JobEvent:
@@ -110,7 +124,12 @@ def complete_job_attempt(
     this transaction so a worker cannot commit a terminal state without a
     replayable terminal event.
     """
-    finish_time = now or datetime.now(timezone.utc)
+    # ``now`` was an internal test hook before leases were fenced. Retain the
+    # optional argument for call compatibility, but never let a caller-supplied
+    # timestamp decide whether an already-expired worker still owns a lease.
+    # The database clock is evaluated when the guarded UPDATE reaches its row.
+    del now
+    finish_time = database_current_timestamp(db)
     claimed_attempt_conditions = [
         JobAttempt.job_id == job_id,
         JobAttempt.status == JobStatus.RUNNING,

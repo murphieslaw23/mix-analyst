@@ -409,6 +409,98 @@ def test_worker_stops_before_orchestration_when_cancelled_after_claim(db, princi
     }
 
 
+def test_terminal_fencing_uses_database_time_not_a_stale_worker_clock(db, principal, mix):
+    """A pre-lock Python timestamp cannot keep an expired lease alive.
+
+    This models a worker which sampled time before waiting for a competing row
+    lock, then reaches its guarded terminal update after the lease has expired.
+    Passing that stale value through the legacy ``now`` argument must not alter
+    the database-time decision.  The worker failure path has no caller clock
+    argument, so it exercises the separately authored raw-SQL transition too.
+    """
+    from api.app.services.job_events_store import complete_job_attempt
+    from worker.tasks import transition_job_and_attempt
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    claimed = claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="stale-clock-token",
+    )
+    assert claimed is not None
+    claimed.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+
+    stale_pre_lock_time = datetime.now(timezone.utc) - timedelta(seconds=120)
+    assert complete_job_attempt(
+        db,
+        job.id,
+        principal.project_id,
+        "worker-a",
+        1,
+        "stale-clock-token",
+        now=stale_pre_lock_time,
+    ) is False
+    assert transition_job_and_attempt(
+        db,
+        job.id,
+        principal.project_id,
+        "worker-a",
+        JobStatus.FAILED,
+        "too late",
+        1,
+        "stale-clock-token",
+    ) is False
+    assert db.get(Job, job.id).status is JobStatus.RUNNING
+
+
+def test_terminal_fencing_allows_a_live_claim(db, principal, mix):
+    """Database-time fencing retains the normal successful completion path."""
+    from api.app.services.job_events_store import complete_job_attempt
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    claimed = claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="live-clock-token",
+    )
+    assert claimed is not None
+    db.commit()
+
+    assert complete_job_attempt(
+        db,
+        job.id,
+        principal.project_id,
+        "worker-a",
+        1,
+        "live-clock-token",
+    ) is True
+    db.commit()
+    assert db.get(Job, job.id).status is JobStatus.SUCCEEDED
+
+
+def test_terminal_timestamp_uses_postgres_wall_clock_and_sqlite_statement_clock(db):
+    """PostgreSQL must not use transaction-start ``now()`` after a lock wait."""
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import postgresql
+
+    from api.app.services.job_events_store import database_current_timestamp
+
+    assert str(database_current_timestamp(db).compile(dialect=db.get_bind().dialect)) == "CURRENT_TIMESTAMP"
+    postgres_bind = SimpleNamespace(dialect=postgresql.dialect())
+    postgres_session = SimpleNamespace(get_bind=lambda: postgres_bind)
+    assert str(database_current_timestamp(postgres_session).compile(dialect=postgres_bind.dialect)) == "clock_timestamp()"
+
+
 @pytest.mark.parametrize("terminal_status", [JobStatus.SUCCEEDED, JobStatus.FAILED])
 def test_terminal_transition_leaves_attempt_running_when_cancellation_wins_race(
     db, principal, mix, terminal_status

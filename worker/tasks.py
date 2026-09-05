@@ -18,7 +18,11 @@ from api.app.services.storage import StorageService
 from api.app.services.job_commands import claim_job_attempt, heartbeat_job_attempt
 from api.app.services.batches import advance_batch_after_terminal_job
 from api.app.services.job_events import event_notification, publish_event
-from api.app.services.job_events_store import complete_job_attempt, record_job_event
+from api.app.services.job_events_store import (
+    complete_job_attempt,
+    database_current_timestamp,
+    record_job_event,
+)
 from api.app.services.upload_sessions import cleanup_expired_uploads_global, reconcile_pending_upload_promotions
 from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
 from .stages.tag_mix import Artifact as StageArtifact, tag_mix
@@ -197,25 +201,31 @@ def transition_job_and_attempt(
     if terminal_status not in (JobStatus.SUCCEEDED, JobStatus.FAILED):
         raise ValueError("Only successful or failed terminal transitions are supported")
 
-    finish_time = datetime.now(timezone.utc)
+    # The lease condition must observe time at conditional-update evaluation,
+    # not at task entry: PostgreSQL may wait for a competing row lock long
+    # enough for the worker lease to expire. ``clock_timestamp()`` is volatile
+    # on PostgreSQL; SQLite uses its statement timestamp under its single
+    # writer lock.
+    finish_time = str(
+        database_current_timestamp(db).compile(dialect=db.get_bind().dialect)
+    )
     if terminal_status is JobStatus.SUCCEEDED:
         job_result = db.execute(
             text(
                 "UPDATE jobs SET status = :status, progress_percent = 100.0, "
-                "current_stage = 'Complete', finished_at = :finish "
+                f"current_stage = 'Complete', finished_at = {finish_time} "
                 "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING' "
                 "AND EXISTS (SELECT 1 FROM job_attempts WHERE job_attempts.job_id = jobs.id "
                 "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name "
                 "AND (:attempt_number IS NULL OR job_attempts.attempt_number = :attempt_number) "
                 "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token) "
-                "AND job_attempts.lease_expires_at > :finish) RETURNING id"
+                f"AND job_attempts.lease_expires_at > {finish_time}) RETURNING id"
             ),
             {
                 "id": job_id,
                 "project_id": project_id,
                 "worker_name": worker_name,
                 "status": terminal_status.value,
-                "finish": finish_time,
                 "attempt_number": attempt_number,
                 "claim_token": claim_token,
             },
@@ -223,13 +233,13 @@ def transition_job_and_attempt(
     else:
         job_result = db.execute(
             text(
-                "UPDATE jobs SET status = :status, error_message = :error, finished_at = :finish "
+                f"UPDATE jobs SET status = :status, error_message = :error, finished_at = {finish_time} "
                 "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING' "
                 "AND EXISTS (SELECT 1 FROM job_attempts WHERE job_attempts.job_id = jobs.id "
                 "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name "
                 "AND (:attempt_number IS NULL OR job_attempts.attempt_number = :attempt_number) "
                 "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token) "
-                "AND job_attempts.lease_expires_at > :finish) RETURNING id"
+                f"AND job_attempts.lease_expires_at > {finish_time}) RETURNING id"
             ),
             {
                 "id": job_id,
@@ -237,7 +247,6 @@ def transition_job_and_attempt(
                 "worker_name": worker_name,
                 "status": terminal_status.value,
                 "error": error,
-                "finish": finish_time,
                 "attempt_number": attempt_number,
                 "claim_token": claim_token,
             },
@@ -247,11 +256,11 @@ def transition_job_and_attempt(
 
     attempt_result = db.execute(
         text(
-            "UPDATE job_attempts SET status = :status, error_details = :error, finished_at = :finish "
+            f"UPDATE job_attempts SET status = :status, error_details = :error, finished_at = {finish_time} "
             "WHERE job_id = :id AND status = 'RUNNING' AND worker_hostname = :worker_name "
             "AND (:attempt_number IS NULL OR attempt_number = :attempt_number) "
             "AND (:claim_token IS NULL OR claim_token = :claim_token) "
-            "AND lease_expires_at > :finish "
+            f"AND lease_expires_at > {finish_time} "
             "AND EXISTS (SELECT 1 FROM jobs "
             "WHERE jobs.id = job_attempts.job_id AND jobs.project_id = :project_id AND jobs.status = :status) "
             "RETURNING id"
@@ -262,7 +271,6 @@ def transition_job_and_attempt(
             "status": terminal_status.value,
             "worker_name": worker_name,
             "error": error,
-            "finish": finish_time,
             "attempt_number": attempt_number,
             "claim_token": claim_token,
         },

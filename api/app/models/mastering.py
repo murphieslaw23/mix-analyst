@@ -7,7 +7,7 @@ class MasteringPreset(Base):
     __tablename__ = "mastering_presets"
     __table_args__ = (
         CheckConstraint(
-            "is_builtin = 1 OR is_legacy_shared = 1 OR project_id IS NOT NULL",
+            "is_builtin IS TRUE OR is_legacy_shared IS TRUE OR project_id IS NOT NULL",
             name="ck_mastering_presets_owner_or_global",
         ),
     )
