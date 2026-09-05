@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { LibraryPage } from "../features/library/LibraryPage";
+import { MixDetailPage } from "../features/library/MixDetailPage";
 import { JobDetailPage } from "../features/jobs/JobDetailPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { ProcessPage } from "../features/process/ProcessPage";
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: JOBS_ROUTE, element: <JobsPage /> },
       { path: `${JOBS_ROUTE}/:jobId`, element: <JobDetailPage /> },
       { path: LIBRARY_ROUTE, element: <LibraryPage /> },
+      { path: `${LIBRARY_ROUTE}/:mixId`, element: <MixDetailPage /> },
       { path: MORE_ROUTE, element: <MorePage /> },
     ],
   },

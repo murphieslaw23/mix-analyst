@@ -21,6 +21,7 @@ export interface LibraryMixSummary {
 
 export interface MixDetail extends LibraryMixSummary {
   artifacts: ArtifactDto[];
+  analysisResult: AnalysisResultDto | null;
 }
 
 export interface AnalysisSummary {
@@ -65,7 +66,7 @@ function isArtifactDto(value: unknown): value is ArtifactDto {
     && typeof value.created_at === "string";
 }
 
-function isMixDto(value: unknown): value is MixDto {
+export function isMixDto(value: unknown): value is MixDto {
   return isRecord(value)
     && typeof value.id === "string"
     && typeof value.title === "string"
@@ -77,6 +78,12 @@ function isMixDto(value: unknown): value is MixDto {
     && typeof value.media_asset.duration_seconds === "number"
     && Array.isArray(value.artifacts)
     && value.artifacts.every(isArtifactDto);
+}
+
+/** Validates a detail response before playback can use its protected URLs. */
+export function asMixDto(value: unknown): MixDto {
+  if (!isMixDto(value)) throw new TypeError("The mix response did not match the expected contract.");
+  return value;
 }
 
 /** Validates the public list envelope before any feature receives it. */
@@ -108,7 +115,7 @@ export function toLibraryMixSummaries(response: MixListDto): LibraryMixSummary[]
 }
 
 export function toMixDetail(mix: MixDto): MixDetail {
-  return { ...toLibraryMixSummary(mix), artifacts: mix.artifacts };
+  return { ...toLibraryMixSummary(mix), artifacts: mix.artifacts, analysisResult: mix.analysis_result };
 }
 
 export function toAnalysisSummary(analysis: AnalysisResultDto): AnalysisSummary {

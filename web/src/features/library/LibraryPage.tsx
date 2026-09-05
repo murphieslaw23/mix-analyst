@@ -1,6 +1,7 @@
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ErrorState } from "../../components/ui/ErrorState";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { Link } from "react-router-dom";
 import { useLibraryMixes } from "./useLibraryMixes";
 
 function formatDuration(seconds: number) {
@@ -34,6 +35,7 @@ export function LibraryPage() {
                 <div><dt>Status</dt><dd>Mastered</dd></div>
                 <div><dt>Duration</dt><dd>{formatDuration(mix.durationSeconds)}</dd></div>
               </dl>
+              <Link className="button button--secondary" to={`/library/${encodeURIComponent(mix.id)}`}>Open result</Link>
             </li>
           ))}
         </ol>
