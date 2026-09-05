@@ -88,6 +88,7 @@ def test_https_ingress_is_the_only_public_application_entrypoint():
     assert "reverse_proxy @api api:8000" in caddyfile
     assert "reverse_proxy web:80" in caddyfile
     assert "Strict-Transport-Security" in caddyfile
+    assert "path /docs" not in caddyfile
 
     nginx = (REPOSITORY_ROOT / "web/nginx.conf").read_text()
     assert "location ^~ /api/" in nginx
@@ -101,3 +102,4 @@ def test_html_uses_the_raster_apple_touch_asset_and_docs_refuse_http_install_cla
     assert 'href="/apple-touch-icon.png"' in index
     assert "not** release-installable from a plain HTTP LAN" in readme
     assert "Local development (not an install acceptance path)" in readme
+    assert "/api/v1/docs" not in readme

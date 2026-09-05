@@ -103,8 +103,8 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-- **App and API**: `https://${PUBLIC_ORIGIN}` and
-  `https://${PUBLIC_ORIGIN}/api/v1/docs`
+- **App and same-origin API**: `https://${PUBLIC_ORIGIN}` with browser API
+  routes under `https://${PUBLIC_ORIGIN}/api/`
 - **Public ingress**: Caddy only (ports 80 and 443; port 80 is redirect/ACME,
   never a release application origin)
 - **Private services**: API, PostgreSQL, Redis, workers, and the web runtime
