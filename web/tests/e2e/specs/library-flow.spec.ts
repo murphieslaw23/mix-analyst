@@ -64,6 +64,59 @@ test.describe("Library detail", () => {
     await expect(page.getByRole("button", { name: "Play mastered audio" })).toBeVisible();
   });
 
+  test("does not present a direct source-only result as a completed master", async ({ page }) => {
+    await page.route("**/api/v1/mixes/mix-1", async (route) => {
+      await route.fulfill({ contentType: "application/json", json: { ...mixDetail(), status: "processing", artifacts: [sourceArtifact] } });
+    });
+    await page.goto("/library/mix-1");
+
+    await expect(page.getByText("Result not ready", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Master not ready" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Play .* audio/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /Download .* audio/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open listening rig" })).toHaveCount(0);
+  });
+
+  test("returns to an actionable state when a loaded audio element later errors", async ({ page }) => {
+    await mockMix(page);
+    await page.addInitScript(() => {
+      HTMLMediaElement.prototype.play = () => Promise.resolve();
+      const NativeAudio = window.Audio;
+      window.Audio = function (...args: ConstructorParameters<typeof Audio>) {
+        const audio = new NativeAudio(...args);
+        (window as Window & { testAudio?: HTMLAudioElement }).testAudio = audio;
+        return audio;
+      } as typeof Audio;
+    });
+    await page.goto("/library/mix-1");
+    await page.getByRole("button", { name: "Play mastered audio" }).click();
+    await expect(page.getByRole("button", { name: "Pause mastered audio" })).toBeVisible();
+    await page.evaluate(() => (window as Window & { testAudio?: HTMLAudioElement }).testAudio?.dispatchEvent(new Event("error")));
+    await expect(page.getByRole("alert")).toContainText("Playback stopped because the audio file could not be loaded");
+    await expect(page.getByRole("button", { name: "Play mastered audio" })).toBeVisible();
+  });
+
+  test("ignores a late audio error after selecting another artifact or leaving the result", async ({ page }) => {
+    await mockMix(page);
+    await page.addInitScript(() => {
+      HTMLMediaElement.prototype.play = () => Promise.resolve();
+      const NativeAudio = window.Audio;
+      window.Audio = function (...args: ConstructorParameters<typeof Audio>) {
+        const audio = new NativeAudio(...args);
+        (window as Window & { testAudio?: HTMLAudioElement }).testAudio = audio;
+        return audio;
+      } as typeof Audio;
+    });
+    await page.goto("/library/mix-1");
+    await page.getByRole("button", { name: "Play mastered audio" }).click();
+    await page.getByRole("button", { name: "Original", exact: true }).click();
+    await page.evaluate(() => (window as Window & { testAudio?: HTMLAudioElement }).testAudio?.dispatchEvent(new Event("error")));
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await page.goto("/jobs");
+    await page.evaluate(() => (window as Window & { testAudio?: HTMLAudioElement }).testAudio?.dispatchEvent(new Event("error")));
+    await expect(page.getByRole("heading", { name: "Jobs" })).toBeVisible();
+  });
+
   test("loads the optional Rig only on request and supports keyboard dismissal", async ({ page }) => {
     await mockMix(page);
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -73,9 +126,14 @@ test.describe("Library detail", () => {
     await page.getByRole("button", { name: "Open listening rig" }).click();
     await expect(page.getByRole("dialog", { name: "Listening rig" })).toBeVisible();
     await expect(page.getByTestId("rig-panel")).toHaveAttribute("data-motion", "reduced");
+    await expect(page.locator("#root")).toHaveAttribute("aria-hidden", "true");
+    await expect(page.locator("#root")).toHaveJSProperty("inert", true);
+    await page.evaluate(() => document.querySelector<HTMLAnchorElement>(".back-link")?.focus());
+    await expect(page.getByRole("button", { name: "Close rig" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Listening rig" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Open listening rig" })).toBeFocused();
+    await expect(page.locator("#root")).not.toHaveAttribute("aria-hidden");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 });

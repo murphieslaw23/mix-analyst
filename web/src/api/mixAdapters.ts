@@ -24,6 +24,15 @@ export interface MixDetail extends LibraryMixSummary {
   analysisResult: AnalysisResultDto | null;
 }
 
+/**
+ * A master is ready only when the service has attached the protected output
+ * artifact. Mix.status describes the source record lifecycle and intentionally
+ * is not used as a proxy for downloadable mastering output.
+ */
+export function hasMasteredArtifact(mix: Pick<MixDto, "artifacts">): boolean {
+  return mix.artifacts.some((artifact) => artifact.role === "mastered");
+}
+
 export interface AnalysisSummary {
   bpm: number;
   key: string;
@@ -110,7 +119,7 @@ export function toLibraryMixSummary(mix: MixDto): LibraryMixSummary {
 
 export function toLibraryMixSummaries(response: MixListDto): LibraryMixSummary[] {
   return response.items
-    .filter((mix) => mix.artifacts.some((artifact) => artifact.role === "mastered"))
+    .filter(hasMasteredArtifact)
     .map(toLibraryMixSummary);
 }
 

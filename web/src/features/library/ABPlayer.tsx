@@ -22,7 +22,7 @@ function labelFor(role: ArtifactRole) {
 export function ABPlayer({ artifacts, sourceFilename, suggestedDownloadName }: ABPlayerProps) {
   const source = useMemo(() => artifactFor(artifacts, "source"), [artifacts]);
   const mastered = useMemo(() => artifactFor(artifacts, "mastered"), [artifacts]);
-  const defaultRole: ArtifactRole = mastered ? "mastered" : "source";
+  const defaultRole: ArtifactRole = "mastered";
   const [activeRole, setActiveRole] = useStateWithReset(defaultRole, `${source?.id ?? ""}:${mastered?.id ?? ""}`);
   const activeArtifact = activeRole === "mastered" ? mastered : source;
   const { state, error, selectArtifact, playArtifact, pause } = usePlayer();
@@ -31,8 +31,8 @@ export function ABPlayer({ artifacts, sourceFilename, suggestedDownloadName }: A
     if (activeArtifact) selectArtifact(activeArtifact.download_url);
   }, [activeArtifact, selectArtifact]);
 
-  if (!source && !mastered) {
-    return <section className="ab-player resource-state" aria-labelledby="player-heading"><h2 id="player-heading">Playback unavailable</h2><p>This completed result has no protected audio artifact to play or download yet.</p></section>;
+  if (!mastered) {
+    return <section className="ab-player resource-state" aria-labelledby="player-heading"><h2 id="player-heading">Master not ready</h2><p>This audio has not produced a protected mastered artifact yet, so it cannot be played or downloaded from the Library.</p></section>;
   }
 
   const activeLabel = labelFor(activeRole);

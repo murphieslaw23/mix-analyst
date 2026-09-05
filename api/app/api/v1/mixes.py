@@ -105,9 +105,14 @@ def download_artifact(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found") from None
     if not path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact is unavailable")
-    metadata = next((item for item in mix.artifacts if item.role == "metadata"), None)
+    metadata = next((item for item in sorted(mix.artifacts, key=lambda item: (item.created_at, item.id), reverse=True) if item.role == "metadata"), None)
     suggested_name = (metadata.report or {}).get("suggested_download_name") if metadata else None
-    filename = suggested_name if artifact.role == "source" and suggested_name else f"{artifact.role}-{artifact.sha256[:12]}"
+    if artifact.role == "source":
+        filename = mix.media_asset.original_filename
+    elif artifact.role == "mastered" and suggested_name:
+        filename = suggested_name
+    else:
+        filename = f"{artifact.role}-{artifact.sha256[:12]}"
     if artifact.media_type == "application/json" and not filename.endswith(".json"):
         filename = f"{filename}.json"
     return FileResponse(path, media_type=artifact.media_type, filename=filename)

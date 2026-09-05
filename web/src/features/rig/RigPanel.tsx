@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "../../components/ui/Button";
 
 interface RigPanelProps {
@@ -20,12 +21,19 @@ export default function RigPanel({ mixId, onClose }: RigPanelProps) {
   const [reducedMotion] = useState(reducedMotionPreferred);
 
   useEffect(() => {
+    const appRoot = document.getElementById("root");
+    const previousAriaHidden = appRoot?.getAttribute("aria-hidden") ?? null;
+    const previousInert = appRoot?.inert ?? false;
+    if (appRoot) {
+      appRoot.inert = true;
+      appRoot.setAttribute("aria-hidden", "true");
+    }
     const first = dialogRef.current?.querySelector<HTMLElement>("button, [href], select");
     first?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); onClose(); }
       if (event.key === "Tab" && dialogRef.current) {
-        const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], select:not([disabled])")];
+        const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")].filter((element) => !element.hasAttribute("hidden"));
         if (!focusable.length) return;
         const firstItem = focusable[0];
         const lastItem = focusable[focusable.length - 1];
@@ -34,10 +42,17 @@ export default function RigPanel({ mixId, onClose }: RigPanelProps) {
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (appRoot) {
+        appRoot.inert = previousInert;
+        if (previousAriaHidden === null) appRoot.removeAttribute("aria-hidden");
+        else appRoot.setAttribute("aria-hidden", previousAriaHidden);
+      }
+    };
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div className="rig-backdrop" data-testid="rig-panel" data-motion={reducedMotion ? "reduced" : "standard"} role="presentation">
       <div aria-describedby="rig-description" aria-labelledby="rig-title" aria-modal="true" className="rig-dialog" ref={dialogRef} role="dialog">
         <div className="rig-dialog__heading"><div><p className="eyebrow">Optional listening reference</p><h2 id="rig-title">Listening rig</h2></div><Button onClick={onClose} tone="quiet">Close rig</Button></div>
@@ -46,6 +61,7 @@ export default function RigPanel({ mixId, onClose }: RigPanelProps) {
         <div aria-label={`${cabinet} speaker reference`} className="rig-speaker-stack" role="img"><span /><span /><span /><span /></div>
         <p className="rig-dialog__hint">The Rig remains still when your device requests reduced motion. Use Escape or Close rig to return to playback.</p>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

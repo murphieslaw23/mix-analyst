@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -501,6 +502,49 @@ def test_mix_artifacts_are_presented_as_owner_scoped_metadata(client, user_a_tok
     assert source["key"].startswith("projects/project-a/")
     assert source["download_url"] == "/api/v1/mixes/artifact-mix-a/artifacts/artifact-source-a/download"
     assert "/tmp/" not in source["download_url"]
+
+
+def test_artifact_download_uses_role_specific_names_without_weakening_project_scope(client, user_a_token, user_b_token, monkeypatch, tmp_path):
+    """Source downloads retain the upload name; mastered output uses its suggested name."""
+    storage = StorageService(str(tmp_path / "storage"))
+    monkeypatch.setattr("api.app.api.v1.mixes.settings.storage_root", str(tmp_path / "storage"))
+    test_client, session_factory = client
+    source_key = "projects/project-a/artifacts/source/v1/" + "a" * 64
+    mastered_key = "projects/project-a/artifacts/mastered/v1/" + "b" * 64
+    db = session_factory()
+    try:
+        media = MediaAsset(
+            id="download-media-a", project_id="project-a", original_filename="Floor Tool 01.aiff",
+            storage_path=source_key, file_size_bytes=4, sha256_hash="a" * 64, duration_seconds=1.0,
+            sample_rate=44100, channels=2, codec="pcm_s16le",
+        )
+        mix = Mix(id="download-mix-a", project_id="project-a", title="Download names", media_asset=media, status="ready")
+        db.add(mix)
+        db.flush()
+        db.add_all([
+            Artifact(id="download-source-a", project_id="project-a", mix_id=mix.id, role="source", key=source_key, sha256="a" * 64, algorithm_version="v1", media_type="audio/aiff", byte_length=4),
+            Artifact(id="download-mastered-a", project_id="project-a", mix_id=mix.id, role="mastered", key=mastered_key, sha256="b" * 64, algorithm_version="v1", media_type="audio/wav", byte_length=4),
+            Artifact(id="download-metadata-a", project_id="project-a", mix_id=mix.id, role="metadata", key="projects/project-a/artifacts/metadata/v1/" + "c" * 64, sha256="c" * 64, algorithm_version="v1", media_type="application/json", byte_length=2, report={"suggested_download_name": "Floor Tool 01 [SYCO23 Master].wav"}),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    for key, contents in ((source_key, b"src!"), (mastered_key, b"mast")):
+        path = storage.object_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+
+    headers = {"Authorization": f"Bearer {user_a_token}"}
+    source = test_client.get("/api/v1/mixes/download-mix-a/artifacts/download-source-a/download", headers=headers)
+    mastered = test_client.get("/api/v1/mixes/download-mix-a/artifacts/download-mastered-a/download", headers=headers)
+    foreign = test_client.get("/api/v1/mixes/download-mix-a/artifacts/download-mastered-a/download", headers={"Authorization": f"Bearer {user_b_token}"})
+
+    assert source.status_code == 200
+    assert f"filename*=utf-8''{quote('Floor Tool 01.aiff')}" in source.headers["content-disposition"]
+    assert mastered.status_code == 200
+    assert f"filename*=utf-8''{quote('Floor Tool 01 [SYCO23 Master].wav')}" in mastered.headers["content-disposition"]
+    assert foreign.status_code == 404
 
 def test_unauthenticated_job_event_stream_is_rejected(client, job, monkeypatch):
     async def one_event(_job_id):
