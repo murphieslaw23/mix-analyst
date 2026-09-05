@@ -7,7 +7,9 @@ export default defineConfig({
     port: 3000,
     proxy: {
       "/api": {
-        target: "http://api:8000",
+        // Docker's internal hostname is correct only inside the Compose
+        // network. Host development explicitly targets the loopback API.
+        target: process.env.VITE_API_PROXY_TARGET ?? "http://localhost:8000",
         changeOrigin: true,
       },
     },

@@ -56,11 +56,11 @@ services:
       UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
       # Empty by default: metrics stay denied until operators explicitly opt in.
       OPERATOR_USER_IDS: ${OPERATOR_USER_IDS:-}
-      CORS_ORIGINS: '["http://localhost", "http://localhost:3000", "http://localhost:80", "https://syco23.org"]'
+      # Browser traffic is served by the TLS ingress at one canonical origin.
+      # Local development uses Vite's same-origin proxy instead of broad CORS.
+      CORS_ORIGINS: '["https://${PUBLIC_ORIGIN:-localhost}"]'
     volumes:
       - storage_data:/storage
-    ports:
-      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -172,10 +172,33 @@ services:
       dockerfile: web/Dockerfile
     container_name: mix-analyst-web
     restart: unless-stopped
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     depends_on:
       - api
+    networks:
+      - mix-network
+
+  # The only public-facing service. Caddy redirects clear-text HTTP for ACME
+  # and HTTPS upgrade; it never serves the application over HTTP.
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: mix-analyst-caddy
+    restart: unless-stopped
+    environment:
+      # Set this to the public DNS hostname before a production deployment.
+      # The localhost default is for local TLS smoke testing only.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
     networks:
       - mix-network
 
@@ -183,6 +206,8 @@ volumes:
   postgres_data:
   redis_data:
   storage_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   mix-network:

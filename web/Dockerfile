@@ -9,7 +9,8 @@ RUN npm ci || npm install
 COPY . .
 RUN npm run build
 
-# Production NGINX runtime
+# Internal static runtime. TLS and the public /api proxy are deliberately
+# owned by the Caddy ingress service in docker-compose.yml.
 FROM nginx:1.25-alpine AS runner
 
 COPY --from=builder /app/dist /usr/share/nginx/html
