@@ -80,6 +80,24 @@ class StorageService:
             os.fsync(destination.fileno())
         return len(payload)
 
+    def truncate_object(self, key: str, byte_length: int) -> None:
+        """Return a quarantined object to a known durable offset.
+
+        A process can die after fsyncing a chunk but before its database offset
+        transaction commits.  Retrying from the authoritative offset must
+        discard those uncommitted bytes rather than permanently wedging the
+        resumable upload.
+        """
+        if byte_length < 0:
+            raise ValueError("byte length must be non-negative")
+        path = self.path_for_key(key)
+        if not path.is_file():
+            raise FileNotFoundError("quarantine object not found")
+        with open(path, "r+b") as destination:
+            destination.truncate(byte_length)
+            destination.flush()
+            os.fsync(destination.fileno())
+
     def compute_sha256(self, key: str) -> str:
         hasher = hashlib.sha256()
         with open(self.path_for_key(key), "rb") as source:

@@ -16,6 +16,7 @@ from api.app.db.session import Base, get_db
 from api.app.main import app
 from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobStatus, JobType
+from api.app.models.mastering import MasteringPreset
 from api.app.models.media import MediaAsset, Mix, UploadSession, UploadStatus
 from api.app.models.outbox import OutboxMessage
 from api.app.models.artifact import Artifact
@@ -170,6 +171,19 @@ def test_user_cannot_read_another_users_mix(client, user_a_token, user_b_mix):
     assert response.status_code == 404
 
 
+def test_signed_project_claim_requires_persisted_user_membership(client, user_b_mix):
+    """A valid signature alone must not let a user select another persisted project."""
+    test_client, _ = client
+    mismatched_claim = _bearer_token("user-a", "project-b")
+
+    response = test_client.get(
+        f"/api/v1/mixes/{user_b_mix.id}",
+        headers={"Authorization": f"Bearer {mismatched_claim}"},
+    )
+
+    assert response.status_code == 401
+
+
 def test_authenticated_master_command_is_queued_until_worker_output_exists(client, user_a_token):
     """The mastering route creates a durable command, never a fake completion."""
     test_client, session_factory = client
@@ -202,13 +216,80 @@ def test_authenticated_master_command_is_queued_until_worker_output_exists(clien
     body = response.json()
     assert body["status"] == "QUEUED"
     assert body["job_type"] == "MASTERING"
-    assert body["parameters"] == {"target_lufs": -9.0, "true_peak_dbtp": -1.0, "algorithm_version": "v1"}
+    assert body["parameters"]["target_lufs"] == -9.0
+    assert body["parameters"]["true_peak_dbtp"] == -1.0
+    assert body["parameters"]["preset_id"] == "sound_system_heavy"
+    assert body["parameters"]["algorithm_version"] == "v1"
     db = session_factory()
     try:
         outbox = db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == body["id"]).one()
         assert outbox.payload["task_name"] == "tasks.run_master_mix"
     finally:
         db.close()
+
+
+def test_master_command_resolves_persisted_preset_before_queueing(client, user_a_token):
+    """A selected preset supplies real parameters instead of silent scalar defaults."""
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        db.add(
+            MasteringPreset(
+                id="owned-club-profile",
+                name="Owned club profile",
+                target_lufs=-15.0,
+                true_peak_ceiling=-1.4,
+                target_lra=8.0,
+                eq_settings={"sub_boost_db": 1.25},
+                compressor_settings={"ratio": 2.25},
+                is_builtin=False,
+            )
+        )
+        media = MediaAsset(
+            id="preset-media-a",
+            project_id="project-a",
+            original_filename="preset.wav",
+            storage_path="projects/project-a/artifacts/source/v1/" + "9" * 64,
+            file_size_bytes=1,
+            sha256_hash="9" * 64,
+            duration_seconds=1.0,
+            sample_rate=44100,
+            channels=1,
+            codec="pcm_s16le",
+        )
+        db.add(Mix(id="preset-mix-a", project_id="project-a", title="Preset", media_asset=media, status="ready"))
+        db.commit()
+    finally:
+        db.close()
+
+    response = test_client.post(
+        "/api/v1/mixes/preset-mix-a/master",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        json={"preset_id": "owned-club-profile"},
+    )
+
+    assert response.status_code == 202, response.text
+    parameters = response.json()["parameters"]
+    assert parameters == {
+        "preset_id": "owned-club-profile",
+        "preset_name": "Owned club profile",
+        "target_lufs": -15.0,
+        "true_peak_dbtp": -1.4,
+        "target_lra": 8.0,
+        "eq_settings": {"sub_boost_db": 1.25},
+        "compressor_settings": {"ratio": 2.25},
+        "algorithm_version": "v1",
+    }
+
+
+def test_master_command_rejects_unknown_selected_preset(client, user_a_token):
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1/mixes/mix-a/master",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        json={"preset_id": "missing-preset"},
+    )
+    assert response.status_code == 404
 
 
 def test_mix_artifacts_are_presented_as_owner_scoped_metadata(client, user_a_token):

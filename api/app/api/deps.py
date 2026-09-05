@@ -7,7 +7,7 @@ from ..db.session import get_db
 from ..models.job import Job
 from ..models.media import Mix, UploadSession
 from ..schemas.auth import CurrentPrincipal
-from ..services.auth import decode_principal_token
+from ..services.auth import decode_principal_token, require_persisted_project_membership
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -15,6 +15,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
 ) -> CurrentPrincipal:
     """Require an HS256 bearer token issued by this server's configured secret."""
     if credentials is None or credentials.scheme.lower() != "bearer":
@@ -25,7 +26,7 @@ def get_current_principal(
         )
 
     try:
-        return decode_principal_token(credentials.credentials)
+        return require_persisted_project_membership(db, decode_principal_token(credentials.credentials))
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -50,6 +50,9 @@ def dispatch_pending_messages(db: Session, celery_client=celery_app, batch_size:
                 raise ValueError("Outbox project scope does not match its command payload")
             if payload.get("job_id") != message.aggregate_id:
                 raise ValueError("Outbox job does not match its command aggregate")
+            attempt_number = payload.get("attempt_number")
+            if not isinstance(attempt_number, int) or attempt_number < 1:
+                raise ValueError("Outbox command has no valid attempt number")
             job = db.scalar(
                 select(Job).where(Job.id == message.aggregate_id, Job.project_id == message.project_id)
             )
@@ -57,7 +60,7 @@ def dispatch_pending_messages(db: Session, celery_client=celery_app, batch_size:
                 raise ValueError("Outbox command has no job in its project scope")
             result = celery_client.send_task(
                 payload["task_name"],
-                args=[payload["job_id"], message.project_id],
+                args=[payload["job_id"], message.project_id, attempt_number],
                 task_id=payload["task_id"],
                 queue=payload["queue"],
             )

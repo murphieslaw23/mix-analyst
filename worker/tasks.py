@@ -12,24 +12,35 @@ from .analysis.orchestrator import AudioAnalysisOrchestrator
 from api.app.models.job import Job, JobStatus, StageRun, StageStatus
 from api.app.models.job_event import JobEvent
 from api.app.models.artifact import Artifact as ArtifactRecord
+from api.app.config import settings as app_settings
 from api.app.services.storage import StorageService
-from api.app.services.job_commands import claim_job_attempt
+from api.app.services.job_commands import claim_job_attempt, heartbeat_job_attempt
 from api.app.services.batches import advance_batch_after_terminal_job
 from api.app.services.job_events import event_notification, publish_event
 from api.app.services.job_events_store import complete_job_attempt, record_job_event
+from api.app.services.upload_sessions import cleanup_expired_uploads_global, reconcile_pending_upload_promotions
 from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
 from .stages.tag_mix import Artifact as StageArtifact, tag_mix
 from .stages.generate_waveform import generate_waveform
 from .services.metrics import record_job_finished, record_job_started, started_at
 
-STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
+# API, Compose, and every worker role use the same declared settings alias.
+# ``STORAGE_ROOT`` existed only as an undocumented worker-only spelling and
+# caused deployed workers to read a different volume than uploads wrote.
+STORAGE_ROOT = app_settings.storage_root
 
 
 class JobStopped(Exception):
     """The authoritative job state no longer permits worker-side processing."""
 
 
-def require_running_job(db, job_id: str, project_id: str) -> None:
+def require_running_job(
+    db,
+    job_id: str,
+    project_id: str,
+    attempt_number: int | None = None,
+    claim_token: str | None = None,
+) -> None:
     """Stop cooperative work once cancellation or another terminal state wins."""
     status = db.execute(
         text("SELECT status FROM jobs WHERE id = :id AND project_id = :project_id"),
@@ -37,6 +48,30 @@ def require_running_job(db, job_id: str, project_id: str) -> None:
     ).scalar_one_or_none()
     if status != "RUNNING":
         raise JobStopped(f"Job {job_id} is no longer running")
+    if attempt_number is not None and claim_token is not None:
+        if not heartbeat_job_attempt(db, job_id, project_id, attempt_number, claim_token):
+            raise JobStopped(f"Job {job_id} attempt lease is no longer active")
+
+
+def _claim_task_attempt(self, db, job_id: str, project_id: str, hostname: str, attempt_number: int | None):
+    """Claim an exact dispatched attempt and retain its fencing identity."""
+    if attempt_number is None:
+        # Direct task invocation remains useful in existing developer tests;
+        # normal broker dispatches always carry the attempt number below.
+        attempt = claim_job_attempt(db, job_id, hostname, project_id)
+    else:
+        claim_token = getattr(getattr(self, "request", None), "id", None) or uuid.uuid4().hex
+        attempt = claim_job_attempt(
+            db,
+            job_id,
+            hostname,
+            project_id,
+            attempt_number=attempt_number,
+            claim_token=claim_token,
+        )
+    if attempt is None:
+        return None
+    return attempt.attempt_number, attempt.claim_token
 
 
 def latest_job_event(db, job_id: str, project_id: str) -> JobEvent:
@@ -115,6 +150,8 @@ def transition_job_and_attempt(
     worker_name: str,
     terminal_status: JobStatus,
     error: str | None = None,
+    attempt_number: int | None = None,
+    claim_token: str | None = None,
 ) -> bool:
     """Terminally transition a scoped job and its running attempt together.
 
@@ -133,7 +170,9 @@ def transition_job_and_attempt(
                 "current_stage = 'Complete', finished_at = :finish "
                 "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING' "
                 "AND EXISTS (SELECT 1 FROM job_attempts WHERE job_attempts.job_id = jobs.id "
-                "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name) RETURNING id"
+                "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name "
+                "AND (:attempt_number IS NULL OR job_attempts.attempt_number = :attempt_number) "
+                "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token)) RETURNING id"
             ),
             {
                 "id": job_id,
@@ -141,6 +180,8 @@ def transition_job_and_attempt(
                 "worker_name": worker_name,
                 "status": terminal_status.value,
                 "finish": finish_time,
+                "attempt_number": attempt_number,
+                "claim_token": claim_token,
             },
         ).scalar_one_or_none()
     else:
@@ -149,7 +190,9 @@ def transition_job_and_attempt(
                 "UPDATE jobs SET status = :status, error_message = :error, finished_at = :finish "
                 "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING' "
                 "AND EXISTS (SELECT 1 FROM job_attempts WHERE job_attempts.job_id = jobs.id "
-                "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name) RETURNING id"
+                "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name "
+                "AND (:attempt_number IS NULL OR job_attempts.attempt_number = :attempt_number) "
+                "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token)) RETURNING id"
             ),
             {
                 "id": job_id,
@@ -158,6 +201,8 @@ def transition_job_and_attempt(
                 "status": terminal_status.value,
                 "error": error,
                 "finish": finish_time,
+                "attempt_number": attempt_number,
+                "claim_token": claim_token,
             },
         ).scalar_one_or_none()
     if job_result is None:
@@ -167,6 +212,8 @@ def transition_job_and_attempt(
         text(
             "UPDATE job_attempts SET status = :status, error_details = :error, finished_at = :finish "
             "WHERE job_id = :id AND status = 'RUNNING' AND worker_hostname = :worker_name "
+            "AND (:attempt_number IS NULL OR attempt_number = :attempt_number) "
+            "AND (:claim_token IS NULL OR claim_token = :claim_token) "
             "AND EXISTS (SELECT 1 FROM jobs "
             "WHERE jobs.id = job_attempts.job_id AND jobs.project_id = :project_id AND jobs.status = :status) "
             "RETURNING id"
@@ -178,6 +225,8 @@ def transition_job_and_attempt(
             "worker_name": worker_name,
             "error": error,
             "finish": finish_time,
+            "attempt_number": attempt_number,
+            "claim_token": claim_token,
         },
     ).scalar_one_or_none()
     if attempt_result is None:
@@ -201,17 +250,243 @@ def transition_job_and_attempt(
     return True
 
 
+def publish_analysis_results(
+    db,
+    *,
+    job_id: str,
+    project_id: str,
+    hostname: str,
+    attempt_number: int | None,
+    claim_token: str | None,
+    mix_id: str,
+    media_asset_id: str,
+    analysis_data: dict,
+    source_artifact: StageArtifact,
+    source_key: str,
+    tagged_mix,
+    metadata_key: str,
+    waveform,
+    waveform_key: str,
+) -> JobEvent:
+    """Publish a complete analysis replacement only when its attempt succeeds.
+
+    All user-visible rows (analysis, tracks, transitions, artifact attachments,
+    completed stage reports, and terminal state) share one savepoint.  An old
+    successful result therefore survives a cancellation or stale worker that
+    loses the final fencing check.  Immutable files written before this point
+    are harmless until an attachment makes them reachable.
+    """
+    with db.begin_nested():
+        analysis_id = f"analysis_{mix_id}"
+        db.execute(
+            text(
+                """
+                INSERT INTO analysis_results (
+                    id, mix_id, media_asset_id, primary_bpm, bpm_confidence,
+                    bpm_candidates, detected_key, camelot_code, key_confidence,
+                    integrated_lufs, loudness_range_lra, true_peak_db,
+                    spectral_summary, quality_findings, created_at
+                ) VALUES (
+                    :id, :mix_id, :asset_id, :bpm, :bpm_conf,
+                    :candidates, :key, :camelot, :key_conf,
+                    :lufs, :lra, :tp, :spectral, :quality, :now
+                )
+                ON CONFLICT (mix_id) DO UPDATE SET
+                    primary_bpm = EXCLUDED.primary_bpm,
+                    bpm_confidence = EXCLUDED.bpm_confidence,
+                    bpm_candidates = EXCLUDED.bpm_candidates,
+                    detected_key = EXCLUDED.detected_key,
+                    camelot_code = EXCLUDED.camelot_code,
+                    key_confidence = EXCLUDED.key_confidence,
+                    integrated_lufs = EXCLUDED.integrated_lufs,
+                    loudness_range_lra = EXCLUDED.loudness_range_lra,
+                    true_peak_db = EXCLUDED.true_peak_db,
+                    spectral_summary = EXCLUDED.spectral_summary,
+                    quality_findings = EXCLUDED.quality_findings
+                """
+            ),
+            {
+                "id": analysis_id,
+                "mix_id": mix_id,
+                "asset_id": media_asset_id,
+                "bpm": analysis_data["primary_bpm"],
+                "bpm_conf": analysis_data["bpm_confidence"],
+                "candidates": json.dumps(analysis_data["bpm_candidates"]),
+                "key": analysis_data["detected_key"],
+                "camelot": analysis_data["camelot_code"],
+                "key_conf": analysis_data["key_confidence"],
+                "lufs": analysis_data["integrated_lufs"],
+                "lra": analysis_data["loudness_range_lra"],
+                "tp": analysis_data["true_peak_db"],
+                "spectral": json.dumps(analysis_data["spectral_summary"]),
+                "quality": json.dumps(analysis_data["quality_findings"]),
+                "now": datetime.now(timezone.utc),
+            },
+        )
+
+        # Replace dependent rows only inside this publication savepoint.
+        db.execute(text("DELETE FROM track_matches WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        for segment in analysis_data.get("track_segments", []):
+            segment_id = str(uuid.uuid4())
+            db.execute(
+                text(
+                    """
+                    INSERT INTO track_segments (
+                        id, mix_id, segment_index, start_time_seconds,
+                        end_time_seconds, duration_seconds, fingerprint,
+                        confidence, created_at
+                    ) VALUES (
+                        :id, :mix_id, :idx, :start, :end, :dur, :fp, :conf, :now
+                    )
+                    """
+                ),
+                {
+                    "id": segment_id,
+                    "mix_id": mix_id,
+                    "idx": segment["segment_index"],
+                    "start": segment["start_time_seconds"],
+                    "end": segment["end_time_seconds"],
+                    "dur": segment["duration_seconds"],
+                    "fp": segment.get("fingerprint"),
+                    "conf": segment["confidence"],
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+            match = segment.get("match")
+            if match:
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO track_matches (
+                            id, segment_id, mix_id, title, artist, album,
+                            acoustid_id, musicbrainz_recording_id, match_score,
+                            source, created_at
+                        ) VALUES (
+                            :id, :segment_id, :mix_id, :title, :artist, :album,
+                            :acoustid, :mb_id, :score, 'acoustid', :now
+                        )
+                        """
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "segment_id": segment_id,
+                        "mix_id": mix_id,
+                        "title": match.get("title", "Unknown Track"),
+                        "artist": match.get("artist", "Unknown Artist"),
+                        "album": match.get("album"),
+                        "acoustid": match.get("acoustid_id"),
+                        "mb_id": match.get("musicbrainz_recording_id"),
+                        "score": match.get("match_score", 0.8),
+                        "now": datetime.now(timezone.utc),
+                    },
+                )
+
+        db.execute(text("DELETE FROM transition_events WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        for transition in analysis_data.get("transitions", []):
+            db.execute(
+                text(
+                    """
+                    INSERT INTO transition_events (
+                        id, mix_id, transition_index, start_time_seconds,
+                        end_time_seconds, cue_in_time, cue_out_time,
+                        transition_type, energy_delta, tempo_shift_bpm,
+                        camelot_compatibility, confidence, created_at
+                    ) VALUES (
+                        :id, :mix_id, :idx, :start, :end, :cue_in, :cue_out,
+                        :type, :energy, :tempo, :camelot, :conf, :now
+                    )
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "mix_id": mix_id,
+                    "idx": transition["transition_index"],
+                    "start": transition["start_time_seconds"],
+                    "end": transition["end_time_seconds"],
+                    "cue_in": transition["cue_in_time"],
+                    "cue_out": transition["cue_out_time"],
+                    "type": transition["transition_type"],
+                    "energy": transition["energy_delta"],
+                    "tempo": transition["tempo_shift_bpm"],
+                    "camelot": transition["camelot_compatibility"],
+                    "conf": transition["confidence"],
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+
+        persist_artifact_record(db, project_id=project_id, mix_id=mix_id, artifact=source_artifact, key=source_key)
+        persist_artifact_record(
+            db,
+            project_id=project_id,
+            mix_id=mix_id,
+            artifact=tagged_mix.metadata_artifact,
+            key=metadata_key,
+            report={"suggested_download_name": tagged_mix.suggested_download_name, **tagged_mix.report.as_dict()},
+        )
+        waveform_descriptor = StageArtifact(
+            role=waveform.role,
+            key=waveform.key,
+            sha256=waveform.sha256,
+            algorithm_version=waveform.algorithm_version,
+            media_type=waveform.media_type,
+            byte_length=waveform.byte_length,
+        )
+        persist_artifact_record(
+            db,
+            project_id=project_id,
+            mix_id=mix_id,
+            artifact=waveform_descriptor,
+            key=waveform_key,
+            report={"points": waveform.points, "duration_seconds": waveform.duration_seconds},
+        )
+        db.add_all(
+            [
+                StageRun(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    stage_name="tag_mix",
+                    stage_version="v1",
+                    status=StageStatus.COMPLETED,
+                    progress_percent=100.0,
+                    stage_output=json.dumps(
+                        {"artifact_key": metadata_key, "suggested_download_name": tagged_mix.suggested_download_name}
+                    ),
+                    finished_at=datetime.now(timezone.utc),
+                ),
+                StageRun(
+                    id=str(uuid.uuid4()),
+                    job_id=job_id,
+                    stage_name="generate_waveform",
+                    stage_version="v1",
+                    status=StageStatus.COMPLETED,
+                    progress_percent=100.0,
+                    stage_output=json.dumps({"artifact_key": waveform_key, "points": waveform.points}),
+                    finished_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        if not complete_job_attempt(db, job_id, project_id, hostname, attempt_number, claim_token):
+            raise JobStopped(f"Job {job_id} lost its terminal publication race")
+        advance_batch_after_terminal_job(db, job_id, project_id)
+        return latest_job_event(db, job_id, project_id)
+
+
 @celery_app.task(bind=True, name="tasks.run_master_mix")
-def run_master_mix(self, job_id: str, project_id: str):
+def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | None = None):
     """Run a MASTERING command as an immutable worker-owned artifact stage."""
     db = SessionLocal()
     hostname = socket.gethostname()
     stage_id: str | None = None
+    active_attempt_number: int | None = None
+    active_claim_token: str | None = None
     metric_started = started_at()
     try:
-        if claim_job_attempt(db, job_id, hostname, project_id) is None:
+        claimed = _claim_task_attempt(self, db, job_id, project_id, hostname, attempt_number)
+        if claimed is None:
             db.rollback()
             return {"status": "already_claimed", "job_id": job_id}
+        active_attempt_number, active_claim_token = claimed
         running_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
         if running_job is None:
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
@@ -235,7 +510,7 @@ def run_master_mix(self, job_id: str, project_id: str):
         job_row = db.execute(
             text(
                 """
-                SELECT j.id, j.parameters, a.storage_path
+                SELECT j.id, j.mix_id, j.parameters, a.storage_path
                 FROM jobs j
                 JOIN mixes m ON m.id = j.mix_id AND m.project_id = j.project_id
                 JOIN media_assets a ON a.id = m.media_asset_id AND a.project_id = j.project_id
@@ -271,7 +546,7 @@ def run_master_mix(self, job_id: str, project_id: str):
         db.add(stage)
 
         def progress_tracker(percent: float, stage_name: str) -> None:
-            require_running_job(db, job_id, project_id)
+            require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
             updated = db.execute(
                 text(
                     "UPDATE jobs SET current_stage = :stage, progress_percent = :pct "
@@ -299,9 +574,14 @@ def run_master_mix(self, job_id: str, project_id: str):
             publish_event(project_id, job_id, event_notification(progress_event))
 
         progress_tracker(5.0, "Mastering")
-        require_running_job(db, job_id, project_id)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         result = run_master_mix_stage(source_path, settings)
-        require_running_job(db, job_id, project_id)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        # Persist the visible stage result only in the same commit that wins
+        # the fenced terminal transition.  The immutable bytes may already
+        # exist, but no user can download them without this attachment.
+        progress_tracker(95.0, "Mastered")
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         stage = db.get(StageRun, stage_id)
         if stage is None:
             raise RuntimeError(f"Mastering stage for job {job_id} was not persisted")
@@ -316,9 +596,30 @@ def run_master_mix(self, job_id: str, project_id: str):
                 "algorithm_version": result.algorithm_version,
             }
         )
-        progress_tracker(95.0, "Mastered")
+        mastered_key = result.artifact_key
+        mastered_artifact = StageArtifact(
+            role="mastered",
+            key=mastered_key,
+            sha256=mastered_key.rsplit("/", 1)[-1],
+            algorithm_version=result.algorithm_version,
+            media_type="audio/wav",
+            byte_length=StorageService(STORAGE_ROOT).object_size(mastered_key),
+        )
+        persist_artifact_record(
+            db,
+            project_id=project_id,
+            mix_id=job_row.mix_id,
+            artifact=mastered_artifact,
+            key=mastered_key,
+            report={
+                "integrated_lufs": result.integrated_lufs,
+                "true_peak_dbtp": result.true_peak_dbtp,
+            },
+        )
 
-        if not complete_job_attempt(db, job_id, project_id, hostname):
+        if not complete_job_attempt(
+            db, job_id, project_id, hostname, active_attempt_number, active_claim_token
+        ):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
         advance_batch_after_terminal_job(db, job_id, project_id)
@@ -356,7 +657,16 @@ def run_master_mix(self, job_id: str, project_id: str):
                 stage.error_message = str(exc)
                 stage.finished_at = datetime.now(timezone.utc)
                 db.commit()
-        if not transition_job_and_attempt(db, job_id, project_id, hostname, JobStatus.FAILED, str(exc)):
+        if not transition_job_and_attempt(
+            db,
+            job_id,
+            project_id,
+            hostname,
+            JobStatus.FAILED,
+            str(exc),
+            active_attempt_number,
+            active_claim_token,
+        ):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
         advance_batch_after_terminal_job(db, job_id, project_id)
@@ -368,8 +678,21 @@ def run_master_mix(self, job_id: str, project_id: str):
         db.close()
 
 
+@celery_app.task(name="tasks.cleanup_expired_uploads")
+def cleanup_expired_uploads() -> dict[str, int]:
+    """Run trusted global upload reconciliation and expiry cleanup on a schedule."""
+    db = SessionLocal()
+    try:
+        storage = StorageService(STORAGE_ROOT)
+        reconciled = reconcile_pending_upload_promotions(db, storage)
+        expired = cleanup_expired_uploads_global(db, storage)
+        return {"reconciled": reconciled, "expired": expired}
+    finally:
+        db.close()
+
+
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
-def run_analysis_pipeline(self, job_id: str, project_id: str):
+def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: int | None = None):
     """
     Execute the real bounded-memory audio analysis, fingerprinting & transition detection pipeline.
     """
@@ -377,12 +700,16 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
     hostname = socket.gethostname()
     metric_started = started_at()
     metric_job_type = "ANALYSIS"
+    active_attempt_number: int | None = None
+    active_claim_token: str | None = None
     try:
         # A broker message is at-least-once.  The conditional claim lets only
         # one worker begin, including after a dispatcher restart/redelivery.
-        if claim_job_attempt(db, job_id, hostname, project_id) is None:
+        claimed = _claim_task_attempt(self, db, job_id, project_id, hostname, attempt_number)
+        if claimed is None:
             db.rollback()
             return {"status": "already_claimed", "job_id": job_id}
+        active_attempt_number, active_claim_token = claimed
         running_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
         if running_job is None:
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
@@ -427,7 +754,7 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         audio_abs_path = StorageService(STORAGE_ROOT).object_path(storage_rel_path)
 
         def progress_tracker(pct: float, stage_name: str):
-            require_running_job(db, job_id, project_id)
+            require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
             progress_result = db.execute(
                 text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
                 {"id": job_id, "project_id": project_id, "stage": stage_name, "pct": pct},
@@ -453,210 +780,47 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
 
         # Run real orchestrator. Its progress callbacks provide cooperative
         # cancellation checkpoints during bounded processing.
-        require_running_job(db, job_id, project_id)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         orchestrator = AudioAnalysisOrchestrator(audio_abs_path, duration_seconds)
         analysis_data = orchestrator.execute_pipeline(progress_callback=progress_tracker)
 
-        # Persist AnalysisResult in DB
-        require_running_job(db, job_id, project_id)
-        analysis_id = f"analysis_{mix_id}"
-        db.execute(
-            text("""
-                INSERT INTO analysis_results (
-                    id, mix_id, media_asset_id, primary_bpm, bpm_confidence,
-                    bpm_candidates, detected_key, camelot_code, key_confidence,
-                    integrated_lufs, loudness_range_lra, true_peak_db,
-                    spectral_summary, quality_findings, created_at
-                ) VALUES (
-                    :id, :mix_id, :asset_id, :bpm, :bpm_conf,
-                    :candidates, :key, :camelot, :key_conf,
-                    :lufs, :lra, :tp,
-                    :spectral, :quality, :now
-                )
-                ON CONFLICT (mix_id) DO UPDATE SET
-                    primary_bpm = EXCLUDED.primary_bpm,
-                    bpm_confidence = EXCLUDED.bpm_confidence,
-                    bpm_candidates = EXCLUDED.bpm_candidates,
-                    detected_key = EXCLUDED.detected_key,
-                    camelot_code = EXCLUDED.camelot_code,
-                    key_confidence = EXCLUDED.key_confidence,
-                    integrated_lufs = EXCLUDED.integrated_lufs,
-                    loudness_range_lra = EXCLUDED.loudness_range_lra,
-                    true_peak_db = EXCLUDED.true_peak_db,
-                    spectral_summary = EXCLUDED.spectral_summary,
-                    quality_findings = EXCLUDED.quality_findings
-            """),
-            {
-                "id": analysis_id,
-                "mix_id": mix_id,
-                "asset_id": media_asset_id,
-                "bpm": analysis_data["primary_bpm"],
-                "bpm_conf": analysis_data["bpm_confidence"],
-                "candidates": json.dumps(analysis_data["bpm_candidates"]),
-                "key": analysis_data["detected_key"],
-                "camelot": analysis_data["camelot_code"],
-                "key_conf": analysis_data["key_confidence"],
-                "lufs": analysis_data["integrated_lufs"],
-                "lra": analysis_data["loudness_range_lra"],
-                "tp": analysis_data["true_peak_db"],
-                "spectral": json.dumps(analysis_data["spectral_summary"]),
-                "quality": json.dumps(analysis_data["quality_findings"]),
-                "now": datetime.now(timezone.utc),
-            },
-        )
-
-        # Clear and persist TrackSegments & TrackMatches (Phase 4)
-        require_running_job(db, job_id, project_id)
-        db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
-        db.commit()
-
-        for seg in analysis_data.get("track_segments", []):
-            require_running_job(db, job_id, project_id)
-            seg_id = str(uuid.uuid4())
-            db.execute(
-                text("""
-                    INSERT INTO track_segments (
-                        id, mix_id, segment_index, start_time_seconds,
-                        end_time_seconds, duration_seconds, fingerprint,
-                        confidence, created_at
-                    ) VALUES (
-                        :id, :mix_id, :idx, :start, :end, :dur, :fp, :conf, :now
-                    )
-                """),
-                {
-                    "id": seg_id,
-                    "mix_id": mix_id,
-                    "idx": seg["segment_index"],
-                    "start": seg["start_time_seconds"],
-                    "end": seg["end_time_seconds"],
-                    "dur": seg["duration_seconds"],
-                    "fp": seg.get("fingerprint"),
-                    "conf": seg["confidence"],
-                    "now": datetime.now(timezone.utc),
-                },
-            )
-
-            match = seg.get("match")
-            if match:
-                match_id = str(uuid.uuid4())
-                db.execute(
-                    text("""
-                        INSERT INTO track_matches (
-                            id, segment_id, mix_id, title, artist,
-                            album, acoustid_id, musicbrainz_recording_id,
-                            match_score, source, created_at
-                        ) VALUES (
-                            :id, :seg_id, :mix_id, :title, :artist,
-                            :album, :acoustid, :mb_id, :score, 'acoustid', :now
-                        )
-                    """),
-                    {
-                        "id": match_id,
-                        "seg_id": seg_id,
-                        "mix_id": mix_id,
-                        "title": match.get("title", "Unknown Track"),
-                        "artist": match.get("artist", "Unknown Artist"),
-                        "album": match.get("album"),
-                        "acoustid": match.get("acoustid_id"),
-                        "mb_id": match.get("musicbrainz_recording_id"),
-                        "score": match.get("match_score", 0.8),
-                        "now": datetime.now(timezone.utc),
-                    },
-                )
-
-        # Clear and persist TransitionEvents (Phase 5)
-        require_running_job(db, job_id, project_id)
-        db.execute(text("DELETE FROM transition_events WHERE mix_id = :mix_id"), {"mix_id": mix_id})
-        db.commit()
-
-        for trans in analysis_data.get("transitions", []):
-            require_running_job(db, job_id, project_id)
-            trans_id = str(uuid.uuid4())
-            db.execute(
-                text("""
-                    INSERT INTO transition_events (
-                        id, mix_id, transition_index, start_time_seconds,
-                        end_time_seconds, cue_in_time, cue_out_time,
-                        transition_type, energy_delta, tempo_shift_bpm,
-                        camelot_compatibility, confidence, created_at
-                    ) VALUES (
-                        :id, :mix_id, :idx, :start, :end, :cue_in, :cue_out,
-                        :type, :energy, :tempo, :camelot, :conf, :now
-                    )
-                """),
-                {
-                    "id": trans_id,
-                    "mix_id": mix_id,
-                    "idx": trans["transition_index"],
-                    "start": trans["start_time_seconds"],
-                    "end": trans["end_time_seconds"],
-                    "cue_in": trans["cue_in_time"],
-                    "cue_out": trans["cue_out_time"],
-                    "type": trans["transition_type"],
-                    "energy": trans["energy_delta"],
-                    "tempo": trans["tempo_shift_bpm"],
-                    "camelot": trans["camelot_compatibility"],
-                    "conf": trans["confidence"],
-                    "now": datetime.now(timezone.utc),
-                },
-            )
-
-        # Metadata and waveform results are separate immutable objects. The
-        # pure stages return relative identities; this worker adds project scope.
-        require_running_job(db, job_id, project_id)
+        # Compute immutable payloads first.  They are not user-visible until
+        # the atomic publication below attaches their database records.
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         source_artifact = StageArtifact(
             role="source", key=storage_rel_path, sha256=job_row.sha256_hash, algorithm_version="v1",
             media_type=job_row.mime_type or "application/octet-stream", byte_length=int(job_row.file_size_bytes),
         )
-        persist_artifact_record(db, project_id=project_id, mix_id=mix_id, artifact=source_artifact, key=storage_rel_path)
-
-        tag_stage = StageRun(id=str(uuid.uuid4()), job_id=job_id, stage_name="tag_mix", stage_version="v1",
-                             status=StageStatus.RUNNING, progress_percent=0.0)
-        db.add(tag_stage)
         progress_tracker(82.0, "Generating metadata report")
         tagged_mix = tag_mix(audio_abs_path, source_artifact, job_row.original_filename, "v1")
-        require_running_job(db, job_id, project_id)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         metadata_key = owner_scoped_artifact_key(project_id, tagged_mix.metadata_artifact.key)
         persist_immutable_payload(STORAGE_ROOT, metadata_key, tagged_mix.payload)
-        persist_artifact_record(
-            db, project_id=project_id, mix_id=mix_id, artifact=tagged_mix.metadata_artifact, key=metadata_key,
-            report={"suggested_download_name": tagged_mix.suggested_download_name, **tagged_mix.report.as_dict()},
-        )
-        tag_stage.status = StageStatus.COMPLETED
-        tag_stage.progress_percent = 100.0
-        tag_stage.finished_at = datetime.now(timezone.utc)
-        tag_stage.stage_output = json.dumps({"artifact_key": metadata_key, "suggested_download_name": tagged_mix.suggested_download_name})
-
-        waveform_stage = StageRun(id=str(uuid.uuid4()), job_id=job_id, stage_name="generate_waveform", stage_version="v1",
-                                  status=StageStatus.RUNNING, progress_percent=0.0)
-        db.add(waveform_stage)
         progress_tracker(90.0, "Generating waveform artifact")
         waveform = generate_waveform(audio_abs_path, points=2048, algorithm_version="v1")
-        require_running_job(db, job_id, project_id)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         waveform_key = owner_scoped_artifact_key(project_id, waveform.key)
         persist_immutable_payload(STORAGE_ROOT, waveform_key, waveform.payload)
-        waveform_descriptor = StageArtifact(role=waveform.role, key=waveform.key, sha256=waveform.sha256,
-                                             algorithm_version=waveform.algorithm_version, media_type=waveform.media_type,
-                                             byte_length=waveform.byte_length)
-        persist_artifact_record(
-            db, project_id=project_id, mix_id=mix_id, artifact=waveform_descriptor, key=waveform_key,
-            report={"points": waveform.points, "duration_seconds": waveform.duration_seconds},
+
+        progress_tracker(95.0, "Publishing analysis")
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        terminal_event = publish_analysis_results(
+            db,
+            job_id=job_id,
+            project_id=project_id,
+            hostname=hostname,
+            attempt_number=active_attempt_number,
+            claim_token=active_claim_token,
+            mix_id=mix_id,
+            media_asset_id=media_asset_id,
+            analysis_data=analysis_data,
+            source_artifact=source_artifact,
+            source_key=storage_rel_path,
+            tagged_mix=tagged_mix,
+            metadata_key=metadata_key,
+            waveform=waveform,
+            waveform_key=waveform_key,
         )
-        waveform_stage.status = StageStatus.COMPLETED
-        waveform_stage.progress_percent = 100.0
-        waveform_stage.finished_at = datetime.now(timezone.utc)
-        waveform_stage.stage_output = json.dumps({"artifact_key": waveform_key, "points": waveform.points})
-
-        require_running_job(db, job_id, project_id)
-        db.commit()
-
-        # Finalize the attempt only if this scoped job still wins the
-        # authoritative RUNNING -> SUCCEEDED transition.
-        if not complete_job_attempt(db, job_id, project_id, hostname):
-            db.rollback()
-            return {"status": "cancelled", "job_id": job_id}
-        advance_batch_after_terminal_job(db, job_id, project_id)
-        terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
         record_job_finished(metric_job_type, metric_started, "succeeded")
@@ -670,7 +834,16 @@ def run_analysis_pipeline(self, job_id: str, project_id: str):
         db.rollback()
         record_job_finished(metric_job_type, metric_started, "failed")
         error_str = str(e)
-        if not transition_job_and_attempt(db, job_id, project_id, hostname, JobStatus.FAILED, error_str):
+        if not transition_job_and_attempt(
+            db,
+            job_id,
+            project_id,
+            hostname,
+            JobStatus.FAILED,
+            error_str,
+            active_attempt_number,
+            active_claim_token,
+        ):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
         advance_batch_after_terminal_job(db, job_id, project_id)

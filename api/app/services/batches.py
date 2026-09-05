@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models.batch import Batch, BatchStatus
-from ..models.job import Job, JobStatus, JobType
+from ..models.job import Job, JobAttempt, JobStatus, JobType
 from ..models.media import Mix
 from ..schemas.auth import CurrentPrincipal
 from ..schemas.batch import BatchCreateRequest
@@ -177,4 +177,12 @@ def advance_batch_after_terminal_job(db: Session, job_id: str, project_id: str) 
         .limit(1)
     )
     if queued_job is not None:
-        enqueue_job_dispatch(db, queued_job, attempt_number=1)
+        queued_attempt = db.scalar(
+            select(JobAttempt.attempt_number)
+            .where(JobAttempt.job_id == queued_job.id, JobAttempt.status == JobStatus.QUEUED)
+            .order_by(JobAttempt.attempt_number.desc())
+            .limit(1)
+        )
+        if queued_attempt is None:
+            raise RuntimeError(f"Queued batch job {queued_job.id} has no queued attempt")
+        enqueue_job_dispatch(db, queued_job, attempt_number=queued_attempt)

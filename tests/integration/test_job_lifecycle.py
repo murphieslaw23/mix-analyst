@@ -1,6 +1,7 @@
 """Integration coverage for durable job commands and worker claims."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -79,6 +80,94 @@ def test_only_one_worker_claims_queued_attempt(db, principal, mix):
     assert db.get(Job, job.id).status is JobStatus.RUNNING
 
 
+def test_expired_running_attempt_is_reclaimed_with_a_new_fenced_lease(db, principal, mix):
+    """Without stale-lease reclaim, worker-loss redelivery remains claimed forever."""
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    first_claimed_at = datetime(2026, 9, 3, tzinfo=timezone.utc)
+
+    first = claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-a",
+        now=first_claimed_at,
+        lease_seconds=30,
+    )
+    db.commit()
+    assert first is not None
+    assert claim_job_attempt(
+        db,
+        job.id,
+        "worker-b",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-b",
+        now=first_claimed_at + timedelta(seconds=29),
+        lease_seconds=30,
+    ) is None
+    db.rollback()
+
+    reclaimed = claim_job_attempt(
+        db,
+        job.id,
+        "worker-b",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-b",
+        now=first_claimed_at + timedelta(seconds=31),
+        lease_seconds=30,
+    )
+
+    assert reclaimed is not None
+    assert reclaimed.attempt_number == 1
+    assert reclaimed.worker_hostname == "worker-b"
+    assert reclaimed.claim_token == "claim-b"
+
+
+def test_attempt_heartbeat_extends_lease_and_fences_the_previous_claim(db, principal, mix):
+    """A live heartbeat prevents reclaim and an old token cannot extend a stolen lease."""
+    from api.app.services.job_commands import heartbeat_job_attempt
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    claimed_at = datetime(2026, 9, 3, tzinfo=timezone.utc)
+    assert claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-a",
+        now=claimed_at,
+        lease_seconds=30,
+    ) is not None
+    db.commit()
+
+    assert heartbeat_job_attempt(
+        db,
+        job.id,
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-a",
+        now=claimed_at + timedelta(seconds=20),
+        lease_seconds=30,
+    ) is True
+    db.commit()
+    assert claim_job_attempt(
+        db,
+        job.id,
+        "worker-b",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-b",
+        now=claimed_at + timedelta(seconds=40),
+        lease_seconds=30,
+    ) is None
+
+
 def test_claim_does_not_replace_cancelled_job(db, principal, mix):
     job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
     db.commit()
@@ -89,11 +178,63 @@ def test_claim_does_not_replace_cancelled_job(db, principal, mix):
     assert db.get(Job, job.id).status is JobStatus.CANCELLED
 
 
+def test_old_dispatch_cannot_claim_a_new_retry_attempt(db, principal, mix):
+    """Attempt identity prevents an old broker delivery from stealing a retry."""
+    from api.app.services.job_commands import enqueue_retry
+    from api.app.services.job_events_store import request_cancellation
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    assert claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="claim-a",
+    ) is not None
+    db.commit()
+    request_cancellation(db, job)
+    db.commit()
+    assert enqueue_retry(db, job) is not None
+    db.commit()
+
+    assert claim_job_attempt(
+        db,
+        job.id,
+        "old-redelivery",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="old-claim",
+    ) is None
+    db.rollback()
+    assert claim_job_attempt(
+        db,
+        job.id,
+        "retry-worker",
+        principal.project_id,
+        attempt_number=2,
+        claim_token="retry-claim",
+    ) is not None
+
+
 def test_enqueue_job_rejects_mix_from_another_project(db, principal):
     foreign_mix = Mix(id="mix-b", project_id="project-b", title="Foreign mix", media_asset_id="media-b", status="ready")
 
     with pytest.raises(PermissionError, match="current project"):
         enqueue_job(db, principal, foreign_mix, JobCreateRequest(job_type="ANALYSIS"))
+
+
+@pytest.mark.parametrize("unsupported_type", ["RESTORATION", "EXPORT"])
+def test_enqueue_rejects_job_types_without_registered_worker_handlers(db, principal, mix, unsupported_type):
+    """Queue routing must not masquerade as an executable worker registration."""
+    from api.app.services.job_commands import UnsupportedJobTypeError
+
+    with pytest.raises(UnsupportedJobTypeError):
+        enqueue_job(db, principal, mix, JobCreateRequest(job_type=unsupported_type))
+
+    assert db.query(Job).count() == 0
+    assert db.query(OutboxMessage).count() == 0
 
 
 def test_worker_scope_and_cancellation_checks_are_authoritative(db, principal, mix):
@@ -193,7 +334,7 @@ def test_dispatch_marks_outbox_delivered_only_after_broker_accepts(db, principal
     assert outbox.delivered_at is not None
     assert outbox.delivery_attempts == 1
     assert db.get(Job, job.id).celery_task_id == "broker-task-id"
-    assert calls[0][1]["args"] == [job.id, principal.project_id]
+    assert calls[0][1]["args"] == [job.id, principal.project_id, 1]
     assert calls[0][1]["queue"] == "dsp-heavy"
     assert calls[0][0][0] == "tasks.run_master_mix"
 
@@ -233,6 +374,17 @@ def test_master_worker_records_immutable_stage_report(db, principal, mix, monkey
     assert stage.status.value == "COMPLETED"
     assert report["artifact_key"].startswith("projects/project-a/artifacts/mastered/v1/")
     assert (tmp_path / report["artifact_key"]).is_file()
+    mastered = db.scalar(
+        select(Artifact).where(
+            Artifact.mix_id == mix.id,
+            Artifact.project_id == principal.project_id,
+            Artifact.role == "mastered",
+        )
+    )
+    assert mastered is not None
+    assert mastered.key == report["artifact_key"]
+    assert mastered.sha256 == report["artifact_key"].rsplit("/", 1)[-1]
+    assert mastered.media_type == "audio/wav"
 
 
 def test_analysis_worker_persists_owner_scoped_metadata_and_waveform_artifacts(db, principal, mix, monkeypatch, tmp_path):
@@ -278,6 +430,147 @@ def test_analysis_worker_persists_owner_scoped_metadata_and_waveform_artifacts(d
     assert by_role["metadata"].report["suggested_download_name"].endswith(".wav")
     assert (tmp_path / by_role["metadata"].key).is_file()
     assert (tmp_path / by_role["waveform"].key).is_file()
+
+
+def test_analysis_publication_rolls_back_as_one_unit_when_terminal_transition_loses(
+    db, principal, mix, monkeypatch, tmp_path
+):
+    """A cancelled/crashed replacement must preserve the last successful analysis."""
+    import worker.tasks as worker_tasks
+    from api.app.models.analysis import AnalysisResult
+    from api.app.models.tracklist import TrackSegment
+    from api.app.models.transition import TransitionEvent
+    from tests.fixtures.synthetic_audio import generate_synthetic_audio
+
+    source_key = "projects/project-a/artifacts/source/v1/" + "7" * 64
+    source_path = tmp_path / source_key
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(generate_synthetic_audio(duration_sec=2.0, bpm=150.0))
+    mix.media_asset.storage_path = source_key
+    mix.media_asset.sha256_hash = "7" * 64
+    mix.media_asset.file_size_bytes = source_path.stat().st_size
+    mix.media_asset.mime_type = "audio/wav"
+    db.add_all(
+        [
+            AnalysisResult(
+                id=f"analysis_{mix.id}",
+                mix_id=mix.id,
+                media_asset_id=mix.media_asset.id,
+                primary_bpm=123.0,
+                bpm_confidence=0.9,
+                bpm_candidates="[]",
+                detected_key="C",
+                camelot_code="8B",
+                key_confidence=0.9,
+                integrated_lufs=-14.0,
+                loudness_range_lra=6.0,
+                true_peak_db=-1.0,
+                spectral_summary="{}",
+                quality_findings="[]",
+            ),
+            TrackSegment(
+                id="previous-track",
+                mix_id=mix.id,
+                segment_index=0,
+                start_time_seconds=0.0,
+                end_time_seconds=30.0,
+                duration_seconds=30.0,
+                confidence=0.9,
+            ),
+            TransitionEvent(
+                id="previous-transition",
+                mix_id=mix.id,
+                transition_index=0,
+                start_time_seconds=10.0,
+                end_time_seconds=20.0,
+                cue_in_time=10.0,
+                cue_out_time=20.0,
+                transition_type="SMOOTH_BLEND",
+                energy_delta=0.0,
+                tempo_shift_bpm=0.0,
+                camelot_compatibility="PERFECT_MATCH",
+                confidence=0.9,
+            ),
+            Artifact(
+                id="previous-analysis-report",
+                project_id=principal.project_id,
+                mix_id=mix.id,
+                role="metadata",
+                key="projects/project-a/artifacts/metadata/v0/" + "6" * 64,
+                sha256="6" * 64,
+                algorithm_version="v0",
+                media_type="application/json",
+                byte_length=2,
+                report={"generation": "previous"},
+            ),
+        ]
+    )
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+
+    class ReplacementOrchestrator:
+        def __init__(self, *_args):
+            pass
+
+        def execute_pipeline(self, progress_callback):
+            progress_callback(60.0, "Replacement analysis")
+            return {
+                "primary_bpm": 150.0,
+                "bpm_confidence": 1.0,
+                "bpm_candidates": [],
+                "detected_key": "A",
+                "camelot_code": "11A",
+                "key_confidence": 1.0,
+                "integrated_lufs": -10.0,
+                "loudness_range_lra": 4.0,
+                "true_peak_db": -0.8,
+                "spectral_summary": {},
+                "quality_findings": [],
+                "track_segments": [
+                    {
+                        "segment_index": 0,
+                        "start_time_seconds": 0.0,
+                        "end_time_seconds": 60.0,
+                        "duration_seconds": 60.0,
+                        "fingerprint": "replacement",
+                        "confidence": 1.0,
+                        "match": None,
+                    }
+                ],
+                "transitions": [
+                    {
+                        "transition_index": 0,
+                        "start_time_seconds": 20.0,
+                        "end_time_seconds": 30.0,
+                        "cue_in_time": 20.0,
+                        "cue_out_time": 30.0,
+                        "transition_type": "CUT",
+                        "energy_delta": 1.0,
+                        "tempo_shift_bpm": 2.0,
+                        "camelot_compatibility": "ENERGY_BOOST",
+                        "confidence": 1.0,
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", lambda: db)
+    monkeypatch.setattr(worker_tasks, "STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker_tasks, "publish_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker_tasks, "AudioAnalysisOrchestrator", ReplacementOrchestrator)
+    monkeypatch.setattr(worker_tasks, "complete_job_attempt", lambda *_args, **_kwargs: False)
+
+    assert worker_tasks.run_analysis_pipeline.run(job.id, principal.project_id)["status"] == "cancelled"
+
+    db.expire_all()
+    assert db.get(AnalysisResult, f"analysis_{mix.id}").primary_bpm == 123.0
+    assert [row.id for row in db.scalars(select(TrackSegment).where(TrackSegment.mix_id == mix.id))] == [
+        "previous-track"
+    ]
+    assert [row.id for row in db.scalars(select(TransitionEvent).where(TransitionEvent.mix_id == mix.id))] == [
+        "previous-transition"
+    ]
+    attached = db.scalars(select(Artifact).where(Artifact.mix_id == mix.id)).all()
+    assert [row.id for row in attached] == ["previous-analysis-report"]
 
 
 def test_shared_source_artifacts_attach_to_each_mix_without_rewriting_object(db, principal, mix, monkeypatch, tmp_path):

@@ -265,3 +265,33 @@ def test_terminal_batch_child_refreshes_parent_and_redelivers_one_waiting_child(
         assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == jobs[1].id).count() == 2
     finally:
         db.close()
+
+
+def test_cancelling_running_batch_child_redelivers_one_waiting_child(client, token, owned_mix_ids):
+    """Cancellation frees a persisted slot and must advance the waiting queue."""
+    test_client, session_factory = client
+    batch = _create_batch(test_client, token, owned_mix_ids, max_parallelism=1)
+    db = session_factory()
+    try:
+        jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
+        running, waiting = jobs
+        assert claim_job_attempt(db, running.id, "worker-a", "project-a") is not None
+        db.commit()
+        running_id = running.id
+        waiting_id = waiting.id
+        assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == waiting_id).count() == 1
+    finally:
+        db.close()
+
+    response = test_client.post(
+        f"/api/v1/jobs/{running_id}/cancel",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+
+    db = session_factory()
+    try:
+        assert db.get(Job, running_id).status is JobStatus.CANCELLED
+        assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == waiting_id).count() == 2
+    finally:
+        db.close()

@@ -59,6 +59,14 @@ class UploadSession(Base):
     sha256_hash = Column(String(64), nullable=True)
     content_type = Column(String(100), default="application/octet-stream", nullable=False)
     quarantine_key = Column(String(512), default="", nullable=False)
+    # Upload completion is a recoverable two-phase operation.  Rows remain
+    # non-complete until their validated quarantine object is durably present
+    # at ``final_key``; a retry can then finish promotion without exposing a
+    # mix that points at missing bytes.
+    promotion_state = Column(String(32), default="NONE", nullable=False)
+    final_key = Column(String(512), nullable=True)
+    media_asset_id = Column(String(36), ForeignKey("media_assets.id"), nullable=True)
+    mix_id = Column(String(36), ForeignKey("mixes.id"), nullable=True)
     expires_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     # Kept only to allow the migration to leave old rows inspectable.  New
     # uploads never persist or consume an absolute filesystem path.

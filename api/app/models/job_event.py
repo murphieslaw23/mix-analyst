@@ -16,6 +16,7 @@ class JobEvent(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
     job_id = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
     sequence = Column(Integer, nullable=False)
     event_type = Column(String(100), nullable=False)
     payload = Column(JSON, nullable=False)

@@ -30,10 +30,14 @@ celery_app.conf.update(
     task_routes={
         "tasks.run_analysis_pipeline": {"queue": "analysis-cpu"},
         "tasks.run_master_mix": {"queue": "dsp-heavy"},
-        "tasks.run_dsp_pipeline": {"queue": "dsp-heavy"},
-        "tasks.fetch_metadata": {"queue": "metadata-network"},
-        "tasks.run_export": {"queue": "exports"},
+        "tasks.cleanup_expired_uploads": {"queue": "metadata-network"},
     },
     task_publish_retry=True,
     task_publish_retry_policy={"max_retries": 3, "interval_start": 0, "interval_step": 0.2, "interval_max": 1},
+    beat_schedule={
+        "cleanup-expired-uploads": {
+            "task": "tasks.cleanup_expired_uploads",
+            "schedule": 15 * 60,
+        }
+    },
 )

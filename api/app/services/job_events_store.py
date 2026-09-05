@@ -22,9 +22,16 @@ def record_job_event(db: Session, job: Job, event_type: str, payload: dict) -> J
         .values(event_sequence=Job.event_sequence + 1)
         .returning(Job.event_sequence)
     ).scalar_one()
+    attempt_number = db.scalar(
+        select(JobAttempt.attempt_number)
+        .where(JobAttempt.job_id == job.id)
+        .order_by(JobAttempt.attempt_number.desc())
+        .limit(1)
+    )
     event = JobEvent(
         project_id=job.project_id,
         job_id=job.id,
+        attempt_number=attempt_number or 1,
         sequence=sequence,
         event_type=event_type,
         payload=payload,
@@ -41,6 +48,7 @@ def request_cancellation(db: Session, job: Job) -> Job:
     status.  The cancellation event is committed in the same transaction as
     that state change, so replay always represents the winning terminal state.
     """
+    finish_time = datetime.now(timezone.utc)
     result = db.execute(
         update(Job)
         .where(
@@ -51,13 +59,24 @@ def request_cancellation(db: Session, job: Job) -> Job:
         .values(
             status=JobStatus.CANCELLED,
             error_message="Cancelled by user request",
-            finished_at=datetime.now(timezone.utc),
+            finished_at=finish_time,
         )
     )
     if result.rowcount != 1:
         db.refresh(job)
         return job
 
+    # Terminalize the active lease before a retry can create a newer attempt.
+    db.execute(
+        update(JobAttempt)
+        .where(JobAttempt.job_id == job.id, JobAttempt.status == JobStatus.RUNNING)
+        .values(
+            status=JobStatus.CANCELLED,
+            error_details="Cancelled by user request",
+            finished_at=finish_time,
+            lease_expires_at=finish_time,
+        )
+    )
     db.refresh(job)
     record_job_event(
         db,
@@ -74,7 +93,14 @@ def request_cancellation(db: Session, job: Job) -> Job:
     return job
 
 
-def complete_job_attempt(db: Session, job_id: str, project_id: str, worker_name: str) -> bool:
+def complete_job_attempt(
+    db: Session,
+    job_id: str,
+    project_id: str,
+    worker_name: str,
+    attempt_number: int | None = None,
+    claim_token: str | None = None,
+) -> bool:
     """Finalize only the running attempt claimed by this trusted worker.
 
     The owning project and claim identity are part of the terminal transition
@@ -82,13 +108,16 @@ def complete_job_attempt(db: Session, job_id: str, project_id: str, worker_name:
     this transaction so a worker cannot commit a terminal state without a
     replayable terminal event.
     """
-    claimed_attempt = exists(
-        select(JobAttempt.id).where(
-            JobAttempt.job_id == job_id,
-            JobAttempt.status == JobStatus.RUNNING,
-            JobAttempt.worker_hostname == worker_name,
-        )
-    )
+    claimed_attempt_conditions = [
+        JobAttempt.job_id == job_id,
+        JobAttempt.status == JobStatus.RUNNING,
+        JobAttempt.worker_hostname == worker_name,
+    ]
+    if attempt_number is not None:
+        claimed_attempt_conditions.append(JobAttempt.attempt_number == attempt_number)
+    if claim_token is not None:
+        claimed_attempt_conditions.append(JobAttempt.claim_token == claim_token)
+    claimed_attempt = exists(select(JobAttempt.id).where(*claimed_attempt_conditions))
     completed_job_id = db.execute(
         update(Job)
         .where(
@@ -108,13 +137,18 @@ def complete_job_attempt(db: Session, job_id: str, project_id: str, worker_name:
     if completed_job_id is None:
         return False
 
+    completed_attempt_conditions = [
+        JobAttempt.job_id == completed_job_id,
+        JobAttempt.status == JobStatus.RUNNING,
+        JobAttempt.worker_hostname == worker_name,
+    ]
+    if attempt_number is not None:
+        completed_attempt_conditions.append(JobAttempt.attempt_number == attempt_number)
+    if claim_token is not None:
+        completed_attempt_conditions.append(JobAttempt.claim_token == claim_token)
     completed_attempt_id = db.execute(
         update(JobAttempt)
-        .where(
-            JobAttempt.job_id == completed_job_id,
-            JobAttempt.status == JobStatus.RUNNING,
-            JobAttempt.worker_hostname == worker_name,
-        )
+        .where(*completed_attempt_conditions)
         .values(status=JobStatus.SUCCEEDED, finished_at=datetime.now(timezone.utc))
         .returning(JobAttempt.id)
     ).scalar_one_or_none()

@@ -7,7 +7,7 @@ from ..deps import get_current_principal, require_owned_job, require_owned_mix
 from ...models.job import JobStatus
 from ...schemas.job import JobOut, JobCreateRequest
 from ...schemas.auth import CurrentPrincipal
-from ...services.job_commands import enqueue_job, enqueue_retry
+from ...services.job_commands import UnsupportedJobTypeError, enqueue_job, enqueue_retry
 from ...services.job_events import event_notification, publish_event, stream_job_events
 from ...services.job_events_store import request_cancellation
 from ...services.batches import recompute_batch_status
@@ -25,7 +25,10 @@ def create_mix_job(
     """Dispatch an asynchronous analysis/processing job for a mix."""
     mix = require_owned_mix(db, principal, mix_id)
 
-    job = enqueue_job(db, principal, mix, req)
+    try:
+        job = enqueue_job(db, principal, mix, req)
+    except UnsupportedJobTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     db.commit()
     db.refresh(job)
     return job
@@ -80,7 +83,12 @@ def cancel_job(
 
     job = request_cancellation(db, job)
     if job.batch_id is not None:
-        recompute_batch_status(db, job.batch_id)
+        # A running child occupies a durable batch slot. Cancellation releases
+        # it synchronously so one waiting sibling receives a fresh outbox
+        # command instead of remaining queued until unrelated work finishes.
+        from ...services.batches import advance_batch_after_terminal_job
+
+        advance_batch_after_terminal_job(db, job.id, job.project_id)
     db.commit()
     db.refresh(job)
     cancellation_event = job.events[-1] if was_cancellable and job.events else None

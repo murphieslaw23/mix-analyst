@@ -76,6 +76,12 @@ class JobAttempt(Base):
     attempt_number = Column(Integer, default=1, nullable=False)
     status = Column(SQLEnum(JobStatus), default=JobStatus.RUNNING, nullable=False)
     worker_hostname = Column(String(255), nullable=True)
+    # A worker lease is a fencing token, not merely a host name.  A redelivered
+    # task may reclaim an abandoned attempt after its lease expires, while an
+    # old process can no longer complete or heartbeat the replacement claim.
+    claim_token = Column(String(64), nullable=True, index=True)
+    last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     error_details = Column(Text, nullable=True)
     started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     finished_at = Column(DateTime(timezone=True), nullable=True)

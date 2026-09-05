@@ -215,6 +215,84 @@ def test_sse_replays_event_committed_during_redis_subscription(event_client, job
     assert "SUCCEEDED" in events[1]
 
 
+def test_sse_does_not_close_on_a_terminal_event_from_an_earlier_attempt(event_client, job, monkeypatch):
+    """A retry stream must continue past attempt one's terminal event to attempt two."""
+    from api.app.services import job_events
+    from api.app.services.job_commands import enqueue_retry
+    from api.app.services.job_events_store import record_job_event
+
+    _, session_factory = event_client
+    seed_db = session_factory()
+    try:
+        persisted_job = seed_db.get(Job, job.id)
+        first_attempt = seed_db.get(JobAttempt, "attempt-a")
+        persisted_job.status = JobStatus.FAILED
+        first_attempt.status = JobStatus.FAILED
+        first_attempt.finished_at = persisted_job.finished_at
+        first_terminal = record_job_event(
+            seed_db,
+            persisted_job,
+            "update",
+            {"job_id": job.id, "status": "FAILED"},
+        )
+        seed_db.commit()
+        assert enqueue_retry(seed_db, persisted_job) is not None
+        seed_db.commit()
+        assert first_terminal.attempt_number == 1
+    finally:
+        seed_db.close()
+
+    class FakePubSub:
+        async def subscribe(self, _channel):
+            writer_db = session_factory()
+            try:
+                retried_job = writer_db.get(Job, job.id)
+                retried_attempt = writer_db.scalar(
+                    select(JobAttempt)
+                    .where(JobAttempt.job_id == job.id, JobAttempt.attempt_number == 2)
+                )
+                retried_job.status = JobStatus.SUCCEEDED
+                retried_attempt.status = JobStatus.SUCCEEDED
+                record_job_event(
+                    writer_db,
+                    retried_job,
+                    "update",
+                    {"job_id": job.id, "status": "SUCCEEDED"},
+                )
+                writer_db.commit()
+            finally:
+                writer_db.close()
+
+        async def get_message(self, **_kwargs):
+            return None
+
+        async def unsubscribe(self, _channel):
+            return None
+
+    class FakeRedis:
+        def pubsub(self):
+            return FakePubSub()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(job_events.aioredis, "from_url", lambda *_args, **_kwargs: FakeRedis())
+
+    async def collect_until_closed():
+        stream_db = session_factory()
+        try:
+            return [event async for event in job_events.stream_job_events(stream_db, "project-a", job.id)]
+        finally:
+            stream_db.close()
+
+    events = asyncio.run(collect_until_closed())
+    payload = "".join(events)
+    assert "FAILED" in payload
+    assert "SUCCEEDED" in payload
+    assert '"attempt_number": 1' in payload
+    assert '"attempt_number": 2' in payload
+
+
 def test_event_stream_requires_ownership_before_replay(event_client, job_with_succeeded_event):
     client, _ = event_client
     foreign_token = _bearer_token("user-b", "project-b")
@@ -257,8 +335,12 @@ def test_cancelled_job_cannot_be_overwritten_by_late_worker(event_client, job):
 
         assert complete_job_attempt(db, cancelled_job.id, "project-a", "worker-a") is False
         assert db.get(Job, job.id).status is JobStatus.CANCELLED
+        cancelled_attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == job.id))
+        assert cancelled_attempt.status is JobStatus.CANCELLED
+        assert cancelled_attempt.finished_at is not None
         cancellation_event = db.scalar(select(JobEvent).where(JobEvent.job_id == job.id))
         assert cancellation_event.sequence == 1
+        assert cancellation_event.attempt_number == 1
         assert cancellation_event.payload["status"] == "CANCELLED"
     finally:
         db.close()

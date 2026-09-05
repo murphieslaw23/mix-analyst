@@ -1,12 +1,21 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.app.config import settings
 from api.app.api.v1 import batches, health, uploads, jobs, metrics, mixes, mastering
 import api.app.models  # noqa: F401 - registers the complete SQLAlchemy metadata
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    settings.validate_deployment_auth()
+    yield
+
+
 app = FastAPI(
     title=settings.app_name,
     openapi_url=f"{settings.api_v1_prefix}/openapi.json",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

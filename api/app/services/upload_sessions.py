@@ -170,8 +170,14 @@ def append_chunk(
                 raise UploadOffsetConflictError(
                     f"Offset mismatch: expected offset {upload.offset}, got {offset}"
                 )
-            if storage.object_size(upload.quarantine_key) != upload.offset:
-                raise UploadLifecycleError("Quarantine object does not match its authoritative offset")
+            object_size = storage.object_size(upload.quarantine_key)
+            if object_size < upload.offset:
+                raise UploadLifecycleError("Quarantine object is missing committed upload bytes")
+            if object_size > upload.offset:
+                # Recover the fsync-before-commit crash window.  The database
+                # offset is authoritative, so discard the uncommitted tail and
+                # append the caller's retry at the requested offset.
+                storage.truncate_object(upload.quarantine_key, upload.offset)
             remaining = upload.total_size_bytes - upload.offset
             if remaining <= 0:
                 raise UploadStateError("Upload already contains its declared byte length")
@@ -210,11 +216,36 @@ def finalize_upload(
     title: str | None = None,
     artist: str | None = None,
 ) -> FinalizedUpload:
-    """Validate a complete quarantine object and promote it after DB commit."""
+    """Validate then complete a recoverable, two-phase object promotion.
+
+    The initial database transaction creates a non-visible ``finalizing`` mix
+    and marks the upload ``PENDING``.  Only a later transaction marks it
+    complete after the immutable object is present.  A crash in between is
+    safely resumed by another completion request instead of exposing a mix
+    whose storage key does not exist.
+    """
+    probe_result: AudioProbeResult | None = None
+    quarantine_key: str | None = None
     cleanup_key: str | None = None
+    pending_media_asset_id: str | None = None
+    pending_mix_id: str | None = None
+    final_key: str | None = None
+
     with db.begin():
         upload = _locked_owned_upload(db, principal, session_id)
-        if _is_expired(upload):
+        if upload.promotion_state == "PROMOTED" and upload.media_asset_id and upload.mix_id:
+            return FinalizedUpload(
+                media_asset=db.get(MediaAsset, upload.media_asset_id),
+                mix=db.get(Mix, upload.mix_id),
+            )
+        if upload.promotion_state == "PENDING" and upload.final_key and upload.media_asset_id and upload.mix_id:
+            # A prior caller already validated bytes and committed durable
+            # references; do not reprobe or create a duplicate mix.
+            quarantine_key = upload.quarantine_key
+            final_key = upload.final_key
+            pending_media_asset_id = upload.media_asset_id
+            pending_mix_id = upload.mix_id
+        elif _is_expired(upload):
             upload.status = UploadStatus.ABORTED
             cleanup_key = upload.quarantine_key
         else:
@@ -230,87 +261,99 @@ def finalize_upload(
         storage.delete_object(cleanup_key)
         raise UploadExpiredError("Upload session has expired")
 
-    try:
-        probe_result: AudioProbeResult = probe_audio(storage.object_path(quarantine_key))
-        sha256_hash = storage.compute_sha256(quarantine_key)
-    except (AudioProbeError, OSError, ValueError) as exc:
-        failed_key = _mark_failed(db, principal, session_id)
-        if failed_key:
-            storage.delete_object(failed_key)
-        raise UploadValidationError(f"Invalid audio format: {exc}") from exc
+    if final_key is None:
+        assert quarantine_key is not None
+        try:
+            probe_result = probe_audio(storage.object_path(quarantine_key))
+            sha256_hash = storage.compute_sha256(quarantine_key)
+        except (AudioProbeError, OSError, ValueError) as exc:
+            failed_key = _mark_failed(db, principal, session_id)
+            if failed_key:
+                storage.delete_object(failed_key)
+            # Probe diagnostics can include absolute paths and ffprobe stderr.
+            raise UploadValidationError("Uploaded file is not valid audio") from exc
 
-    final_key = derived_object_key(principal.project_id, sha256_hash, "source", "v1")
-    with db.begin():
-        upload = _locked_owned_upload(db, principal, session_id)
-        _assert_appendable(upload)
-        if upload.offset != upload.total_size_bytes or storage.object_size(upload.quarantine_key) != upload.offset:
-            raise UploadLifecycleError("Upload changed during finalization")
-        existing_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
-        is_deduplicated = existing_asset is not None
-        if existing_asset is None:
-            try:
-                # A second same-project finalization can select before the
-                # first transaction commits. Keep its unique-key collision to
-                # a savepoint so the outer transaction can reuse the winner.
-                with db.begin_nested():
-                    media_asset = MediaAsset(
-                        project_id=principal.project_id,
-                        original_filename=upload.filename,
-                        storage_path=final_key,
-                        file_size_bytes=upload.total_size_bytes,
-                        sha256_hash=sha256_hash,
-                        mime_type=upload.content_type,
-                        duration_seconds=probe_result.duration_seconds,
-                        sample_rate=probe_result.sample_rate,
-                        channels=probe_result.channels,
-                        codec=probe_result.codec,
-                        bit_rate=probe_result.bit_rate,
-                        format_name=probe_result.format_name,
-                    )
-                    db.add(media_asset)
-                    db.flush()
-            except IntegrityError:
-                media_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
-                if media_asset is None:
-                    raise UploadLifecycleError("Final asset conflict could not be resolved") from None
-                is_deduplicated = True
-        else:
-            media_asset = existing_asset
-        mix = Mix(
-            project_id=principal.project_id,
-            title=title.strip() if title and title.strip() else Path(upload.filename).stem,
-            artist=artist.strip() if artist and artist.strip() else None,
-            media_asset_id=media_asset.id,
-            status="ready",
-        )
-        db.add(mix)
-        db.flush()
-        upload.sha256_hash = sha256_hash
-        upload.status = UploadStatus.COMPLETED
-        quarantine_key = upload.quarantine_key
-        media_asset_id = media_asset.id
-        mix_id = mix.id
+        final_key = derived_object_key(principal.project_id, sha256_hash, "source", "v1")
+        with db.begin():
+            upload = _locked_owned_upload(db, principal, session_id)
+            _assert_appendable(upload)
+            if upload.offset != upload.total_size_bytes or storage.object_size(upload.quarantine_key) != upload.offset:
+                raise UploadLifecycleError("Upload changed during finalization")
+            existing_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
+            if existing_asset is None:
+                try:
+                    # A same-project concurrent finalization may win after our
+                    # initial lookup.  Reuse the durable unique-key winner.
+                    with db.begin_nested():
+                        media_asset = MediaAsset(
+                            project_id=principal.project_id,
+                            original_filename=upload.filename,
+                            storage_path=final_key,
+                            file_size_bytes=upload.total_size_bytes,
+                            sha256_hash=sha256_hash,
+                            mime_type=upload.content_type,
+                            duration_seconds=probe_result.duration_seconds,
+                            sample_rate=probe_result.sample_rate,
+                            channels=probe_result.channels,
+                            codec=probe_result.codec,
+                            bit_rate=probe_result.bit_rate,
+                            format_name=probe_result.format_name,
+                        )
+                        db.add(media_asset)
+                        db.flush()
+                except IntegrityError:
+                    media_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
+                    if media_asset is None:
+                        raise UploadLifecycleError("Final asset conflict could not be resolved") from None
+            else:
+                media_asset = existing_asset
+            mix = Mix(
+                project_id=principal.project_id,
+                title=title.strip() if title and title.strip() else Path(upload.filename).stem,
+                artist=artist.strip() if artist and artist.strip() else None,
+                media_asset_id=media_asset.id,
+                status="finalizing",
+            )
+            db.add(mix)
+            db.flush()
+            upload.sha256_hash = sha256_hash
+            upload.final_key = final_key
+            upload.media_asset_id = media_asset.id
+            upload.mix_id = mix.id
+            upload.promotion_state = "PENDING"
+            pending_media_asset_id = media_asset.id
+            pending_mix_id = mix.id
 
+    assert quarantine_key is not None and final_key is not None
+    assert pending_media_asset_id is not None and pending_mix_id is not None
     try:
-        if is_deduplicated:
+        if storage.object_exists(final_key):
+            # A deduplicated winner already owns the object; this session only
+            # needs to discard its quarantine copy.
             storage.delete_object(quarantine_key)
         else:
             storage.promote(quarantine_key, final_key)
     except OSError as exc:
-        with db.begin():
-            upload = _locked_owned_upload(db, principal, session_id)
-            upload.status = UploadStatus.FAILED
-            failed_mix = db.get(Mix, mix_id)
-            if failed_mix is not None:
-                db.delete(failed_mix)
-            if not is_deduplicated:
-                failed_asset = db.get(MediaAsset, media_asset_id)
-                if failed_asset is not None:
-                    db.delete(failed_asset)
+        # Keep PENDING state and finalizing references intact for a retry or
+        # trusted reconciliation task.  Nothing points to the absent object as
+        # a ready result.
         raise UploadLifecycleError("Could not promote validated upload") from exc
 
-    # Rehydrate from the committed rows; callers never need a filesystem path.
-    return FinalizedUpload(media_asset=db.get(MediaAsset, media_asset_id), mix=db.get(Mix, mix_id))
+    with db.begin():
+        upload = _locked_owned_upload(db, principal, session_id)
+        if upload.promotion_state != "PENDING" or upload.final_key != final_key:
+            raise UploadLifecycleError("Upload promotion state changed unexpectedly")
+        if not storage.object_exists(final_key):
+            raise UploadLifecycleError("Promoted upload object is unavailable")
+        mix = db.get(Mix, pending_mix_id)
+        media_asset = db.get(MediaAsset, pending_media_asset_id)
+        if mix is None or media_asset is None or mix.project_id != principal.project_id:
+            raise UploadLifecycleError("Upload promotion references are unavailable")
+        mix.status = "ready"
+        upload.status = UploadStatus.COMPLETED
+        upload.promotion_state = "PROMOTED"
+
+    return FinalizedUpload(media_asset=db.get(MediaAsset, pending_media_asset_id), mix=db.get(Mix, pending_mix_id))
 
 
 def cleanup_expired_uploads(
@@ -325,6 +368,7 @@ def cleanup_expired_uploads(
         select(UploadSession.id).where(
             UploadSession.project_id == project_id,
             UploadSession.status.in_((UploadStatus.PENDING, UploadStatus.UPLOADING)),
+            UploadSession.promotion_state != "PENDING",
             UploadSession.expires_at <= cutoff,
         )
     ).all()
@@ -337,10 +381,92 @@ def cleanup_expired_uploads(
                 .where(UploadSession.id == session_id, UploadSession.project_id == project_id)
                 .with_for_update()
             )
-            if upload is not None and upload.status in {UploadStatus.PENDING, UploadStatus.UPLOADING} and _is_expired(upload, cutoff):
+            if (
+                upload is not None
+                and upload.promotion_state != "PENDING"
+                and upload.status in {UploadStatus.PENDING, UploadStatus.UPLOADING}
+                and _is_expired(upload, cutoff)
+            ):
                 upload.status = UploadStatus.ABORTED
                 if upload.quarantine_key:
                     cleanup_keys.append(upload.quarantine_key)
     for key in cleanup_keys:
         storage.delete_object(key)
     return len(cleanup_keys)
+
+
+def cleanup_expired_uploads_global(
+    db: Session,
+    storage: StorageService,
+    now: datetime | None = None,
+) -> int:
+    """Trusted maintenance cleanup across every project.
+
+    Tenant requests still perform their own opportunistic cleanup, but this
+    path is intended for a scheduler so an abandoned project cannot retain
+    quarantine bytes indefinitely just because it never uploads again.
+    """
+    cutoff = now or _now()
+    expired_ids = db.scalars(
+        select(UploadSession.id).where(
+            UploadSession.status.in_((UploadStatus.PENDING, UploadStatus.UPLOADING)),
+            UploadSession.promotion_state != "PENDING",
+            UploadSession.expires_at <= cutoff,
+        )
+    ).all()
+    db.rollback()
+    cleanup_keys: list[str] = []
+    for session_id in expired_ids:
+        with db.begin():
+            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
+            if (
+                upload is not None
+                and upload.promotion_state != "PENDING"
+                and upload.status in {UploadStatus.PENDING, UploadStatus.UPLOADING}
+                and _is_expired(upload, cutoff)
+            ):
+                upload.status = UploadStatus.ABORTED
+                if upload.quarantine_key:
+                    cleanup_keys.append(upload.quarantine_key)
+    for key in cleanup_keys:
+        storage.delete_object(key)
+    return len(cleanup_keys)
+
+
+def reconcile_pending_upload_promotions(db: Session, storage: StorageService) -> int:
+    """Finish validated PENDING promotions after process crashes or outages."""
+    pending_ids = db.scalars(
+        select(UploadSession.id).where(
+            UploadSession.promotion_state == "PENDING",
+            UploadSession.final_key.is_not(None),
+            UploadSession.media_asset_id.is_not(None),
+            UploadSession.mix_id.is_not(None),
+        )
+    ).all()
+    db.rollback()
+    completed = 0
+    for session_id in pending_ids:
+        with db.begin():
+            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
+            if upload is None or upload.promotion_state != "PENDING" or not upload.final_key:
+                continue
+            quarantine_key, final_key = upload.quarantine_key, upload.final_key
+        try:
+            if storage.object_exists(final_key):
+                storage.delete_object(quarantine_key)
+            else:
+                storage.promote(quarantine_key, final_key)
+        except OSError:
+            continue
+        with db.begin():
+            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
+            if upload is None or upload.promotion_state != "PENDING" or upload.final_key != final_key:
+                continue
+            mix = db.get(Mix, upload.mix_id)
+            if mix is None or not storage.object_exists(final_key):
+                continue
+            mix.status = "ready"
+            upload.status = UploadStatus.COMPLETED
+            upload.promotion_state = "PROMOTED"
+            completed += 1
+    return completed
