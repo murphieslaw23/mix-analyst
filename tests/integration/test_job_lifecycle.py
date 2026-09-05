@@ -223,6 +223,78 @@ def test_attempt_heartbeat_extends_lease_and_fences_the_previous_claim(db, princ
     ) is None
 
 
+def test_expired_lease_fences_terminal_transitions_and_publication(db, principal, mix, monkeypatch, tmp_path):
+    """A paused worker cannot finish, fail, or attach output after its lease ends."""
+    from api.app.services.job_events_store import complete_job_attempt
+    from worker.tasks import transition_job_and_attempt
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    claimed_at = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    db.commit()
+    attempt = claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="expired-token",
+        now=claimed_at,
+        lease_seconds=1,
+    )
+    assert attempt is not None
+    db.commit()
+
+    expired_at = claimed_at + timedelta(seconds=2)
+    assert complete_job_attempt(
+        db,
+        job.id,
+        principal.project_id,
+        "worker-a",
+        1,
+        "expired-token",
+        now=expired_at,
+    ) is False
+    assert transition_job_and_attempt(
+        db, job.id, principal.project_id, "worker-a", JobStatus.FAILED, "too late", 1, "expired-token"
+    ) is False
+    db.rollback()
+
+    # Exercise the worker's final publication boundary. The stage may have
+    # written immutable bytes, but the expired attempt must not attach an
+    # artifact record that would make those bytes user-visible.
+    import worker.tasks as worker_tasks
+    from worker.dsp.mastering import MasterResult
+
+    source_key = "projects/project-a/artifacts/source/v1/" + "d" * 64
+    source = tmp_path / source_key
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"source")
+    mix.media_asset.storage_path = source_key
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="MASTERING"))
+    mastering_job_id = job.id
+    db.commit()
+
+    def finish_after_losing_lease(_source, settings):
+        key = "projects/project-a/artifacts/mastered/v1/" + "e" * 64
+        output = tmp_path / key
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"master")
+        active = db.scalar(select(JobAttempt).where(JobAttempt.job_id == mastering_job_id))
+        active.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.flush()
+        return MasterResult(key, -9.0, -1.0, settings.algorithm_version)
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", lambda: db)
+    monkeypatch.setattr(worker_tasks, "STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker_tasks, "publish_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker_tasks, "run_master_mix_stage", finish_after_losing_lease)
+    monkeypatch.setattr(db, "close", lambda: None)
+
+    assert worker_tasks.run_master_mix.run(mastering_job_id, principal.project_id)["status"] == "cancelled"
+    assert db.get(Job, mastering_job_id).status is JobStatus.RUNNING
+    assert db.scalar(select(Artifact).where(Artifact.mix_id == mix.id, Artifact.role == "mastered")) is None
+
+
 def test_claim_does_not_replace_cancelled_job(db, principal, mix):
     job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
     db.commit()
@@ -440,6 +512,55 @@ def test_master_worker_records_immutable_stage_report(db, principal, mix, monkey
     assert mastered.key == report["artifact_key"]
     assert mastered.sha256 == report["artifact_key"].rsplit("/", 1)[-1]
     assert mastered.media_type == "audio/wav"
+
+
+def test_master_worker_passes_resolved_profile_controls_into_dsp(db, principal, mix, monkeypatch, tmp_path):
+    """The durable worker must carry the selected preset payload into DSP, not discard it."""
+    import worker.tasks as worker_tasks
+    from worker.dsp.mastering import MasterResult
+
+    source_key = "projects/project-a/artifacts/source/v1/" + "a" * 64
+    source = tmp_path / source_key
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"trusted source")
+    mix.media_asset.storage_path = source_key
+    parameters = {
+        "preset_id": "owned-custom",
+        "target_lufs": -12.0,
+        "true_peak_dbtp": -1.0,
+        "target_lra": 5.5,
+        "eq_settings": {"sub_boost_db": 3.0, "mud_cut_db": -2.0, "high_air_db": 1.5},
+        "compressor_settings": {"threshold_db": -20.0, "ratio": 3.5, "attack_ms": 12.0, "release_ms": 160.0},
+        "algorithm_version": "v1",
+    }
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="MASTERING", parameters=parameters))
+    db.commit()
+    captured = {}
+
+    def capture_profile(_source, settings):
+        captured.update(
+            target_lra=settings.target_lra,
+            eq_settings=dict(settings.eq_settings),
+            compressor_settings=dict(settings.compressor_settings),
+        )
+        key = "projects/project-a/artifacts/mastered/v1/" + "b" * 64
+        output = tmp_path / key
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"mastered")
+        return MasterResult(key, -12.0, -1.0, settings.algorithm_version)
+
+    monkeypatch.setattr(worker_tasks, "SessionLocal", lambda: db)
+    monkeypatch.setattr(worker_tasks, "STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(worker_tasks, "publish_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker_tasks, "run_master_mix_stage", capture_profile)
+    monkeypatch.setattr(db, "close", lambda: None)
+
+    assert worker_tasks.run_master_mix.run(job.id, principal.project_id)["status"] == "ok"
+    assert captured == {
+        "target_lra": 5.5,
+        "eq_settings": {"sub_boost_db": 3.0, "mud_cut_db": -2.0, "high_air_db": 1.5},
+        "compressor_settings": {"threshold_db": -20.0, "ratio": 3.5, "attack_ms": 12.0, "release_ms": 160.0},
+    }
 
 
 def test_analysis_worker_persists_owner_scoped_metadata_and_waveform_artifacts(db, principal, mix, monkeypatch, tmp_path):

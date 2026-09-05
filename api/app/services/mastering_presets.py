@@ -61,7 +61,11 @@ def resolve_mastering_parameters(
         preset = db.scalar(
             select(MasteringPreset).where(
                 MasteringPreset.id == selected_id,
-                or_(MasteringPreset.is_builtin.is_(True), MasteringPreset.project_id == principal.project_id),
+                or_(
+                    MasteringPreset.is_builtin.is_(True),
+                    MasteringPreset.is_legacy_shared.is_(True),
+                    MasteringPreset.project_id == principal.project_id,
+                ),
             )
         )
         if preset is None:

@@ -100,6 +100,8 @@ def complete_job_attempt(
     worker_name: str,
     attempt_number: int | None = None,
     claim_token: str | None = None,
+    *,
+    now: datetime | None = None,
 ) -> bool:
     """Finalize only the running attempt claimed by this trusted worker.
 
@@ -108,10 +110,15 @@ def complete_job_attempt(
     this transaction so a worker cannot commit a terminal state without a
     replayable terminal event.
     """
+    finish_time = now or datetime.now(timezone.utc)
     claimed_attempt_conditions = [
         JobAttempt.job_id == job_id,
         JobAttempt.status == JobStatus.RUNNING,
         JobAttempt.worker_hostname == worker_name,
+        # Matching a token is necessary but not sufficient: after this instant
+        # a redelivery may lawfully reclaim the attempt.  Do not let a paused
+        # worker publish a terminal state during that ownership gap.
+        JobAttempt.lease_expires_at > finish_time,
     ]
     if attempt_number is not None:
         claimed_attempt_conditions.append(JobAttempt.attempt_number == attempt_number)
@@ -130,7 +137,7 @@ def complete_job_attempt(
             status=JobStatus.SUCCEEDED,
             progress_percent=100.0,
             current_stage="Complete",
-            finished_at=datetime.now(timezone.utc),
+            finished_at=finish_time,
         )
         .returning(Job.id)
     ).scalar_one_or_none()
@@ -141,6 +148,7 @@ def complete_job_attempt(
         JobAttempt.job_id == completed_job_id,
         JobAttempt.status == JobStatus.RUNNING,
         JobAttempt.worker_hostname == worker_name,
+        JobAttempt.lease_expires_at > finish_time,
     ]
     if attempt_number is not None:
         completed_attempt_conditions.append(JobAttempt.attempt_number == attempt_number)
@@ -149,7 +157,7 @@ def complete_job_attempt(
     completed_attempt_id = db.execute(
         update(JobAttempt)
         .where(*completed_attempt_conditions)
-        .values(status=JobStatus.SUCCEEDED, finished_at=datetime.now(timezone.utc))
+        .values(status=JobStatus.SUCCEEDED, finished_at=finish_time)
         .returning(JobAttempt.id)
     ).scalar_one_or_none()
     if completed_attempt_id is None:

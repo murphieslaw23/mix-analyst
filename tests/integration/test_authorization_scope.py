@@ -4,6 +4,10 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 from datetime import datetime, timezone
 
 import pytest
@@ -22,6 +26,9 @@ from api.app.models.outbox import OutboxMessage
 from api.app.models.artifact import Artifact
 from api.app.services.audio_probe import AudioProbeResult
 from api.app.services.storage import StorageService
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _bearer_token(user_id: str, project_id: str) -> str:
@@ -319,6 +326,44 @@ def test_master_command_rejects_a_preset_owned_by_another_project(client, user_a
         json={"preset_id": "project-b-profile"},
     )
     assert response.status_code == 404
+
+
+def test_upgrade_preserves_unattributable_legacy_custom_preset_as_explicit_shared_profile(tmp_path):
+    """Upgrade from the prior head must not make an old global custom preset unusable."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+    from api.app.schemas.auth import CurrentPrincipal
+    from api.app.services.mastering_presets import resolve_mastering_parameters
+
+    database_url = f"sqlite:///{tmp_path / 'legacy-presets.db'}"
+    environment = os.environ | {"DATABASE_URL": database_url, "PYTHONPATH": str(REPOSITORY_ROOT)}
+    previous = "20260903_10_final_core_repair"
+    upgrade = [sys.executable, "-m", "alembic", "-c", "api/alembic.ini", "upgrade"]
+    assert subprocess.run(
+        [*upgrade, previous], cwd=REPOSITORY_ROOT, env=environment, capture_output=True, text=True
+    ).returncode == 0
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO mastering_presets (id, name, is_builtin) VALUES ('legacy-custom', 'Legacy Custom', 0)")
+        )
+
+    result = subprocess.run([*upgrade, "head"], cwd=REPOSITORY_ROOT, env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    with Session(engine) as session:
+        preset = session.get(MasteringPreset, "legacy-custom")
+        assert preset is not None
+        assert preset.project_id is None
+        assert preset.is_legacy_shared is True
+        resolved = resolve_mastering_parameters(
+            session,
+            CurrentPrincipal(user_id="user-a", project_id="project-a"),
+            "legacy-custom",
+            target_lufs=None,
+            true_peak_dbtp=None,
+        )
+        assert resolved["preset_id"] == "legacy-custom"
 
 
 def test_mix_artifacts_are_presented_as_owner_scoped_metadata(client, user_a_token):

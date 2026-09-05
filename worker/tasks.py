@@ -207,7 +207,8 @@ def transition_job_and_attempt(
                 "AND EXISTS (SELECT 1 FROM job_attempts WHERE job_attempts.job_id = jobs.id "
                 "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name "
                 "AND (:attempt_number IS NULL OR job_attempts.attempt_number = :attempt_number) "
-                "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token)) RETURNING id"
+                "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token) "
+                "AND job_attempts.lease_expires_at > :finish) RETURNING id"
             ),
             {
                 "id": job_id,
@@ -227,7 +228,8 @@ def transition_job_and_attempt(
                 "AND EXISTS (SELECT 1 FROM job_attempts WHERE job_attempts.job_id = jobs.id "
                 "AND job_attempts.status = 'RUNNING' AND job_attempts.worker_hostname = :worker_name "
                 "AND (:attempt_number IS NULL OR job_attempts.attempt_number = :attempt_number) "
-                "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token)) RETURNING id"
+                "AND (:claim_token IS NULL OR job_attempts.claim_token = :claim_token) "
+                "AND job_attempts.lease_expires_at > :finish) RETURNING id"
             ),
             {
                 "id": job_id,
@@ -249,6 +251,7 @@ def transition_job_and_attempt(
             "WHERE job_id = :id AND status = 'RUNNING' AND worker_hostname = :worker_name "
             "AND (:attempt_number IS NULL OR attempt_number = :attempt_number) "
             "AND (:claim_token IS NULL OR claim_token = :claim_token) "
+            "AND lease_expires_at > :finish "
             "AND EXISTS (SELECT 1 FROM jobs "
             "WHERE jobs.id = job_attempts.job_id AND jobs.project_id = :project_id AND jobs.status = :status) "
             "RETURNING id"
@@ -528,6 +531,7 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
         if running_job.job_type.value != "MASTERING":
             raise RuntimeError(f"Job {job_id} is not a mastering command")
         record_job_started(running_job.job_type.value)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         running_event = record_job_event(
             db,
             running_job,
@@ -565,6 +569,9 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
         settings = MasterSettings(
             target_lufs=float(parameters.get("target_lufs", -9.0)),
             true_peak_dbtp=float(parameters.get("true_peak_dbtp", -1.0)),
+            target_lra=float(parameters.get("target_lra", 7.0)),
+            eq_settings=parameters.get("eq_settings") or {},
+            compressor_settings=parameters.get("compressor_settings") or {},
             project_id=project_id,
             storage_root=Path(STORAGE_ROOT),
             algorithm_version=str(parameters.get("algorithm_version", "v1")),
@@ -677,24 +684,13 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
         raise self.retry(exc=exc, countdown=exc.countdown, max_retries=None)
     except JobStopped:
         db.rollback()
-        if stage_id is not None:
-            stage = db.get(StageRun, stage_id)
-            if stage is not None:
-                stage.status = StageStatus.FAILED
-                stage.error_message = "Cancelled before mastering completed"
-                stage.finished_at = datetime.now(timezone.utc)
-                db.commit()
+        # The cancellation/reclaim winner owns terminal bookkeeping. A worker
+        # that just lost its lease must not write a misleading stage failure
+        # after its JobAttempt has been fenced out.
         return {"status": "cancelled", "job_id": job_id}
     except Exception as exc:
         db.rollback()
         record_job_finished("MASTERING", metric_started, "failed")
-        if stage_id is not None:
-            stage = db.get(StageRun, stage_id)
-            if stage is not None:
-                stage.status = StageStatus.FAILED
-                stage.error_message = str(exc)
-                stage.finished_at = datetime.now(timezone.utc)
-                db.commit()
         if not transition_job_and_attempt(
             db,
             job_id,
@@ -707,6 +703,12 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
         ):
             db.rollback()
             return {"status": "cancelled", "job_id": job_id}
+        if stage_id is not None:
+            stage = db.get(StageRun, stage_id)
+            if stage is not None:
+                stage.status = StageStatus.FAILED
+                stage.error_message = str(exc)
+                stage.finished_at = datetime.now(timezone.utc)
         advance_batch_after_terminal_job(db, job_id, project_id)
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
@@ -753,6 +755,7 @@ def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: in
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
         metric_job_type = running_job.job_type.value
         record_job_started(running_job.job_type.value)
+        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
         running_event = record_job_event(
             db,
             running_job,

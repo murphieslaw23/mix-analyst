@@ -6,7 +6,8 @@ import hashlib
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,9 @@ class MasterSettings:
 
     target_lufs: float = -9.0
     true_peak_dbtp: float = -1.0
+    target_lra: float = 7.0
+    eq_settings: Mapping[str, float] = field(default_factory=dict)
+    compressor_settings: Mapping[str, float] = field(default_factory=dict)
     project_id: str = "local"
     storage_root: Path | None = None
     algorithm_version: str = ALGORITHM_VERSION
@@ -31,6 +35,10 @@ class MasterSettings:
             raise ValueError("target_lufs must be between -36 and -3")
         if not -12.0 <= self.true_peak_dbtp <= 0.0:
             raise ValueError("true_peak_dbtp must be between -12 and 0")
+        if not 1.0 <= self.target_lra <= 30.0:
+            raise ValueError("target_lra must be between 1 and 30")
+        _validated_eq_settings(self.eq_settings)
+        _validated_compressor_settings(self.compressor_settings)
         if not _KEY_SEGMENT.fullmatch(self.project_id):
             raise ValueError("project_id contains an unsafe object-key segment")
         if not _KEY_SEGMENT.fullmatch(self.algorithm_version):
@@ -64,13 +72,100 @@ def _true_peak_dbtp(audio: np.ndarray) -> float:
     return 20.0 * np.log10(max(peak, 1e-12))
 
 
+def _validated_eq_settings(settings: Mapping[str, float]) -> dict[str, float]:
+    """Accept the documented tonal profile controls and bound their effect."""
+    allowed = {"sub_boost_db", "mud_cut_db", "high_air_db"}
+    unknown = set(settings) - allowed
+    if unknown:
+        raise ValueError(f"unsupported EQ setting(s): {', '.join(sorted(unknown))}")
+    result = {key: float(value) for key, value in settings.items()}
+    if any(not -12.0 <= value <= 12.0 for value in result.values()):
+        raise ValueError("EQ gains must be between -12 and 12 dB")
+    return result
+
+
+def _validated_compressor_settings(settings: Mapping[str, float]) -> dict[str, float]:
+    """Validate the complete public compressor profile before a job is claimed."""
+    allowed = {"threshold_db", "ratio", "attack_ms", "release_ms"}
+    unknown = set(settings) - allowed
+    if unknown:
+        raise ValueError(f"unsupported compressor setting(s): {', '.join(sorted(unknown))}")
+    result = {key: float(value) for key, value in settings.items()}
+    if "threshold_db" in result and not -60.0 <= result["threshold_db"] <= 0.0:
+        raise ValueError("compressor threshold must be between -60 and 0 dB")
+    if "ratio" in result and not 1.0 <= result["ratio"] <= 20.0:
+        raise ValueError("compressor ratio must be between 1 and 20")
+    for key in ("attack_ms", "release_ms"):
+        if key in result and not 0.1 <= result[key] <= 2000.0:
+            raise ValueError(f"compressor {key} must be between 0.1 and 2000 ms")
+    return result
+
+
+def _apply_profile_eq(audio: np.ndarray, sample_rate: int, settings: Mapping[str, float]) -> np.ndarray:
+    """Apply a deterministic three-band spectral profile.
+
+    The profiles deliberately use broad, smooth bell/shelf curves rather than
+    a fixed gain post-process, so custom tonal controls have audible, bounded
+    effects on the material before loudness normalization.
+    """
+    controls = _validated_eq_settings(settings)
+    if not controls:
+        return np.asarray(audio, dtype=np.float64)
+    samples = np.asarray(audio, dtype=np.float64)
+    sample_count = samples.shape[0]
+    frequencies = np.fft.rfftfreq(sample_count, d=1.0 / sample_rate)
+    safe_frequency = np.maximum(frequencies, 1.0)
+    sub = controls.get("sub_boost_db", 0.0) * np.exp(-0.5 * (np.log2(safe_frequency / 65.0) / 0.9) ** 2)
+    mud = controls.get("mud_cut_db", 0.0) * np.exp(-0.5 * (np.log2(safe_frequency / 300.0) / 0.85) ** 2)
+    # A sigmoid avoids a discontinuity around the high-air turnover.
+    air = controls.get("high_air_db", 0.0) / (1.0 + np.exp(-(frequencies - 9000.0) / 1600.0))
+    gain = 10.0 ** ((sub + mud + air) / 20.0)
+    spectrum = np.fft.rfft(samples, axis=0)
+    if samples.ndim == 1:
+        spectrum *= gain
+    else:
+        spectrum *= gain[:, np.newaxis]
+    return np.fft.irfft(spectrum, n=sample_count, axis=0)
+
+
+def _apply_profile_compression(audio: np.ndarray, sample_rate: int, target_lra: float, settings: Mapping[str, float]) -> np.ndarray:
+    """Apply linked-stereo envelope compression using profile attack/release.
+
+    ``target_lra`` contributes a bounded ratio floor: lower requested ranges
+    tighten the dynamics even when a custom profile omits ``ratio``.  This is
+    intentionally deterministic and runs before the final loudness/peak pass.
+    """
+    controls = _validated_compressor_settings(settings)
+    threshold_db = controls.get("threshold_db", -18.0)
+    ratio = max(controls.get("ratio", 2.0), 1.0 + (12.0 - min(target_lra, 12.0)) / 6.0)
+    attack_ms = controls.get("attack_ms", 20.0)
+    release_ms = controls.get("release_ms", 120.0)
+    samples = np.asarray(audio, dtype=np.float64)
+    linked = np.max(np.abs(samples), axis=1) if samples.ndim > 1 else np.abs(samples)
+    level_db = 20.0 * np.log10(np.maximum(linked, 1e-12))
+    desired_reduction = np.minimum(0.0, threshold_db + np.maximum(level_db - threshold_db, 0.0) / ratio - level_db)
+    envelope = np.empty_like(desired_reduction)
+    envelope[0] = desired_reduction[0]
+    attack = np.exp(-1.0 / max(1.0, sample_rate * attack_ms / 1000.0))
+    release = np.exp(-1.0 / max(1.0, sample_rate * release_ms / 1000.0))
+    for index in range(1, len(desired_reduction)):
+        coefficient = attack if desired_reduction[index] < envelope[index - 1] else release
+        envelope[index] = coefficient * envelope[index - 1] + (1.0 - coefficient) * desired_reduction[index]
+    gain = 10.0 ** (envelope / 20.0)
+    return samples * (gain[:, np.newaxis] if samples.ndim > 1 else gain)
+
+
 def _master_audio(audio: np.ndarray, sample_rate: int, settings: MasterSettings) -> np.ndarray:
     samples = np.asarray(audio, dtype=np.float64)
     if samples.size == 0:
         raise ValueError("audio is empty")
 
-    input_lufs = _integrated_lufs(samples, sample_rate)
-    normalized = samples * (10.0 ** ((settings.target_lufs - input_lufs) / 20.0))
+    profiled = _apply_profile_eq(samples, sample_rate, settings.eq_settings)
+    profiled = _apply_profile_compression(
+        profiled, sample_rate, settings.target_lra, settings.compressor_settings
+    )
+    input_lufs = _integrated_lufs(profiled, sample_rate)
+    normalized = profiled * (10.0 ** ((settings.target_lufs - input_lufs) / 20.0))
     true_peak = _true_peak_dbtp(normalized)
     if true_peak > settings.true_peak_dbtp:
         normalized *= 10.0 ** ((settings.true_peak_dbtp - true_peak) / 20.0)
