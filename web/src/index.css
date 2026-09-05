@@ -35,6 +35,13 @@ h1 { max-width: 12ch; margin: 0; font-family: Impact, Haettenschweiler, "Arial N
 .side-rail, .primary-nav--rail { display: none; }
 .skip-link { position: fixed; z-index: 30; top: var(--space-3); left: var(--space-3); padding: var(--space-3) var(--space-4); transform: translateY(-200%); border-radius: 0.5rem; background: var(--text-bone); color: var(--surface-oil); font-weight: 800; text-decoration: none; }
 .skip-link:focus { transform: translateY(0); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.connection-notice { position: fixed; z-index: 20; top: var(--space-3); right: var(--space-3); left: var(--space-3); max-width: 42rem; margin: 0 auto; padding: var(--space-3) var(--space-4); border: 1px solid var(--accent-rust); border-radius: 0.5rem; background: var(--surface-inset); color: var(--text-bone); font-weight: 700; box-shadow: var(--shadow-plate); }
+.update-banner { position: fixed; z-index: 20; right: var(--space-3); bottom: calc(var(--nav-height) + var(--space-3) + env(safe-area-inset-bottom)); left: var(--space-3); display: grid; gap: var(--space-3); max-width: 42rem; margin: 0 auto; padding: var(--space-4); border: 1px solid var(--accent-rust); border-radius: 0.75rem; background: linear-gradient(135deg, #2d2118, var(--surface-iron)); color: var(--text-bone); box-shadow: var(--shadow-plate); }
+.update-banner strong { font-size: 1rem; }
+.update-banner p { margin: var(--space-1) 0 0; color: var(--text-fog); font-size: 0.875rem; }
+.update-banner__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.update-banner__actions .button { flex: 1 1 8rem; }
 .button { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; gap: var(--space-2); padding: 0.625rem 1rem; border: 1px solid transparent; border-radius: 0.5rem; cursor: pointer; font: inherit; font-weight: 800; }
 .button--primary { background: var(--accent-rust); color: #15110d; }
 .button--secondary { border-color: var(--border-iron); background: var(--surface-iron-raised); color: var(--text-bone); }
@@ -144,6 +151,7 @@ h1 { max-width: 12ch; margin: 0; font-family: Impact, Haettenschweiler, "Arial N
   .primary-nav--rail .primary-nav__link { grid-template-columns: 1.75rem 1fr; justify-content: start; justify-items: start; min-height: 48px; padding: var(--space-3); font-size: 0.9rem; text-align: left; }
   .side-rail__privacy { margin: auto var(--space-3) var(--space-3); color: var(--text-muted); font-size: 0.8rem; }
   .primary-nav--bottom { display: none; }
+  .update-banner { bottom: var(--space-5); }
 }
 @media (max-width: 30rem) {
   .ab-player__choices, .ab-player__transport, .mix-metadata dl { grid-template-columns: 1fr; }

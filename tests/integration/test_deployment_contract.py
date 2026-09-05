@@ -103,3 +103,11 @@ def test_html_uses_the_raster_apple_touch_asset_and_docs_refuse_http_install_cla
     assert "not** release-installable from a plain HTTP LAN" in readme
     assert "Local development (not an install acceptance path)" in readme
     assert "/api/v1/docs" not in readme
+
+
+def test_vercel_serves_the_generated_worker_without_a_spa_rewrite():
+    vercel = (REPOSITORY_ROOT / "web/vercel.json").read_text()
+
+    assert "service-worker\\\\.js" in vercel
+    assert '"source": "/service-worker.js"' in vercel
+    assert '"source": "/sw.js"' not in vercel

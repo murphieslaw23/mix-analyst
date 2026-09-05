@@ -1,8 +1,24 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      // The page owns registration so it can offer a clear, explicit update
+      // decision instead of allowing an install to replace a live session.
+      injectRegister: false,
+      registerType: "prompt",
+      manifest: false,
+      strategies: "injectManifest",
+      srcDir: "src/pwa",
+      filename: "service-worker.js",
+      injectManifest: {
+        globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
+      },
+    }),
+  ],
   server: {
     port: 3000,
     proxy: {

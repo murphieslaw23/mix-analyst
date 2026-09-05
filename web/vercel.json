@@ -1,7 +1,7 @@
 {
   "rewrites": [
     {
-      "source": "/((?!assets/|api/|icon|apple-touch-icon\\.png|pwa-screenshot-process\\.png|manifest\\.webmanifest|sw\\.js).*)",
+      "source": "/((?!assets/|api/|icon|apple-touch-icon\\.png|pwa-screenshot-process\\.png|manifest\\.webmanifest|service-worker\\.js).*)",
       "destination": "/index.html"
     }
   ],
@@ -16,7 +16,7 @@
       ]
     },
     {
-      "source": "/sw.js",
+      "source": "/service-worker.js",
       "headers": [
         {
           "key": "Service-Worker-Allowed",
