@@ -20,7 +20,7 @@ async function stubProcessApi(page: Page) {
   });
   await page.route("**/api/v1/upload-1", async (route) => {
     if (route.request().method() === "GET") {
-      await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", upload_url: "/api/v1/upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, chunk_size: shortWav.buffer.length, offset: 0, expires_at: "2030-01-01T00:00:00Z", status: "PENDING" } });
+      await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, bytes_received: 0, offset: 0, progress_percent: 0, status: "PENDING", expires_at: "2030-01-01T00:00:00Z", created_at: "2029-12-31T00:00:00Z", updated_at: "2029-12-31T00:00:00Z" } });
       return;
     }
     if (route.request().method() !== "PATCH") return route.fallback();
@@ -59,7 +59,7 @@ test.describe("Process audio", () => {
     await page.unroute("**/api/v1/upload-1");
     await page.route("**/api/v1/upload-1", async (route) => {
       if (route.request().method() === "GET") {
-        await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", upload_url: "/api/v1/upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, chunk_size: shortWav.buffer.length, offset: 0, expires_at: "2030-01-01T00:00:00Z", status: "PENDING" } });
+        await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, bytes_received: 0, offset: 0, progress_percent: 0, status: "PENDING", expires_at: "2030-01-01T00:00:00Z", created_at: "2029-12-31T00:00:00Z", updated_at: "2029-12-31T00:00:00Z" } });
         return;
       }
       if (route.request().method() !== "PATCH") return route.fallback();
@@ -77,5 +77,41 @@ test.describe("Process audio", () => {
     await expect(page.getByRole("button", { name: "Resume upload" })).toBeVisible();
     await page.getByRole("button", { name: "Resume upload" }).click();
     await expect(page).toHaveURL(/\/jobs\/job-1$/);
+  });
+
+  test("refuses to resume a server-completed session", async ({ page }) => {
+    await stubProcessApi(page);
+    await page.unroute("**/api/v1/upload-1");
+    await page.route("**/api/v1/upload-1", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, bytes_received: shortWav.buffer.length, offset: shortWav.buffer.length, progress_percent: 100, status: "COMPLETED", expires_at: "2030-01-01T00:00:00Z", created_at: "2029-12-31T00:00:00Z", updated_at: "2029-12-31T00:00:00Z" } });
+        return;
+      }
+      await route.fulfill({ status: 503, contentType: "application/json", json: {} });
+    });
+    await page.goto("/process");
+    await page.getByLabel("Choose audio").setInputFiles(shortWav);
+    await page.getByRole("button", { name: "Start mastering" }).click();
+    await expect(page.getByRole("alert")).toContainText("Upload could not continue");
+    await page.getByRole("button", { name: "Resume upload" }).click();
+    await expect(page.getByRole("alert")).toContainText("Upload session already completed");
+    await expect(page.getByRole("button", { name: "Resume upload" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
+  test("keeps queue creation cancellable and never navigates without its persisted job", async ({ page }) => {
+    await stubProcessApi(page);
+    await page.unroute("**/api/v1/mixes/mix-1/master");
+    await page.route("**/api/v1/mixes/mix-1/master", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await route.fulfill({ contentType: "application/json", status: 202, json: { id: "job-1", mix_id: "mix-1", job_type: "MASTERING", status: "QUEUED", progress_percent: 0, current_stage: "Queued", parameters: {}, created_at: "2030-01-01T00:00:00Z" } });
+    });
+    await page.goto("/process");
+    await page.getByLabel("Choose audio").setInputFiles(shortWav);
+    await page.getByRole("button", { name: "Start mastering" }).click();
+    await expect(page.getByRole("button", { name: "Cancel request" })).toBeVisible();
+    await page.getByRole("button", { name: "Cancel request" }).click();
+    await expect(page.getByText("Mastering request cancelled. You can try again when ready.")).toBeVisible();
+    await expect(page).toHaveURL(/\/process$/);
   });
 });

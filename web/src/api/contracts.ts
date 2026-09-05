@@ -106,6 +106,25 @@ export interface UploadSessionDto {
   status: string;
 }
 
+/**
+ * `GET /:upload_id` deliberately exposes only the server-authoritative
+ * progress/status fields.  It is not interchangeable with the init response:
+ * the browser retains the accepted chunk size and same-origin upload URL from
+ * the original POST while it resumes a selected local file.
+ */
+export interface UploadStatusDto {
+  upload_id: string;
+  filename: string;
+  total_size_bytes: number;
+  bytes_received: number;
+  offset: number;
+  progress_percent: number;
+  status: string;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UploadChunkDto {
   upload_id: string;
   bytes_received: number;

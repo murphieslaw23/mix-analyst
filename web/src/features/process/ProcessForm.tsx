@@ -15,12 +15,16 @@ interface ProcessFormProps {
 }
 
 function announce(state: ProcessUploadModel) {
+  if (state.jobId) return "Mastering job created. Opening its progress.";
   if (state.status === "ready" && state.mixId) return "Audio is saved. Creating your mastering job.";
   if (state.status === "ready") return "Ready to process";
   if (state.status === "initializing") return "Creating secure upload session.";
-  if (state.status === "uploading") return `Uploading audio: ${Math.round(state.progressPercent)} percent complete.`;
+  // The semantic progress element continuously exposes its numeric value.
+  // Keep the live region for state changes only so assistive tech is not
+  // interrupted once per chunk.
+  if (state.status === "uploading") return "Uploading audio.";
   if (state.status === "finalizing") return state.stage === "queueing" ? "Creating mastering job." : "Validating and saving your audio.";
-  if (state.status === "aborted") return "Upload paused. You can resume it when ready.";
+  if (state.status === "aborted") return state.mixId ? "Mastering request cancelled. You can try again when ready." : "Upload paused. You can resume it when ready.";
   if (state.status === "error") return state.problem?.detail ?? "The process could not continue.";
   return "";
 }
@@ -72,7 +76,7 @@ export function ProcessForm({ settings, state, onFileSelected, onPresetChange, o
       <div className="process-form__actions">
         {!hasSelectedFile ? null : ready ? <Button type="submit">Start mastering</Button> : null}
         {canRetry ? <Button type="submit">{state.mixId ? "Create mastering job" : state.session ? "Resume upload" : "Try again"}</Button> : null}
-        {busy ? <Button onClick={onCancel} tone="secondary">Cancel upload</Button> : null}
+        {busy ? <Button onClick={onCancel} tone="secondary">{state.stage === "queueing" ? "Cancel request" : "Cancel upload"}</Button> : null}
         {(state.status === "error" || state.status === "aborted") ? <Button onClick={onReset} tone="quiet">Choose another file</Button> : null}
       </div>
     </form>

@@ -13,6 +13,7 @@ export interface ProcessUploadModel {
   file: File | null;
   session: UploadSessionDto | null;
   mixId: string | null;
+  jobId: string | null;
   progressPercent: number;
   stage: "selection" | "upload" | "finalizing" | "queueing" | null;
   problem: ApiProblem | null;

@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { ApiProblemError, apiClient, asApiProblem } from "../../api/client";
-import type { ApiProblem, JobDto, UploadChunkDto, UploadCompleteDto, UploadSessionDto } from "../../api/contracts";
+import type { ApiProblem, JobDto, UploadChunkDto, UploadCompleteDto, UploadSessionDto, UploadStatusDto } from "../../api/contracts";
 import { initialProcessUploadState, processReducer } from "./processReducer";
 import { allowedAudioExtensions, type ProcessSettings } from "./types";
 
 const audioTypePrefix = "audio/";
+const resumableUploadStorageKey = "mix-master.resumable-upload.v1";
+
+interface StoredUploadSession {
+  fileName: string;
+  fileSize: number;
+  fileLastModified: number;
+  session: UploadSessionDto;
+}
+
+class SessionResumeError extends ApiProblemError {
+  readonly discardSession = true;
+}
 
 function fileExtension(filename: string) {
   const dotIndex = filename.lastIndexOf(".");
@@ -73,6 +85,85 @@ function assertSession(session: UploadSessionDto, file: File) {
   }
 }
 
+function resumeProblem(title: string, detail: string) {
+  return new SessionResumeError({ status: 409, title, detail, retryable: false });
+}
+
+function sessionForResume(session: UploadSessionDto, status: UploadStatusDto, file: File): UploadSessionDto {
+  // The status response omits upload_url and chunk_size by design. Those are
+  // accepted init-session metadata, kept only in this browser, while the
+  // server remains the sole authority for offset and lifecycle status.
+  assertSession(session, file);
+  if (
+    status.upload_id !== session.upload_id ||
+    status.filename !== file.name ||
+    status.total_size_bytes !== file.size ||
+    status.offset < 0 ||
+    status.offset > file.size ||
+    status.bytes_received !== status.offset
+  ) {
+    throw resumeProblem("Upload session cannot be resumed", "The saved upload does not match the selected file. Choose the file again to begin a new upload.");
+  }
+
+  const lifecycle = status.status.toUpperCase();
+  if (lifecycle === "COMPLETED") {
+    throw resumeProblem("Upload session already completed", "This upload has already finished and cannot be resumed safely. Choose the file again if you still need to process it.");
+  }
+  if (lifecycle !== "PENDING" && lifecycle !== "UPLOADING") {
+    throw resumeProblem("Upload session is no longer available", "This saved upload can no longer accept audio. Choose the file again to begin a new upload.");
+  }
+
+  return {
+    ...session,
+    filename: status.filename,
+    total_size_bytes: status.total_size_bytes,
+    offset: status.offset,
+    expires_at: status.expires_at,
+    status: status.status,
+  };
+}
+
+function loadStoredSession(file: File): UploadSessionDto | null {
+  try {
+    const raw = window.sessionStorage.getItem(resumableUploadStorageKey);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as StoredUploadSession;
+    if (
+      stored.fileName !== file.name ||
+      stored.fileSize !== file.size ||
+      stored.fileLastModified !== file.lastModified ||
+      !stored.session
+    ) return null;
+    assertSession(stored.session, file);
+    return stored.session;
+  } catch {
+    return null;
+  }
+}
+
+function rememberSession(file: File, session: UploadSessionDto) {
+  try {
+    const stored: StoredUploadSession = {
+      fileName: file.name,
+      fileSize: file.size,
+      fileLastModified: file.lastModified,
+      session,
+    };
+    window.sessionStorage.setItem(resumableUploadStorageKey, JSON.stringify(stored));
+  } catch {
+    // Private browsing/storage quotas must not prevent an otherwise valid
+    // current-page upload. The in-memory reducer still owns this attempt.
+  }
+}
+
+function forgetStoredSession() {
+  try {
+    window.sessionStorage.removeItem(resumableUploadStorageKey);
+  } catch {
+    // Storage may be unavailable; there is no user-visible recovery needed.
+  }
+}
+
 export function useUpload() {
   const [state, dispatch] = useReducer(processReducer, initialProcessUploadState);
   const stateRef = useRef(state);
@@ -88,21 +179,39 @@ export function useUpload() {
     if (!file) return;
     dispatch({ type: "SELECT", file });
     const problem = validationProblem(file);
-    dispatch(problem ? { type: "INVALID", problem } : { type: "VALID" });
+    if (problem) {
+      forgetStoredSession();
+      dispatch({ type: "INVALID", problem });
+      return;
+    }
+    const storedSession = loadStoredSession(file);
+    if (storedSession) {
+      dispatch({ type: "RESUME_AVAILABLE", session: storedSession, offset: storedSession.offset });
+      return;
+    }
+    // Selecting a different file intentionally abandons only the local resume
+    // record; the server still expires the old protected upload on schedule.
+    forgetStoredSession();
+    dispatch({ type: "VALID" });
   }, []);
 
-  const startUpload = useCallback(async (file: File, _settings: ProcessSettings): Promise<{ mixId: string }> => {
-    const controller = new AbortController();
-    controllerRef.current?.abort();
-    controllerRef.current = controller;
+  const uploadAudio = useCallback(async (file: File, controller: AbortController): Promise<{ mixId: string }> => {
     const current = stateRef.current;
     let session = current.session;
 
     try {
       if (session) {
-        const serverSession = await uploadRequest<UploadSessionDto>(session.upload_url, { signal: controller.signal });
-        assertSession(serverSession, file);
-        session = serverSession;
+        let serverStatus: UploadStatusDto;
+        try {
+          serverStatus = await uploadRequest<UploadStatusDto>(session.upload_url, { signal: controller.signal });
+        } catch (error) {
+          if (error instanceof ApiProblemError && (error.status === 404 || error.status === 410)) {
+            throw resumeProblem("Upload session expired", "Choose the file again to start a new secure upload session.");
+          }
+          throw error;
+        }
+        session = sessionForResume(session, serverStatus, file);
+        rememberSession(file, session);
         dispatch({ type: "SESSION", session, offset: session.offset });
       } else {
         dispatch({ type: "INITIALIZING" });
@@ -113,6 +222,7 @@ export function useUpload() {
           body: JSON.stringify({ filename: file.name, total_size_bytes: file.size, content_type: file.type || "application/octet-stream" }),
         });
         assertSession(session, file);
+        rememberSession(file, session);
         dispatch({ type: "SESSION", session, offset: session.offset });
       }
 
@@ -120,7 +230,7 @@ export function useUpload() {
       while (offset < file.size) {
         const nextOffset = Math.min(file.size, offset + session.chunk_size);
         const chunk = file.slice(offset, nextOffset);
-        const update = await uploadRequest<UploadChunkDto>(session.upload_url, {
+        const update: UploadChunkDto = await uploadRequest<UploadChunkDto>(session.upload_url, {
           method: "PATCH",
           signal: controller.signal,
           headers: { "Content-Type": "application/offset+octet-stream", "Upload-Offset": String(offset) },
@@ -130,6 +240,8 @@ export function useUpload() {
           throw new ApiProblemError({ status: 0, title: "Unexpected upload progress", detail: "The service returned an invalid upload position. Try again.", retryable: true });
         }
         offset = update.offset;
+        session = { ...session, offset, status: update.status };
+        rememberSession(file, session);
         dispatch({ type: "UPLOAD_PROGRESS", percent: (offset / file.size) * 100 });
       }
 
@@ -143,6 +255,7 @@ export function useUpload() {
       if (!complete.mix_id) {
         throw new ApiProblemError({ status: 0, title: "Unexpected completion response", detail: "The service did not confirm a saved audio item. Try again.", retryable: true });
       }
+      forgetStoredSession();
       dispatch({ type: "READY", mixId: complete.mix_id });
       return { mixId: complete.mix_id };
     } catch (error) {
@@ -151,10 +264,10 @@ export function useUpload() {
         throw error;
       }
       const problem = asApiProblem(error);
-      dispatch({ type: "FAIL", problem });
+      const discardSession = error instanceof SessionResumeError;
+      if (discardSession) forgetStoredSession();
+      dispatch({ type: "FAIL", problem, discardSession });
       throw error;
-    } finally {
-      if (controllerRef.current === controller) controllerRef.current = null;
     }
   }, []);
 
@@ -168,27 +281,46 @@ export function useUpload() {
       return null;
     }
 
+    const controller = new AbortController();
+    controllerRef.current?.abort();
+    controllerRef.current = controller;
+
     try {
-      const mixId = current.mixId ?? (await startUpload(file, settings)).mixId;
+      const mixId = current.mixId ?? (await uploadAudio(file, controller)).mixId;
       dispatch({ type: "QUEUEING" });
       const job = await apiClient<JobDto>(`/mixes/${encodeURIComponent(mixId)}/master`, {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preset_id: settings.presetId }),
       });
       if (!job.id || job.mix_id !== mixId) {
         throw new ApiProblemError({ status: 0, title: "Unexpected mastering response", detail: "The service did not confirm a saved mastering job. Try again.", retryable: true });
       }
+      // The job is durable before ProcessPage navigates to it. Clearing the
+      // busy state also removes the cancel control as its controller closes.
+      dispatch({ type: "JOB_CREATED", jobId: job.id });
       return { jobId: job.id };
     } catch (error) {
-      if (isAbort(error)) return null;
+      if (isAbort(error)) {
+        // `uploadAudio` also emits this transition when it owns the aborted
+        // request. Repeating the terminal reducer event is harmless and,
+        // crucially, covers an abort while the durable job command is pending.
+        dispatch({ type: "ABORT" });
+        return null;
+      }
       dispatch({ type: "FAIL", problem: asApiProblem(error) });
       return null;
+    } finally {
+      if (controllerRef.current === controller) controllerRef.current = null;
     }
-  }, [startUpload]);
+  }, [uploadAudio]);
 
   const cancel = useCallback(() => controllerRef.current?.abort(), []);
-  const reset = useCallback(() => dispatch({ type: "RESET" }), []);
+  const reset = useCallback(() => {
+    forgetStoredSession();
+    dispatch({ type: "RESET" });
+  }, []);
 
-  return { state, selectFile, startUpload, startMastering, cancel, reset };
+  return { state, selectFile, startMastering, cancel, reset };
 }
