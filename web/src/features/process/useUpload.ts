@@ -89,6 +89,27 @@ function resumeProblem(title: string, detail: string) {
   return new SessionResumeError({ status: 409, title, detail, retryable: false });
 }
 
+function expiryTimestamp(value: string): number | null {
+  // `Date.parse` treats ISO strings without an offset as local time in some
+  // browsers. The API sends an aware timestamp, and accepting a naive value
+  // here could keep an expired upload resumable in a different timezone.
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+    return null;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function assertResumableExpiry(expiresAt: string) {
+  const timestamp = expiryTimestamp(expiresAt);
+  if (timestamp === null) {
+    throw resumeProblem("Upload session cannot be resumed", "The saved upload has an invalid expiry time. Choose the file again to start a new secure upload session.");
+  }
+  if (timestamp <= Date.now()) {
+    throw resumeProblem("Upload session expired", "Choose the file again to start a new secure upload session.");
+  }
+}
+
 function sessionForResume(session: UploadSessionDto, status: UploadStatusDto, file: File): UploadSessionDto {
   // The status response omits upload_url and chunk_size by design. Those are
   // accepted init-session metadata, kept only in this browser, while the
@@ -104,6 +125,10 @@ function sessionForResume(session: UploadSessionDto, status: UploadStatusDto, fi
   ) {
     throw resumeProblem("Upload session cannot be resumed", "The saved upload does not match the selected file. Choose the file again to begin a new upload.");
   }
+  // The status endpoint may still report PENDING shortly after the TTL has
+  // elapsed. Its timestamp is authoritative for whether this browser may
+  // continue sending protected audio chunks.
+  assertResumableExpiry(status.expires_at);
 
   const lifecycle = status.status.toUpperCase();
   if (lifecycle === "COMPLETED") {
@@ -264,7 +289,11 @@ export function useUpload() {
         throw error;
       }
       const problem = asApiProblem(error);
-      const discardSession = error instanceof SessionResumeError;
+      // A 410 can arrive while appending a chunk or finalizing, after this
+      // page has already retained its session metadata. It is terminal for
+      // that metadata, unlike network/5xx/conflict failures which remain
+      // honestly retryable.
+      const discardSession = error instanceof SessionResumeError || (error instanceof ApiProblemError && error.status === 410);
       if (discardSession) forgetStoredSession();
       dispatch({ type: "FAIL", problem, discardSession });
       throw error;

@@ -99,6 +99,81 @@ test.describe("Process audio", () => {
     await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
   });
 
+  test("rejects a PENDING session whose server expiry has elapsed", async ({ page }) => {
+    let patches = 0;
+    await stubProcessApi(page);
+    await page.unroute("**/api/v1/upload-1");
+    await page.route("**/api/v1/upload-1", async (route) => {
+      if (route.request().method() === "GET") {
+        // The backend can briefly retain PENDING while its expiry cleanup runs.
+        // The client must still refuse to resume based on the aware timestamp.
+        await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, bytes_received: 0, offset: 0, progress_percent: 0, status: "PENDING", expires_at: "2000-01-01T00:00:00Z", created_at: "1999-12-31T00:00:00Z", updated_at: "1999-12-31T00:00:00Z" } });
+        return;
+      }
+      patches += 1;
+      await route.fulfill({ status: 503, contentType: "application/json", json: {} });
+    });
+    await page.goto("/process");
+    await page.getByLabel("Choose audio").setInputFiles(shortWav);
+    await page.getByRole("button", { name: "Start mastering" }).click();
+    await expect(page.getByRole("button", { name: "Resume upload" })).toBeVisible();
+    await page.getByRole("button", { name: "Resume upload" }).click();
+    await expect(page.getByRole("alert")).toContainText("Upload session expired");
+    await expect(page.getByRole("button", { name: "Resume upload" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(patches).toBe(1);
+  });
+
+  test("does not resume a session with an invalid expiry timestamp", async ({ page }) => {
+    await stubProcessApi(page);
+    await page.unroute("**/api/v1/upload-1");
+    await page.route("**/api/v1/upload-1", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, bytes_received: 0, offset: 0, progress_percent: 0, status: "PENDING", expires_at: "not-a-date", created_at: "2029-12-31T00:00:00Z", updated_at: "2029-12-31T00:00:00Z" } });
+        return;
+      }
+      await route.fulfill({ status: 503, contentType: "application/json", json: {} });
+    });
+    await page.goto("/process");
+    await page.getByLabel("Choose audio").setInputFiles(shortWav);
+    await page.getByRole("button", { name: "Start mastering" }).click();
+    await page.getByRole("button", { name: "Resume upload" }).click();
+    await expect(page.getByRole("alert")).toContainText("invalid expiry time");
+    await expect(page.getByRole("button", { name: "Resume upload" })).toHaveCount(0);
+  });
+
+  test("clears a stale resume session after a chunk returns 410", async ({ page }) => {
+    await stubProcessApi(page);
+    await page.unroute("**/api/v1/upload-1");
+    await page.route("**/api/v1/upload-1", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({ contentType: "application/json", json: { upload_id: "upload-1", filename: "short.wav", total_size_bytes: shortWav.buffer.length, bytes_received: 0, offset: 0, progress_percent: 0, status: "PENDING", expires_at: "2030-01-01T00:00:00Z", created_at: "2029-12-31T00:00:00Z", updated_at: "2029-12-31T00:00:00Z" } });
+        return;
+      }
+      await route.fulfill({ status: 410, contentType: "application/json", json: {} });
+    });
+    await page.goto("/process");
+    await page.getByLabel("Choose audio").setInputFiles(shortWav);
+    await page.getByRole("button", { name: "Start mastering" }).click();
+    await expect(page.getByRole("alert")).toContainText("Upload session expired");
+    await expect(page.getByRole("button", { name: "Resume upload" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
+  test("clears a stale resume session after finalize returns 410", async ({ page }) => {
+    await stubProcessApi(page);
+    await page.unroute("**/api/v1/upload-1/complete");
+    await page.route("**/api/v1/upload-1/complete", async (route) => {
+      await route.fulfill({ status: 410, contentType: "application/json", json: {} });
+    });
+    await page.goto("/process");
+    await page.getByLabel("Choose audio").setInputFiles(shortWav);
+    await page.getByRole("button", { name: "Start mastering" }).click();
+    await expect(page.getByRole("alert")).toContainText("Upload session expired");
+    await expect(page.getByRole("button", { name: "Resume upload" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
   test("keeps queue creation cancellable and never navigates without its persisted job", async ({ page }) => {
     await stubProcessApi(page);
     await page.unroute("**/api/v1/mixes/mix-1/master");
