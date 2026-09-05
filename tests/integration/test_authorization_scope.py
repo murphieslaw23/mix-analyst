@@ -178,6 +178,38 @@ def test_user_cannot_read_another_users_mix(client, user_a_token, user_b_mix):
     assert response.status_code == 404
 
 
+def test_job_list_is_paginated_and_never_discloses_another_project(client, user_a_token, job):
+    """The Jobs screen may enumerate only durable jobs in the token project."""
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        db.add_all(
+            [
+                Job(
+                    id="job-a-old", project_id="project-a", mix_id="mix-a", job_type=JobType.MASTERING,
+                    status=JobStatus.QUEUED, progress_percent=0.0, created_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+                ),
+                Job(
+                    id="job-a-new", project_id="project-a", mix_id="mix-a", job_type=JobType.ANALYSIS,
+                    status=JobStatus.RUNNING, progress_percent=50.0, created_at=datetime(2030, 1, 2, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    first_page = test_client.get("/api/v1/jobs?page=1&limit=1", headers={"Authorization": f"Bearer {user_a_token}"})
+    assert first_page.status_code == 200
+    assert first_page.json()["total"] == 2
+    assert [item["id"] for item in first_page.json()["items"]] == ["job-a-new"]
+
+    second_page = test_client.get("/api/v1/jobs?page=2&limit=1", headers={"Authorization": f"Bearer {user_a_token}"})
+    assert second_page.status_code == 200
+    assert [item["id"] for item in second_page.json()["items"]] == ["job-a-old"]
+    assert job.id not in {item["id"] for item in first_page.json()["items"] + second_page.json()["items"]}
+
+
 def test_signed_project_claim_requires_persisted_user_membership(client, user_b_mix):
     """A valid signature alone must not let a user select another persisted project."""
     test_client, _ = client

@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...db.session import get_db
 from ..deps import get_current_principal, require_owned_job, require_owned_mix
 from ...models.job import JobStatus
-from ...schemas.job import JobOut, JobCreateRequest
+from ...schemas.job import JobOut, JobCreateRequest, JobListResponse
+from ...models.job import Job
 from ...schemas.auth import CurrentPrincipal
 from ...services.job_commands import UnsupportedJobTypeError, enqueue_job, enqueue_retry
 from ...services.job_events import event_notification, publish_event, stream_job_events
@@ -13,6 +15,30 @@ from ...services.job_events_store import request_cancellation
 from ...services.batches import recompute_batch_status
 
 router = APIRouter()
+
+
+@router.get("/jobs", response_model=JobListResponse)
+def list_jobs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal = Depends(get_current_principal),
+):
+    """List only durable jobs belonging to the authenticated project.
+
+    The order is deterministic so pagination cannot leak or shuffle work from
+    another project: newest creation time first, then job id as a tie-breaker.
+    """
+    scoped = select(Job).where(Job.project_id == principal.project_id)
+    total = db.scalar(select(func.count()).select_from(scoped.subquery())) or 0
+    jobs = list(
+        db.scalars(
+            scoped.order_by(Job.created_at.desc(), Job.id.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+    )
+    return JobListResponse(items=jobs, total=total)
 
 
 @router.post("/mixes/{mix_id}/jobs", response_model=JobOut, status_code=status.HTTP_201_CREATED)

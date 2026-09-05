@@ -20,6 +20,11 @@ export class ApiProblemError extends Error implements ApiProblem {
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
+/** Build a same-origin API URL for streaming endpoints as well as JSON calls. */
+export function apiUrl(path: string): string {
+  return `${apiBase}${path}`;
+}
+
 function safeProblem(status: number): ApiProblem {
   if (status === 401 || status === 403) return { status, title: "Sign-in required", detail: "You do not have access to these mixes.", retryable: false };
   if (status === 404) return { status, title: "Not found", detail: "That mix is no longer available.", retryable: false };
@@ -35,7 +40,7 @@ export function asApiProblem(error: unknown): ApiProblem {
 export async function apiClient<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${apiBase}${path}`, { ...init, credentials: "include", headers: { Accept: "application/json", ...init.headers } });
+    response = await fetch(apiUrl(path), { ...init, credentials: "include", headers: { Accept: "application/json", ...init.headers } });
   } catch (error) {
     // Callers that own an AbortController need to distinguish deliberate
     // cancellation from an unavailable service. Do not turn it into a false

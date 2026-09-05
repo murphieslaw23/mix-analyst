@@ -52,6 +52,13 @@ class JobOut(BaseModel):
         from_attributes = True
 
 
+class JobListResponse(BaseModel):
+    """Stable, project-scoped page of durable jobs."""
+
+    items: List[JobOut]
+    total: int
+
+
 class JobCreateRequest(BaseModel):
     job_type: JobType = JobType.ANALYSIS
     parameters: Dict[str, Any] = Field(default_factory=dict)

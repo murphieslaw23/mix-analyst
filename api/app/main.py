@@ -28,8 +28,10 @@ app.add_middleware(
 
 app.include_router(health.router, prefix=f"{settings.api_v1_prefix}/health", tags=["health"])
 app.include_router(metrics.router, prefix=settings.api_v1_prefix, tags=["operations"])
-app.include_router(uploads.router, prefix=settings.api_v1_prefix, tags=["uploads"])
+# Upload sessions use the legacy root-level `/{upload_id}` path. Register the
+# named job routes first so an upload parameter route cannot capture `/jobs`.
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
+app.include_router(uploads.router, prefix=settings.api_v1_prefix, tags=["uploads"])
 app.include_router(mixes.router, prefix=f"{settings.api_v1_prefix}/mixes", tags=["mixes"])
 app.include_router(mastering.router, prefix=settings.api_v1_prefix, tags=["mastering"])
 app.include_router(batches.router, prefix=settings.api_v1_prefix, tags=["batches"])

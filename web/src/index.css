@@ -69,6 +69,37 @@ h1 { max-width: 12ch; margin: 0; font-family: Impact, Haettenschweiler, "Arial N
 .process-form__problem strong { color: var(--text-bone); }
 .process-form__live { min-height: 1.5rem; color: var(--text-fog); font-size: 0.9rem; }
 .process-form__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.progress { display: grid; gap: var(--space-2); }
+.progress__label { display: flex; justify-content: space-between; gap: var(--space-3); color: var(--text-fog); font-size: 0.875rem; font-weight: 700; }
+.progress__label span:last-child { color: var(--text-bone); font-variant-numeric: tabular-nums; }
+.progress progress { width: 100%; height: 0.75rem; accent-color: var(--accent-rust); }
+.status-badge { display: inline-flex; min-height: 1.75rem; align-items: center; width: max-content; padding: 0.2rem 0.55rem; border: 1px solid var(--border-iron); border-radius: 999px; color: var(--text-fog); font-size: 0.72rem; font-weight: 850; letter-spacing: 0.06em; line-height: 1; text-transform: uppercase; white-space: nowrap; }
+.status-badge--running { border-color: var(--accent-rust); color: var(--accent-rust-strong); }
+.status-badge--succeeded, .status-badge--completed { border-color: #6f9f77; color: #bee8bd; }
+.status-badge--failed { border-color: var(--danger); color: var(--danger); }
+.status-badge--cancelled { border-color: var(--text-muted); color: var(--text-muted); }
+.jobs-list { display: grid; gap: var(--space-4); margin: var(--space-8) 0 0; padding: 0; list-style: none; }
+.job-card { display: grid; gap: var(--space-4); padding: var(--space-5); border: 1px solid var(--border-iron); border-radius: 0.75rem; background: var(--surface-inset); }
+.job-card__summary { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.job-card__eyebrow { margin: 0 0 var(--space-1); color: var(--text-muted); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.job-card h2, .job-detail-page h2, .job-detail-page h3 { margin: 0; color: var(--text-bone); }
+.job-card h2 { font-size: 1.2rem; }
+.job-card__time { margin: 0; color: var(--text-muted); font-size: 0.8rem; }
+.job-card .button { width: 100%; text-decoration: none; }
+.job-detail-page__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
+.job-detail-page__heading h1 { min-width: 0; }
+.job-detail-page__heading .status-badge { margin-top: var(--space-1); }
+.job-detail-page__connection { min-height: 1.5rem; margin-top: var(--space-5); color: var(--text-muted); font-size: 0.875rem; }
+.job-detail-page__progress { max-width: 42rem; margin-top: var(--space-5); padding: var(--space-4); border: 1px solid var(--accent-rust); border-radius: 0.75rem; background: rgb(223 101 14 / 0.08); }
+.job-detail-page__error, .job-detail-page__stages { display: grid; gap: var(--space-3); max-width: 46rem; margin-top: var(--space-6); padding: var(--space-5); border: 1px solid var(--border-iron); border-radius: 0.75rem; background: rgb(8 9 8 / 0.48); }
+.job-detail-page__error { border-color: var(--danger); }
+.job-detail-page__error p, .job-detail-page__stage-error { margin: 0; color: var(--text-fog); overflow-wrap: anywhere; }
+.job-detail-page__stages > ol { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.job-detail-page__stages li { display: grid; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border-iron); }
+.job-detail-page__stages li:first-child { padding-top: 0; border-top: 0; }
+.job-detail-page__stages li > div { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.job-detail-page__stages h3 { font-size: 1rem; }
+.job-detail-page__actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); }
 @keyframes skeleton-shimmer { to { background-position: -200% 0; } }
 @media (min-width: 48rem) {
   .app-shell { display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); }

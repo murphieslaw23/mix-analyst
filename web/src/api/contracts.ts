@@ -155,5 +155,38 @@ export interface JobDto {
   progress_percent: number;
   current_stage: string | null;
   parameters: Record<string, unknown>;
+  celery_task_id: string | null;
+  error_message: string | null;
   created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  stage_runs: StageRunDto[];
+  attempts: JobAttemptDto[];
+}
+
+export interface StageRunDto {
+  id: string;
+  stage_name: string;
+  stage_version: string;
+  status: string;
+  progress_percent: number;
+  stage_output: string | null;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface JobAttemptDto {
+  id: string;
+  attempt_number: number;
+  status: string;
+  worker_hostname: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** The public `/jobs` response is a scoped pagination envelope. */
+export interface JobListDto {
+  items: JobDto[];
+  total: number;
 }
