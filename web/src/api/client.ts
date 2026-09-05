@@ -36,7 +36,11 @@ export async function apiClient<T>(path: string, init: RequestInit = {}): Promis
   let response: Response;
   try {
     response = await fetch(`${apiBase}${path}`, { ...init, credentials: "include", headers: { Accept: "application/json", ...init.headers } });
-  } catch {
+  } catch (error) {
+    // Callers that own an AbortController need to distinguish deliberate
+    // cancellation from an unavailable service. Do not turn it into a false
+    // connectivity error.
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new ApiProblemError(asApiProblem(undefined));
   }
   if (!response.ok) {

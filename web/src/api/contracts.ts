@@ -94,3 +94,47 @@ export interface TransitionDto {
 export interface TransitionListResponse { mix_id: string; total_transitions: number; transitions: TransitionDto[]; }
 
 export interface ApiProblem { status: number; title: string; detail: string; retryable: boolean; }
+
+export interface UploadSessionDto {
+  upload_id: string;
+  upload_url: string;
+  filename: string;
+  total_size_bytes: number;
+  chunk_size: number;
+  offset: number;
+  expires_at: string;
+  status: string;
+}
+
+export interface UploadChunkDto {
+  upload_id: string;
+  bytes_received: number;
+  offset: number;
+  total_size_bytes: number;
+  progress_percent: number;
+  status: string;
+}
+
+export interface UploadCompleteDto {
+  mix_id: string;
+  media_asset_id: string;
+  title: string;
+  artist: string | null;
+  duration_seconds: number;
+  sample_rate: number;
+  channels: number;
+  codec: string;
+  sha256_hash: string;
+  status: string;
+}
+
+export interface JobDto {
+  id: string;
+  mix_id: string;
+  job_type: string;
+  status: string;
+  progress_percent: number;
+  current_stage: string | null;
+  parameters: Record<string, unknown>;
+  created_at: string;
+}

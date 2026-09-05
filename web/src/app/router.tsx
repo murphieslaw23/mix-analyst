@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { LibraryPage } from "../features/library/LibraryPage";
+import { ProcessPage } from "../features/process/ProcessPage";
 import { AppShell } from "./AppShell";
 import { JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, PROCESS_ROUTE } from "./routes";
 
@@ -21,18 +22,12 @@ function PlaceholderPage({ eyebrow, title, description }: PlaceholderPageProps) 
   );
 }
 
-function ProcessPage() {
-  return (
-    <PlaceholderPage
-      description="Choose audio, select a mastering preset, and begin when your file is ready. Nothing starts until you confirm it."
-      eyebrow="Audio intake"
-      title="Process audio"
-    />
-  );
-}
-
 function JobsPage() {
   return <PlaceholderPage description="Processing progress and recovery controls will appear here." eyebrow="Work queue" title="Jobs" />;
+}
+
+function JobStartPage() {
+  return <PlaceholderPage description="Your mastering job was saved. Live progress will appear here shortly." eyebrow="Work queue" title="Job queued" />;
 }
 
 function MorePage() {
@@ -45,6 +40,7 @@ export const router = createBrowserRouter([
     children: [
       { path: PROCESS_ROUTE, element: <ProcessPage /> },
       { path: JOBS_ROUTE, element: <JobsPage /> },
+      { path: `${JOBS_ROUTE}/:jobId`, element: <JobStartPage /> },
       { path: LIBRARY_ROUTE, element: <LibraryPage /> },
       { path: MORE_ROUTE, element: <MorePage /> },
     ],
