@@ -48,12 +48,20 @@ def test_shipped_compose_requires_auth_secret_and_mounts_one_storage_root():
     config = json.loads(rendered.stdout)
     api = config["services"]["api"]
     worker = config["services"]["worker"]
+    outbox = config["services"]["outbox-dispatcher"]
+    beat = config["services"]["celery-beat"]
 
     assert api["environment"]["AUTH_JWT_SECRET"] == SAFE_TEST_SECRET
+    assert api["environment"]["APP_ENV"] == "production"
     assert api["environment"]["STORAGE_DIR"] == "/storage"
     assert worker["environment"]["STORAGE_DIR"] == "/storage"
+    assert outbox["environment"]["STORAGE_DIR"] == "/storage"
+    assert beat["environment"]["STORAGE_DIR"] == "/storage"
     assert _has_storage_volume(api)
     assert _has_storage_volume(worker)
+    assert _has_storage_volume(outbox)
+    assert _has_storage_volume(beat)
+    assert "beat" in " ".join(beat["command"])
 
 
 def test_broker_queue_storage_uses_a_non_evicting_policy():

@@ -16,7 +16,7 @@ from api.app.models.outbox import OutboxMessage
 from api.app.models.artifact import Artifact
 from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.job import JobCreateRequest
-from api.app.services.job_commands import claim_job_attempt, enqueue_job
+from api.app.services.job_commands import claim_job_attempt, enqueue_job, heartbeat_job_attempt
 
 
 @pytest.fixture
@@ -98,6 +98,7 @@ def test_expired_running_attempt_is_reclaimed_with_a_new_fenced_lease(db, princi
     )
     db.commit()
     assert first is not None
+    old_token = first.claim_token
     assert claim_job_attempt(
         db,
         job.id,
@@ -125,6 +126,60 @@ def test_expired_running_attempt_is_reclaimed_with_a_new_fenced_lease(db, princi
     assert reclaimed.attempt_number == 1
     assert reclaimed.worker_hostname == "worker-b"
     assert reclaimed.claim_token == "claim-b"
+
+
+def test_duplicate_delivery_retries_until_the_lease_can_be_reclaimed(db, principal, mix):
+    """A broker redelivery cannot ACK success while a live worker still owns it."""
+    from worker.tasks import AttemptLeaseUnavailable, _claim_task_attempt
+
+    job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
+    db.commit()
+    claimed_at = datetime.now(timezone.utc)
+    first = claim_job_attempt(
+        db,
+        job.id,
+        "worker-a",
+        principal.project_id,
+        attempt_number=1,
+        claim_token="first-delivery-token",
+        now=claimed_at,
+        lease_seconds=30,
+    )
+    assert first is not None
+    old_token = first.claim_token
+    db.commit()
+
+    class SameBrokerMessage:
+        class request:
+            id = "celery-request-id-reused-by-redelivery"
+
+    with pytest.raises(AttemptLeaseUnavailable) as unavailable:
+        _claim_task_attempt(SameBrokerMessage(), db, job.id, principal.project_id, "worker-b", 1)
+    assert 1 <= unavailable.value.countdown <= 60
+    db.rollback()
+
+    replacement = claim_job_attempt(
+        db,
+        job.id,
+        "worker-b",
+        principal.project_id,
+        attempt_number=1,
+        # The replacement gets a fresh execution token even if Celery reused
+        # its request id; this blocks the resumed original worker.
+        claim_token="fresh-replacement-token",
+        now=claimed_at + timedelta(seconds=31),
+        lease_seconds=30,
+    )
+    assert replacement is not None
+    assert replacement.claim_token != old_token
+    assert heartbeat_job_attempt(
+        db,
+        job.id,
+        principal.project_id,
+        1,
+        "first-delivery-token",
+        now=claimed_at + timedelta(seconds=31),
+    ) is False
 
 
 def test_attempt_heartbeat_extends_lease_and_fences_the_previous_claim(db, principal, mix):

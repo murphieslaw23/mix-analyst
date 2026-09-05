@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import socket
 import tempfile
 import uuid
@@ -9,7 +10,7 @@ from sqlalchemy import select, text
 from .celery_app import celery_app
 from .db import SessionLocal
 from .analysis.orchestrator import AudioAnalysisOrchestrator
-from api.app.models.job import Job, JobStatus, StageRun, StageStatus
+from api.app.models.job import Job, JobAttempt, JobStatus, StageRun, StageStatus
 from api.app.models.job_event import JobEvent
 from api.app.models.artifact import Artifact as ArtifactRecord
 from api.app.config import settings as app_settings
@@ -34,6 +35,14 @@ class JobStopped(Exception):
     """The authoritative job state no longer permits worker-side processing."""
 
 
+class AttemptLeaseUnavailable(Exception):
+    """A duplicate delivery arrived while another fenced worker is live."""
+
+    def __init__(self, countdown: int):
+        self.countdown = countdown
+        super().__init__(f"attempt lease remains active; retry in {countdown}s")
+
+
 def require_running_job(
     db,
     job_id: str,
@@ -55,12 +64,16 @@ def require_running_job(
 
 def _claim_task_attempt(self, db, job_id: str, project_id: str, hostname: str, attempt_number: int | None):
     """Claim an exact dispatched attempt and retain its fencing identity."""
+    # Celery's request id belongs to the broker message and is preserved by
+    # ``retry``/redelivery. It is therefore not a fencing token. Every process
+    # execution receives a new opaque token, so a reclaimed lease can reject
+    # an older process even when it runs on the same hostname.
+    claim_token = uuid.uuid4().hex
     if attempt_number is None:
         # Direct task invocation remains useful in existing developer tests;
         # normal broker dispatches always carry the attempt number below.
-        attempt = claim_job_attempt(db, job_id, hostname, project_id)
+        attempt = claim_job_attempt(db, job_id, hostname, project_id, claim_token=claim_token)
     else:
-        claim_token = getattr(getattr(self, "request", None), "id", None) or uuid.uuid4().hex
         attempt = claim_job_attempt(
             db,
             job_id,
@@ -70,6 +83,28 @@ def _claim_task_attempt(self, db, job_id: str, project_id: str, hostname: str, a
             claim_token=claim_token,
         )
     if attempt is None:
+        # A late/duplicate broker delivery cannot be acknowledged as a normal
+        # success while a live lease owns the job. Schedule a bounded-delay
+        # retry, giving that lease a chance to expire and be reclaimed after a
+        # worker loss. Terminal or superseded attempts still ACK idempotently.
+        if attempt_number is not None:
+            active = db.scalar(
+                select(JobAttempt)
+                .join(Job, Job.id == JobAttempt.job_id)
+                .where(
+                    JobAttempt.job_id == job_id,
+                    JobAttempt.attempt_number == attempt_number,
+                    JobAttempt.status == JobStatus.RUNNING,
+                    Job.project_id == project_id,
+                )
+            )
+            if active is not None and active.lease_expires_at is not None:
+                expires_at = active.lease_expires_at
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                remaining = (expires_at - datetime.now(timezone.utc)).total_seconds()
+                if remaining > 0:
+                    raise AttemptLeaseUnavailable(max(1, min(60, math.ceil(remaining))))
         return None
     return attempt.attempt_number, attempt.claim_token
 
@@ -472,7 +507,7 @@ def publish_analysis_results(
         return latest_job_event(db, job_id, project_id)
 
 
-@celery_app.task(bind=True, name="tasks.run_master_mix")
+@celery_app.task(bind=True, name="tasks.run_master_mix", max_retries=None)
 def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | None = None):
     """Run a MASTERING command as an immutable worker-owned artifact stage."""
     db = SessionLocal()
@@ -637,6 +672,9 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
                 "algorithm_version": result.algorithm_version,
             },
         }
+    except AttemptLeaseUnavailable as exc:
+        db.rollback()
+        raise self.retry(exc=exc, countdown=exc.countdown, max_retries=None)
     except JobStopped:
         db.rollback()
         if stage_id is not None:
@@ -691,7 +729,7 @@ def cleanup_expired_uploads() -> dict[str, int]:
         db.close()
 
 
-@celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
+@celery_app.task(bind=True, name="tasks.run_analysis_pipeline", max_retries=None)
 def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: int | None = None):
     """
     Execute the real bounded-memory audio analysis, fingerprinting & transition detection pipeline.
@@ -827,6 +865,9 @@ def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: in
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
+    except AttemptLeaseUnavailable as exc:
+        db.rollback()
+        raise self.retry(exc=exc, countdown=exc.countdown, max_retries=None)
     except JobStopped:
         db.rollback()
         return {"status": "cancelled", "job_id": job_id}

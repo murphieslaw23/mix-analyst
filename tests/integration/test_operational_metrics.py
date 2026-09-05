@@ -64,6 +64,15 @@ def test_ready_fails_when_broker_check_fails(client, monkeypatch):
     assert response.json()["checks"]["redis"] == "error"
 
 
+def test_storage_readiness_uses_and_removes_a_unique_probe_file(tmp_path, monkeypatch):
+    from api.app.api.v1 import health
+
+    monkeypatch.setattr(health.settings, "storage_root", str(tmp_path))
+    monkeypatch.setattr(health.settings, "min_storage_free_bytes", 0)
+    assert health.storage_is_ready() is True
+    assert list(tmp_path.glob(".healthcheck-*")) == []
+
+
 def test_metric_tags_do_not_accept_filename_or_user_content():
     with pytest.raises(ValueError):
         record_counter("job.enqueued", tags={"filename": "private.wav"})
@@ -114,3 +123,36 @@ def test_worker_metric_is_visible_from_operator_api_scrape(client, monkeypatch):
     assert 'mix_analyst_job_stage_duration_ms{job_type="MASTERING",stage="mastering",status="failed"}' in response.text
     assert 'mix_analyst_job_failed{job_type="MASTERING",stage="mastering",status="failed"}' in response.text
     assert "mix_analyst_counter_backend_available 1" in response.text
+
+
+def test_local_metric_fallback_flushes_when_redis_recovers(monkeypatch):
+    """A transient telemetry outage may delay, but must not drop, a counter."""
+    class RecoveringRedis:
+        def __init__(self):
+            self.available = False
+            self.values = {}
+
+        def hincrby(self, key, field, value):
+            if not self.available:
+                raise OSError("redis temporarily unavailable")
+            self.values[(key, field)] = self.values.get((key, field), 0) + value
+
+        def hgetall(self, key):
+            if not self.available:
+                raise OSError("redis temporarily unavailable")
+            return {field: value for (stored_key, field), value in self.values.items() if stored_key == key}
+
+        def close(self):
+            pass
+
+    shared = RecoveringRedis()
+    monkeypatch.setattr(metrics_service, "_metrics_redis_client", lambda: shared)
+    metrics_service._counters.clear()
+    record_counter("upload.rejected", 3, tags={"stage": "upload", "status": "rejected"})
+    assert metrics_service.counter_samples()[0][1] == 3
+
+    shared.available = True
+    samples, shared_available = metrics_service.shared_counter_samples()
+    assert shared_available is True
+    assert ("upload.rejected", 3, {"stage": "upload", "status": "rejected"}) in samples
+    assert metrics_service.counter_samples() == []

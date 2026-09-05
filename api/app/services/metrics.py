@@ -68,6 +68,7 @@ def record_counter(name: str, value: int = 1, tags: Mapping[str, str] = {}) -> N
     try:
         client = _metrics_redis_client()
         try:
+            _flush_local_counters(client)
             client.hincrby(_COUNTER_HASH_KEY, _metric_field(*key), value)
         finally:
             client.close()
@@ -87,6 +88,7 @@ def shared_counter_samples() -> tuple[list[tuple[str, int, dict[str, str]]], boo
     try:
         client = _metrics_redis_client()
         try:
+            _flush_local_counters(client)
             stored = client.hgetall(_COUNTER_HASH_KEY)
         finally:
             client.close()
@@ -106,6 +108,33 @@ def shared_counter_samples() -> tuple[list[tuple[str, int, dict[str, str]]], boo
             name, tags = decoded
             samples.append((name, value, dict(tags)))
     return sorted(samples, key=lambda sample: (sample[0], tuple(sorted(sample[2].items())))), True
+
+
+def _flush_local_counters(client) -> None:
+    """Drain fallback samples into Redis without dropping unsent increments.
+
+    Each successful ``HINCRBY`` is removed individually. If the connection
+    fails part-way through the drain, all not-yet-confirmed counters remain in
+    process memory for the next recovery attempt. A response lost after Redis
+    accepted an increment may over-count on retry, but it can never silently
+    lose operational evidence, which is the safe failure direction for this
+    best-effort telemetry path.
+    """
+    with _lock:
+        pending = list(_counters.items())
+    for key, pending_value in pending:
+        if pending_value <= 0:
+            continue
+        client.hincrby(_COUNTER_HASH_KEY, _metric_field(*key), pending_value)
+        with _lock:
+            current = _counters.get(key, 0)
+            # New failures for this key may have arrived while Redis was being
+            # updated; remove only the snapshot we just confirmed.
+            remaining = current - pending_value
+            if remaining > 0:
+                _counters[key] = remaining
+            else:
+                _counters.pop(key, None)
 
 
 def _metrics_redis_client():

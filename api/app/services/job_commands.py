@@ -276,6 +276,9 @@ def heartbeat_job_attempt(
             JobAttempt.attempt_number == attempt_number,
             JobAttempt.status == JobStatus.RUNNING,
             JobAttempt.claim_token == claim_token,
+            # A process that wakes after its own lease expired must not revive
+            # the lease before a replacement delivery can reclaim it.
+            JobAttempt.lease_expires_at > current_time,
             select(Job.id)
             .where(
                 Job.id == JobAttempt.job_id,

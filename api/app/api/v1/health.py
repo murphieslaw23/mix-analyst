@@ -1,4 +1,5 @@
 import shutil
+import tempfile
 from pathlib import Path
 
 import redis
@@ -28,17 +29,34 @@ def ping_redis() -> bool:
 
 def storage_is_ready() -> bool:
     """Verify writable persistent storage has room for the configured admission."""
+    test_path: Path | None = None
     try:
         storage_path = Path(settings.storage_root)
         storage_path.mkdir(parents=True, exist_ok=True)
         if shutil.disk_usage(storage_path).free < settings.min_storage_free_bytes:
             return False
-        test_file = storage_path / ".healthcheck"
-        test_file.touch()
-        test_file.unlink()
-        return True
+        # A fixed sentinel races concurrent readiness probes and can cause one
+        # healthy request to unlink another's file. The OS allocates a unique
+        # name, and the finally block makes cleanup deterministic on failures.
+        descriptor, raw_path = tempfile.mkstemp(prefix=".healthcheck-", dir=storage_path)
+        test_path = Path(raw_path)
+        try:
+            # A successful open alone is not enough for a persistence volume.
+            # Flush the tiny sentinel before declaring the path writable.
+            with open(descriptor, "wb", closefd=True) as handle:
+                handle.write(b"ok")
+                handle.flush()
+        except Exception:
+            raise
+        return test_path.is_file()
     except Exception:
         return False
+    finally:
+        if test_path is not None:
+            try:
+                test_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @router.get("/live")

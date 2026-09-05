@@ -23,7 +23,9 @@ services:
     image: redis:7-alpine
     container_name: mix-analyst-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # Redis carries Celery's broker state. Eviction can silently discard an
+    # accepted job, so apply backpressure rather than evicting queue entries.
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     healthcheck:
@@ -41,8 +43,12 @@ services:
     container_name: mix-analyst-api
     restart: unless-stopped
     environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
       STORAGE_DIR: /storage
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-4294967296}
       MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
@@ -80,8 +86,12 @@ services:
     restart: unless-stopped
     command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-1}", "-Q", "analysis-cpu,dsp-heavy,metadata-network,exports"]
     environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
       STORAGE_DIR: /storage
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-4294967296}
       MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
@@ -111,11 +121,43 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "worker.outbox_dispatcher"]
     environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_DIR: /storage
       OUTBOX_POLL_SECONDS: ${OUTBOX_POLL_SECONDS:-1}
+    volumes:
+      - storage_data:/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mix-network
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: mix-analyst-celery-beat
+    restart: unless-stopped
+    # A single dedicated scheduler dispatches trusted global maintenance. Do
+    # not run beat inside horizontally-scaled DSP workers.
+    command: ["celery", "-A", "worker.celery_app", "beat", "--loglevel=info"]
+    environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_DIR: /storage
+    volumes:
+      - storage_data:/storage
     depends_on:
       postgres:
         condition: service_healthy

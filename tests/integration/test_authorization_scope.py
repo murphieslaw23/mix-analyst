@@ -236,6 +236,7 @@ def test_master_command_resolves_persisted_preset_before_queueing(client, user_a
         db.add(
             MasteringPreset(
                 id="owned-club-profile",
+                project_id="project-a",
                 name="Owned club profile",
                 target_lufs=-15.0,
                 true_peak_ceiling=-1.4,
@@ -288,6 +289,34 @@ def test_master_command_rejects_unknown_selected_preset(client, user_a_token):
         "/api/v1/mixes/mix-a/master",
         headers={"Authorization": f"Bearer {user_a_token}"},
         json={"preset_id": "missing-preset"},
+    )
+    assert response.status_code == 404
+
+
+def test_master_command_rejects_a_preset_owned_by_another_project(client, user_a_token):
+    """A preset id is not a cross-project capability."""
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        db.add(
+            MasteringPreset(
+                id="project-b-profile",
+                project_id="project-b",
+                name="Private profile",
+                target_lufs=-12.0,
+                true_peak_ceiling=-1.0,
+                target_lra=7.0,
+                is_builtin=False,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = test_client.post(
+        "/api/v1/mixes/mix-a/master",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+        json={"preset_id": "project-b-profile"},
     )
     assert response.status_code == 404
 

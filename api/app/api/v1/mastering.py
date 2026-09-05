@@ -8,6 +8,7 @@ from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.job import JobCreateRequest, JobOut
 from api.app.schemas.mastering import MasteringTriggerRequest
 from api.app.services.job_commands import enqueue_job
+from api.app.services.mastering_presets import resolve_mastering_parameters
 
 router = APIRouter()
 
@@ -20,17 +21,20 @@ def trigger_mix_mastering(
 ):
     """Queue mastering; completion is reported only by the owning worker."""
     mix = require_owned_mix(db, principal, mix_id)
+    parameters = resolve_mastering_parameters(
+        db,
+        principal,
+        request.preset_id,
+        target_lufs=request.target_lufs,
+        true_peak_dbtp=request.true_peak_ceiling,
+    )
     job = enqueue_job(
         db,
         principal,
         mix,
         JobCreateRequest(
             job_type="MASTERING",
-            parameters={
-                "target_lufs": request.target_lufs if request.target_lufs is not None else -9.0,
-                "true_peak_dbtp": request.true_peak_ceiling if request.true_peak_ceiling is not None else -1.0,
-                "algorithm_version": "v1",
-            },
+            parameters=parameters,
         ),
     )
     db.commit()

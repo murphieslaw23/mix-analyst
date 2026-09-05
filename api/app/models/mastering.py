@@ -7,6 +7,9 @@ class MasteringPreset(Base):
     __tablename__ = "mastering_presets"
 
     id = Column(String, primary_key=True, index=True)
+    # Built-ins are global; user-created presets are owned by one project and
+    # must never be reusable merely by guessing their identifier.
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=True, index=True)
     name = Column(String, nullable=False)
     description = Column(String, nullable=True)
     target_lufs = Column(Float, default=-14.0)
