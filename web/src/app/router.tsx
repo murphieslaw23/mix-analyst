@@ -1,4 +1,5 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
+import { LibraryPage } from "../features/library/LibraryPage";
 import { AppShell } from "./AppShell";
 import { JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, PROCESS_ROUTE } from "./routes";
 
@@ -32,10 +33,6 @@ function ProcessPage() {
 
 function JobsPage() {
   return <PlaceholderPage description="Processing progress and recovery controls will appear here." eyebrow="Work queue" title="Jobs" />;
-}
-
-function LibraryPage() {
-  return <PlaceholderPage description="Completed masters will appear here when they are available." eyebrow="Your results" title="Library" />;
 }
 
 function MorePage() {
