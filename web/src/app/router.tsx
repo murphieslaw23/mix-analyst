@@ -39,7 +39,7 @@ function LibraryPage() {
 }
 
 function MorePage() {
-  return <PlaceholderPage description="Install, notification, accessibility, support, and privacy options live here." eyebrow="Settings" title="More" />;
+  return <PlaceholderPage description="Install controls, notification preferences, accessibility support, and privacy settings are planned for a future update." eyebrow="Coming next" title="More" />;
 }
 
 export const router = createBrowserRouter([

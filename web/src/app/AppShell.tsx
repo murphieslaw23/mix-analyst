@@ -4,10 +4,10 @@ import { Archive, CircleHelp, Disc3, SlidersHorizontal } from "lucide-react";
 import { JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, PROCESS_ROUTE } from "./routes";
 
 const primaryNavigation = [
-  { label: "Process", path: PROCESS_ROUTE, icon: Disc3 },
-  { label: "Jobs", path: JOBS_ROUTE, icon: SlidersHorizontal },
-  { label: "Library", path: LIBRARY_ROUTE, icon: Archive },
-  { label: "More", path: MORE_ROUTE, icon: CircleHelp },
+  { label: "Process", path: PROCESS_ROUTE, icon: Disc3, end: true },
+  { label: "Jobs", path: JOBS_ROUTE, icon: SlidersHorizontal, end: false },
+  { label: "Library", path: LIBRARY_ROUTE, icon: Archive, end: false },
+  { label: "More", path: MORE_ROUTE, icon: CircleHelp, end: true },
 ];
 
 function RouteFocus() {
@@ -23,10 +23,10 @@ function RouteFocus() {
 function PrimaryNavigation({ className }: { className: string }) {
   return (
     <nav aria-label="Primary" className={className}>
-      {primaryNavigation.map(({ label, path, icon: Icon }) => (
+      {primaryNavigation.map(({ label, path, icon: Icon, end }) => (
         <NavLink
           className={({ isActive }) => `primary-nav__link${isActive ? " primary-nav__link--active" : ""}`}
-          end
+          end={end}
           key={path}
           to={path}
         >
