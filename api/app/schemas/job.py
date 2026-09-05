@@ -53,10 +53,15 @@ class JobOut(BaseModel):
 
 
 class JobListResponse(BaseModel):
-    """Stable, project-scoped page of durable jobs."""
+    """A project-scoped job page with a stable cursor continuation.
+
+    ``total`` is the count captured with the first page's snapshot boundary;
+    it deliberately does not grow while a caller walks that history.
+    """
 
     items: List[JobOut]
     total: int
+    next_cursor: Optional[str] = None
 
 
 class JobCreateRequest(BaseModel):

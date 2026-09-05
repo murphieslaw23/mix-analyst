@@ -210,6 +210,66 @@ def test_job_list_is_paginated_and_never_discloses_another_project(client, user_
     assert job.id not in {item["id"] for item in first_page.json()["items"] + second_page.json()["items"]}
 
 
+def test_job_list_cursor_keeps_a_complete_snapshot_during_concurrent_inserts(client, user_a_token, user_b_token):
+    """A new queue item must not shift a cursor continuation past old work."""
+    test_client, session_factory = client
+    db = session_factory()
+    try:
+        db.add_all(
+            [
+                Job(id="cursor-old", project_id="project-a", mix_id="mix-a", job_type=JobType.ANALYSIS, status=JobStatus.QUEUED, progress_percent=0.0, created_at=datetime(2030, 1, 1, tzinfo=timezone.utc)),
+                Job(id="cursor-middle", project_id="project-a", mix_id="mix-a", job_type=JobType.ANALYSIS, status=JobStatus.QUEUED, progress_percent=0.0, created_at=datetime(2030, 1, 2, tzinfo=timezone.utc)),
+                Job(id="cursor-new", project_id="project-a", mix_id="mix-a", job_type=JobType.ANALYSIS, status=JobStatus.QUEUED, progress_percent=0.0, created_at=datetime(2030, 1, 3, tzinfo=timezone.utc)),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    first_page = test_client.get("/api/v1/jobs?limit=2", headers={"Authorization": f"Bearer {user_a_token}"})
+    assert first_page.status_code == 200
+    first_body = first_page.json()
+    assert [item["id"] for item in first_body["items"]] == ["cursor-new", "cursor-middle"]
+    assert first_body["total"] == 3
+    assert isinstance(first_body["next_cursor"], str)
+
+    # This is the queue entry that previously shifted offset page two and made
+    # cursor-deduplicating clients skip `cursor-old` forever.
+    db = session_factory()
+    try:
+        db.add(Job(id="cursor-arrived-later", project_id="project-a", mix_id="mix-a", job_type=JobType.MASTERING, status=JobStatus.QUEUED, progress_percent=0.0, created_at=datetime(2030, 1, 4, tzinfo=timezone.utc)))
+        db.commit()
+    finally:
+        db.close()
+
+    second_page = test_client.get(
+        "/api/v1/jobs",
+        params={"limit": 2, "cursor": first_body["next_cursor"]},
+        headers={"Authorization": f"Bearer {user_a_token}"},
+    )
+    assert second_page.status_code == 200
+    second_body = second_page.json()
+    assert [item["id"] for item in second_body["items"]] == ["cursor-old"]
+    assert second_body["total"] == 3
+    assert second_body["next_cursor"] is None
+    assert "cursor-arrived-later" not in {item["id"] for item in first_body["items"] + second_body["items"]}
+
+    # The opaque cursor is bound to the project that first received it.
+    rejected = test_client.get(
+        "/api/v1/jobs",
+        params={"cursor": first_body["next_cursor"]},
+        headers={"Authorization": f"Bearer {user_b_token}"},
+    )
+    assert rejected.status_code == 422
+
+    malformed = test_client.get(
+        "/api/v1/jobs",
+        params={"cursor": "not-a-signed-cursor"},
+        headers={"Authorization": f"Bearer {user_a_token}"},
+    )
+    assert malformed.status_code == 422
+
+
 def test_signed_project_claim_requires_persisted_user_membership(client, user_b_mix):
     """A valid signature alone must not let a user select another persisted project."""
     test_client, _ = client

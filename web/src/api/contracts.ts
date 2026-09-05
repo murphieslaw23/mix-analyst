@@ -185,8 +185,9 @@ export interface JobAttemptDto {
   finished_at: string | null;
 }
 
-/** The public `/jobs` response is a scoped pagination envelope. */
+/** A project-scoped jobs snapshot. Follow only the server-issued cursor. */
 export interface JobListDto {
   items: JobDto[];
   total: number;
+  next_cursor: string | null;
 }

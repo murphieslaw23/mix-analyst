@@ -143,22 +143,25 @@ test.describe("Jobs progress and recovery", () => {
     await expect.poll(() => replayCursor, { timeout: 9_000 }).toBe("9");
   });
 
-  test("the jobs list consumes the authenticated paginated envelope", async ({ page }) => {
-    await page.route("**/api/v1/jobs?page=1&limit=20", async (route) => {
-      await route.fulfill({ contentType: "application/json", json: { items: [job("RUNNING")], total: 1 } });
+  test("the jobs list consumes the authenticated cursor envelope", async ({ page }) => {
+    await page.route("**/api/v1/jobs?limit=20", async (route) => {
+      await route.fulfill({ contentType: "application/json", json: { items: [job("RUNNING")], total: 1, next_cursor: null } });
     });
     await page.goto("/jobs");
     await expect(page.getByRole("list", { name: "1 job" })).toBeVisible();
     await expect(page.getByRole("link", { name: "View job" })).toHaveAttribute("href", "/jobs/job-1");
   });
 
-  test("the jobs list loads the next authenticated page without hiding later jobs", async ({ page }) => {
+  test("the jobs list follows a stable cursor when new work arrives", async ({ page }) => {
     const firstPage = Array.from({ length: 20 }, (_, index) => job("RUNNING", { id: `job-${index + 1}` }));
-    await page.route("**/api/v1/jobs?page=1&limit=20", async (route) => {
-      await route.fulfill({ contentType: "application/json", json: { items: firstPage, total: 21 } });
+    await page.route("**/api/v1/jobs?limit=20", async (route) => {
+      await route.fulfill({ contentType: "application/json", json: { items: firstPage, total: 21, next_cursor: "snapshot-after-20" } });
     });
-    await page.route("**/api/v1/jobs?page=2&limit=20", async (route) => {
-      await route.fulfill({ contentType: "application/json", json: { items: [job("FAILED", { id: "job-21" })], total: 21 } });
+    await page.route("**/api/v1/jobs?limit=20&cursor=snapshot-after-20", async (route) => {
+      // A newly-created job would be above the snapshot and is intentionally
+      // not injected into this continuation. The existing history remains
+      // reachable and the missing cursor ends the walk.
+      await route.fulfill({ contentType: "application/json", json: { items: [job("FAILED", { id: "job-21" })], total: 21, next_cursor: null } });
     });
     await page.goto("/jobs");
     await expect(page.getByText("Showing 20 of 21 jobs.")).toBeVisible();
@@ -166,6 +169,7 @@ test.describe("Jobs progress and recovery", () => {
     await expect(page.getByText("Showing 21 of 21 jobs.")).toBeVisible();
     await expect(page.getByRole("link", { name: "View job" })).toHaveCount(21);
     await expect(page.getByRole("link", { name: "View job" }).nth(20)).toHaveAttribute("href", "/jobs/job-21");
+    await expect(page.getByRole("button", { name: "Load more jobs" })).toHaveCount(0);
   });
 
   test("job detail reflows at a 390 pixel viewport", async ({ page }) => {

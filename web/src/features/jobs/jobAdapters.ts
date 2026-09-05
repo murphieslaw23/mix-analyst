@@ -107,7 +107,8 @@ export function asJobListDto(value: unknown): JobListDto {
     } catch {
       return false;
     }
-  }) || typeof value.total !== "number" || !Number.isInteger(value.total) || value.total < 0) {
+  }) || typeof value.total !== "number" || !Number.isInteger(value.total) || value.total < 0
+    || !isNullableString(value.next_cursor)) {
     throw new TypeError("The jobs response did not match the expected paginated contract.");
   }
   return value as unknown as JobListDto;

@@ -12,12 +12,12 @@ import { JOBS_ROUTE } from "../../app/routes";
 import { asJobListDto, toJobViewModels, type JobViewModel } from "./jobAdapters";
 
 type JobsResource =
-  | { status: "loading"; jobs: JobViewModel[]; total: number; problem: null; nextPage: number; loadingMore: false; loadMoreProblem: null }
-  | { status: "ready"; jobs: JobViewModel[]; total: number; problem: null; nextPage: number; loadingMore: boolean; loadMoreProblem: ApiProblem | null }
-  | { status: "error"; jobs: JobViewModel[]; total: number; problem: ApiProblem; nextPage: number; loadingMore: false; loadMoreProblem: null };
+  | { status: "loading"; jobs: JobViewModel[]; total: number; problem: null; nextCursor: string | null; loadingMore: false; loadMoreProblem: null }
+  | { status: "ready"; jobs: JobViewModel[]; total: number; problem: null; nextCursor: string | null; loadingMore: boolean; loadMoreProblem: ApiProblem | null }
+  | { status: "error"; jobs: JobViewModel[]; total: number; problem: ApiProblem; nextCursor: string | null; loadingMore: false; loadMoreProblem: null };
 
 const PAGE_SIZE = 20;
-const loadingState: JobsResource = { status: "loading", jobs: [], total: 0, problem: null, nextPage: 1, loadingMore: false, loadMoreProblem: null };
+const loadingState: JobsResource = { status: "loading", jobs: [], total: 0, problem: null, nextCursor: null, loadingMore: false, loadMoreProblem: null };
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -36,7 +36,7 @@ export function JobsPage() {
     resourceRef.current = resource;
   }, [resource]);
 
-  const load = useCallback((page = 1, append = false) => {
+  const load = useCallback((cursor: string | null = null, append = false) => {
     activeRequest.current?.abort();
     const controller = new AbortController();
     activeRequest.current = controller;
@@ -50,7 +50,8 @@ export function JobsPage() {
     }
     void (async () => {
       try {
-        const response = await apiClient<unknown>(`/jobs?page=${page}&limit=${PAGE_SIZE}`, { signal: controller.signal });
+        const query = cursor ? `?limit=${PAGE_SIZE}&cursor=${encodeURIComponent(cursor)}` : `?limit=${PAGE_SIZE}`;
+        const response = await apiClient<unknown>(`/jobs${query}`, { signal: controller.signal });
         const list: JobListDto = asJobListDto(response);
         if (!controller.signal.aborted && mounted.current && version === requestVersion.current) {
           const pageJobs = toJobViewModels(list);
@@ -63,7 +64,7 @@ export function JobsPage() {
               jobs,
               total: list.total,
               problem: null,
-              nextPage: page + 1,
+              nextCursor: list.next_cursor,
               loadingMore: false,
               loadMoreProblem: null,
             };
@@ -76,7 +77,7 @@ export function JobsPage() {
               ? { ...current, loadingMore: false, loadMoreProblem: asApiProblem(error) }
               : current);
           } else {
-            setResource({ status: "error", jobs: [], total: 0, problem: asApiProblem(error), nextPage: 1, loadingMore: false, loadMoreProblem: null });
+            setResource({ status: "error", jobs: [], total: 0, problem: asApiProblem(error), nextCursor: null, loadingMore: false, loadMoreProblem: null });
           }
         }
       }
@@ -85,8 +86,8 @@ export function JobsPage() {
 
   const loadMore = useCallback(() => {
     const current = resourceRef.current;
-    if (current.status !== "ready" || current.loadingMore || current.jobs.length >= current.total) return;
-    load(current.nextPage, true);
+    if (current.status !== "ready" || current.loadingMore || !current.nextCursor) return;
+    load(current.nextCursor, true);
   }, [load]);
 
   useEffect(() => {
@@ -127,7 +128,7 @@ export function JobsPage() {
               </li>
             ))}
           </ol>
-          {resource.jobs.length < resource.total ? (
+          {resource.nextCursor ? (
             <div className="jobs-page__pagination">
               <Button tone="secondary" onClick={loadMore} disabled={resource.loadingMore}>
                 {resource.loadingMore ? "Loading more jobs" : "Load more jobs"}
