@@ -93,5 +93,4 @@ export interface TransitionDto {
 
 export interface TransitionListResponse { mix_id: string; total_transitions: number; transitions: TransitionDto[]; }
 
-export interface MasteringReport { integrated_lufs: number | null; true_peak_dbtp: number | null; }
 export interface ApiProblem { status: number; title: string; detail: string; retryable: boolean; }

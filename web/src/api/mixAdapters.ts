@@ -1,7 +1,6 @@
 import type {
   AnalysisResultDto,
   ArtifactDto,
-  MasteringReport,
   MixDto,
   MixListDto,
   TrackDto,
@@ -53,6 +52,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isArtifactDto(value: unknown): value is ArtifactDto {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.role === "string"
+    && typeof value.key === "string"
+    && typeof value.sha256 === "string"
+    && typeof value.algorithm_version === "string"
+    && typeof value.media_type === "string"
+    && typeof value.byte_length === "number"
+    && typeof value.download_url === "string"
+    && typeof value.created_at === "string";
+}
+
 function isMixDto(value: unknown): value is MixDto {
   return isRecord(value)
     && typeof value.id === "string"
@@ -62,7 +74,9 @@ function isMixDto(value: unknown): value is MixDto {
     && typeof value.updated_at === "string"
     && isRecord(value.media_asset)
     && typeof value.media_asset.original_filename === "string"
-    && typeof value.media_asset.duration_seconds === "number";
+    && typeof value.media_asset.duration_seconds === "number"
+    && Array.isArray(value.artifacts)
+    && value.artifacts.every(isArtifactDto);
 }
 
 /** Validates the public list envelope before any feature receives it. */
@@ -88,7 +102,9 @@ export function toLibraryMixSummary(mix: MixDto): LibraryMixSummary {
 }
 
 export function toLibraryMixSummaries(response: MixListDto): LibraryMixSummary[] {
-  return response.items.map(toLibraryMixSummary);
+  return response.items
+    .filter((mix) => mix.artifacts.some((artifact) => artifact.role === "mastered"))
+    .map(toLibraryMixSummary);
 }
 
 export function toMixDetail(mix: MixDto): MixDetail {
@@ -111,10 +127,6 @@ export function toTrackSummary(track: TrackDto): TrackSummary {
 
 export function toTransitionSummary(transition: TransitionDto): TransitionSummary {
   return { id: transition.id, index: transition.transition_index, startSeconds: transition.start_time_seconds, endSeconds: transition.end_time_seconds, type: transition.transition_type, confidence: transition.confidence };
-}
-
-export function toMasteringReport(report: MasteringReport): MasteringReport {
-  return { integrated_lufs: report.integrated_lufs, true_peak_dbtp: report.true_peak_dbtp };
 }
 
 export function toArtifacts(artifacts: ArtifactDto[]): ArtifactDto[] {
