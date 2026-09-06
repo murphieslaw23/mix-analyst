@@ -65,6 +65,7 @@ class Job(Base):
     attempts = relationship("JobAttempt", back_populates="job", cascade="all, delete-orphan", order_by="JobAttempt.attempt_number")
     outbox_messages = relationship("OutboxMessage", back_populates="job", cascade="all, delete-orphan")
     events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan", order_by="JobEvent.sequence")
+    notifications = relationship("Notification", back_populates="job", cascade="all, delete-orphan")
     batch = relationship("Batch", back_populates="jobs")
 
 

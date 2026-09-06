@@ -23,6 +23,7 @@ from api.app.services.job_events_store import (
     database_current_timestamp,
     record_job_event,
 )
+from api.app.services.notifications import create_job_notification
 from api.app.services.upload_sessions import cleanup_expired_uploads_global, reconcile_pending_upload_promotions
 from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
 from .stages.tag_mix import Artifact as StageArtifact, tag_mix
@@ -293,6 +294,7 @@ def transition_job_and_attempt(
             "error_message": error,
         },
     )
+    create_job_notification(db, job)
     return True
 
 

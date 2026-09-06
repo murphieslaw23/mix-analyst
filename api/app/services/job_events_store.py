@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..models.job import Job, JobAttempt, JobStatus
 from ..models.job_event import JobEvent
+from ..services.notifications import create_job_notification
 
 
 def database_current_timestamp(db: Session):
@@ -104,6 +105,7 @@ def request_cancellation(db: Session, job: Job) -> Job:
             "error_message": job.error_message,
         },
     )
+    create_job_notification(db, job)
     return job
 
 
@@ -196,4 +198,5 @@ def complete_job_attempt(
             "current_stage": "Complete",
         },
     )
+    create_job_notification(db, job)
     return True

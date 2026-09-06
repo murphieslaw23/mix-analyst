@@ -11,6 +11,7 @@ from api.app.models.broadcast import BroadcastSync
 from api.app.models.stems import StemJob
 from api.app.models.artifact import Artifact
 from api.app.models.batch import Batch
+from api.app.models.notification import Notification
 
 __all__ = [
     "MediaAsset",
@@ -33,4 +34,5 @@ __all__ = [
     "Batch",
     "Project",
     "User",
+    "Notification",
 ]

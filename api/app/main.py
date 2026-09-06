@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.app.config import settings
-from api.app.api.v1 import batches, health, uploads, jobs, metrics, mixes, mastering
+from api.app.api.v1 import batches, health, uploads, jobs, metrics, mixes, mastering, notifications
 import api.app.models  # noqa: F401 - registers the complete SQLAlchemy metadata
 
 @asynccontextmanager
@@ -31,6 +31,7 @@ app.include_router(metrics.router, prefix=settings.api_v1_prefix, tags=["operati
 # Upload sessions use the legacy root-level `/{upload_id}` path. Register the
 # named job routes first so an upload parameter route cannot capture `/jobs`.
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
+app.include_router(notifications.router, prefix=settings.api_v1_prefix, tags=["notifications"])
 app.include_router(uploads.router, prefix=settings.api_v1_prefix, tags=["uploads"])
 app.include_router(mixes.router, prefix=f"{settings.api_v1_prefix}/mixes", tags=["mixes"])
 app.include_router(mastering.router, prefix=settings.api_v1_prefix, tags=["mastering"])
