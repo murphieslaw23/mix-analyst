@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { triggerArtifactDownload } from "../../api/artifacts";
 import type { ArtifactDto } from "../../api/contracts";
 import { Button } from "../../components/ui/Button";
 import { usePlayer } from "./usePlayer";
@@ -24,6 +25,8 @@ export function ABPlayer({ artifacts, sourceFilename, suggestedDownloadName }: A
   const mastered = useMemo(() => artifactFor(artifacts, "mastered"), [artifacts]);
   const defaultRole: ArtifactRole = "mastered";
   const [activeRole, setActiveRole] = useStateWithReset(defaultRole, `${source?.id ?? ""}:${mastered?.id ?? ""}`);
+  const [downloadPending, setDownloadPending] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const activeArtifact = activeRole === "mastered" ? mastered : source;
   const { state, error, selectArtifact, playArtifact, pause } = usePlayer();
 
@@ -41,7 +44,20 @@ export function ABPlayer({ artifacts, sourceFilename, suggestedDownloadName }: A
     const artifact = role === "mastered" ? mastered : source;
     if (!artifact) return;
     setActiveRole(role);
+    setDownloadError(null);
     selectArtifact(artifact.download_url);
+  };
+  const download = async () => {
+    if (!activeArtifact || downloadPending) return;
+    setDownloadPending(true);
+    setDownloadError(null);
+    try {
+      await triggerArtifactDownload(activeArtifact.download_url);
+    } catch {
+      setDownloadError(`Could not authorize the ${activeLabel} download. Reopen the operator session and try again.`);
+    } finally {
+      setDownloadPending(false);
+    }
   };
 
   return (
@@ -53,9 +69,10 @@ export function ABPlayer({ artifacts, sourceFilename, suggestedDownloadName }: A
       </div>
       <div className="ab-player__transport">
         {state === "playing" ? <Button onClick={pause}>Pause {activeLabel} audio</Button> : <Button disabled={!activeArtifact || state === "starting"} onClick={() => activeArtifact && void playArtifact(activeArtifact.download_url)}>Play {activeLabel} audio</Button>}
-        {activeArtifact ? <a className="button button--secondary" download={downloadName} href={activeArtifact.download_url}>Download {activeLabel} audio</a> : null}
+        <Button disabled={!activeArtifact || downloadPending} onClick={() => void download()} tone="secondary">{downloadPending ? "Authorizing…" : `Download ${activeLabel} audio`}</Button>
       </div>
-      {error ? <p className="ab-player__error" role="alert">{error}</p> : <p className="ab-player__hint">Playback and download use the protected {activeLabel} artifact returned by the service.</p>}
+      <span className="visually-hidden">Suggested filename: {downloadName}</span>
+      {error || downloadError ? <p className="ab-player__error" role="alert">{error ?? downloadError}</p> : <p className="ab-player__hint">Playback and download use a scoped media capability minted from your operator session.</p>}
     </section>
   );
 }
