@@ -1,23 +1,29 @@
+import json
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import List
-import json
 
-from ...db.session import get_db
-from ..deps import get_current_principal, require_owned_mix
-from ...models.media import Mix
-from ...models.analysis import AnalysisResult
-from ...models.tracklist import TrackSegment, TrackMatch
-from ...models.transition import TransitionEvent
-from ...models.artifact import Artifact
 from ...config import settings
-from ...services.storage import StorageService
-from ...schemas.mix import MixOut, MixListResponse, MixUpdateRequest
+from ...db.session import get_db
+from ...models.analysis import AnalysisResult
+from ...models.artifact import Artifact
+from ...models.media import Mix
+from ...models.tracklist import TrackSegment
+from ...models.transition import TransitionEvent
 from ...schemas.analysis import AnalysisResultOut
-from ...schemas.tracklist import TracklistResponse
-from ...schemas.transition import TransitionListResponse, TransitionEventOut
 from ...schemas.auth import CurrentPrincipal
+from ...schemas.mix import MixListResponse, MixOut, MixUpdateRequest
+from ...schemas.tracklist import TracklistResponse
+from ...schemas.transition import TransitionListResponse
+from ...services.auth import (
+    ARTIFACT_TICKET_TTL_SECONDS,
+    decode_artifact_ticket,
+    issue_artifact_ticket,
+)
+from ...services.storage import StorageService
+from ..deps import get_current_principal, get_optional_principal, require_owned_mix
 
 router = APIRouter()
 
@@ -56,6 +62,18 @@ def _present_mix(mix: Mix) -> dict:
     }
 
 
+def _owned_artifact(db: Session, principal: CurrentPrincipal, mix_id: str, artifact_id: str) -> tuple[Mix, Artifact]:
+    mix = require_owned_mix(db, principal, mix_id)
+    artifact = db.query(Artifact).filter(
+        Artifact.id == artifact_id,
+        Artifact.mix_id == mix.id,
+        Artifact.project_id == principal.project_id,
+    ).first()
+    if artifact is None or not artifact.key.startswith(f"projects/{principal.project_id}/"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+    return mix, artifact
+
+
 @router.get("", response_model=MixListResponse)
 def list_mixes(
     db: Session = Depends(get_db),
@@ -76,36 +94,60 @@ def get_mix(
     return _present_mix(require_owned_mix(db, principal, mix_id))
 
 
-@router.get("/{mix_id}/artifacts/{artifact_id}/download")
-def download_artifact(
+@router.post("/{mix_id}/artifacts/{artifact_id}/download-ticket")
+def create_artifact_download_ticket(
     mix_id: str,
     artifact_id: str,
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
-    """Serve an artifact only after project-scoped authorization.
+    """Mint a short-lived capability so native media can stream with Range requests."""
+    _owned_artifact(db, principal, mix_id, artifact_id)
+    ticket = issue_artifact_ticket(principal, mix_id, artifact_id)
+    protected_url = f"{settings.api_v1_prefix}/mixes/{mix_id}/artifacts/{artifact_id}/download"
+    return {
+        "download_url": f"{protected_url}?ticket={quote(ticket, safe='')}",
+        "expires_in_seconds": ARTIFACT_TICKET_TTL_SECONDS,
+    }
 
-    This is the local-storage equivalent of a signed artifact URL: the API is
-    the authorization boundary and no filesystem path or unauthenticated object
-    URL is disclosed to clients.
-    """
-    mix = require_owned_mix(db, principal, mix_id)
-    artifact = db.query(Artifact).filter(
-        Artifact.id == artifact_id,
-        Artifact.mix_id == mix.id,
-        Artifact.project_id == principal.project_id,
-    ).first()
-    if artifact is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
-    if not artifact.key.startswith(f"projects/{principal.project_id}/"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+
+@router.get("/{mix_id}/artifacts/{artifact_id}/download")
+def download_artifact(
+    mix_id: str,
+    artifact_id: str,
+    ticket: str | None = None,
+    db: Session = Depends(get_db),
+    principal: CurrentPrincipal | None = Depends(get_optional_principal),
+):
+    """Serve an artifact after bearer authorization or a scoped media ticket."""
+    effective_principal = principal
+    if effective_principal is None:
+        if not ticket:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            effective_principal = decode_artifact_ticket(ticket, mix_id, artifact_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid artifact ticket") from None
+
+    mix, artifact = _owned_artifact(db, effective_principal, mix_id, artifact_id)
     try:
         path = StorageService(settings.storage_root).object_path(artifact.key)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found") from None
     if not path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact is unavailable")
-    metadata = next((item for item in sorted(mix.artifacts, key=lambda item: (item.created_at, item.id), reverse=True) if item.role == "metadata"), None)
+    metadata = next(
+        (
+            item
+            for item in sorted(mix.artifacts, key=lambda item: (item.created_at, item.id), reverse=True)
+            if item.role == "metadata"
+        ),
+        None,
+    )
     suggested_name = (metadata.report or {}).get("suggested_download_name") if metadata else None
     if artifact.role == "source":
         filename = mix.media_asset.original_filename
@@ -163,7 +205,7 @@ def get_mix_tracklist(
     require_owned_mix(db, principal, mix_id)
 
     segments = db.query(TrackSegment).filter(TrackSegment.mix_id == mix_id).order_by(TrackSegment.segment_index.asc()).all()
-    identified_count = sum(1 for s in segments if s.match is not None)
+    identified_count = sum(1 for segment in segments if segment.match is not None)
 
     return TracklistResponse(
         mix_id=mix_id,
