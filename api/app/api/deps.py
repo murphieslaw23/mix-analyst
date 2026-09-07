@@ -13,18 +13,19 @@ from ..services.auth import decode_principal_token, require_persisted_project_me
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_current_principal(
+def get_optional_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
-) -> CurrentPrincipal:
-    """Require an HS256 bearer token issued by this server's configured secret."""
-    if credentials is None or credentials.scheme.lower() != "bearer":
+) -> CurrentPrincipal | None:
+    """Resolve a bearer principal when supplied while permitting signed media tickets."""
+    if credentials is None:
+        return None
+    if credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     try:
         return require_persisted_project_membership(db, decode_principal_token(credentials.credentials))
     except ValueError:
@@ -33,6 +34,19 @@ def get_current_principal(
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
+
+
+def get_current_principal(
+    principal: CurrentPrincipal | None = Depends(get_optional_principal),
+) -> CurrentPrincipal:
+    """Require an HS256 bearer token issued by this server's configured secret."""
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return principal
 
 
 def require_owned_mix(db: Session, principal: CurrentPrincipal, mix_id: str) -> Mix:
