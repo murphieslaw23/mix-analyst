@@ -46,7 +46,7 @@ jobs:
 
       - name: Run Ruff Lint & Format Verification
         run: |
-          ruff check . --ignore-missing-imports
+          ruff check .
           ruff format --check .
 
       - name: Run MyPy Typecheck
@@ -85,7 +85,7 @@ jobs:
           pip install --upgrade pip
           pip install -r api/requirements.txt
           pip install -r worker/requirements.txt
-          pip install pytest pytest-cov psutil httpx2
+          pip install pytest pytest-cov psutil 'httpx>=0.28,<1'
 
       - name: Run Pytest Test Suite
         run: |
