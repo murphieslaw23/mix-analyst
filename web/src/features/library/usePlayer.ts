@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { resolveArtifactDownloadUrl } from "../../api/artifacts";
 
 export type PlayerState = "idle" | "starting" | "playing" | "error";
 
@@ -38,7 +39,7 @@ export function usePlayer() {
       audio.removeEventListener("pause", stop);
       audio.removeEventListener("ended", stop);
       audio.removeEventListener("error", fail);
-      audio.src = "";
+      audio.removeAttribute("src");
       audioRef.current = null;
     };
   }, []);
@@ -49,10 +50,8 @@ export function usePlayer() {
     const audio = audioRef.current;
     if (audio) {
       audio.pause();
-      if (audio.src !== new URL(nextUrl, window.location.origin).href) {
-        audio.src = nextUrl;
-        audio.load();
-      }
+      audio.removeAttribute("src");
+      audio.load();
     }
     setUrl(nextUrl);
     setError(null);
@@ -66,13 +65,13 @@ export function usePlayer() {
     activePlaybackRef.current = null;
     setError(null);
     setState("starting");
-    if (audio.src !== new URL(nextUrl, window.location.origin).href) {
-      audio.pause();
-      audio.src = nextUrl;
-      audio.load();
-      setUrl(nextUrl);
-    }
+    setUrl(nextUrl);
     try {
+      const resolvedUrl = await resolveArtifactDownloadUrl(nextUrl);
+      if (request !== requestRef.current) return;
+      audio.pause();
+      audio.src = resolvedUrl;
+      audio.load();
       await audio.play();
       if (request === requestRef.current) {
         activePlaybackRef.current = { request, url: audio.src };
@@ -82,7 +81,7 @@ export function usePlayer() {
       if (request === requestRef.current) {
         activePlaybackRef.current = null;
         setState("error");
-        setError("Playback needs a browser gesture or supported audio. Check the file and try again.");
+        setError("Playback could not obtain an authorized audio stream. Reopen the operator session and try again.");
       }
     }
   }, []);
