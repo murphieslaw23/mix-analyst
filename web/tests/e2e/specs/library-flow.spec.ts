@@ -32,11 +32,22 @@ async function mockMix(page: import("@playwright/test").Page) {
   await page.route("**/api/v1/mixes/mix-1", async (route) => {
     await route.fulfill({ contentType: "application/json", json: mixDetail() });
   });
+  await page.route("**/api/v1/mixes/mix-1/artifacts/*/download-ticket", async (route) => {
+    const protectedUrl = route.request().url().replace(/\/download-ticket$/, "/download");
+    await route.fulfill({
+      contentType: "application/json",
+      json: { download_url: `${protectedUrl}?ticket=fixture-ticket`, expires_in_seconds: 1020 },
+    });
+  });
 }
 
 test.describe("Library detail", () => {
-  test("uses server artifacts for explicit A/B playback and download", async ({ page }) => {
+  test("uses server artifacts for explicit A/B playback and ticketed download", async ({ page }) => {
     await mockMix(page);
+    let ticketRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/download-ticket")) ticketRequests += 1;
+    });
     await page.addInitScript(() => {
       HTMLMediaElement.prototype.play = () => Promise.resolve();
     });
@@ -46,11 +57,15 @@ test.describe("Library detail", () => {
     await expect(page.getByRole("button", { name: "Mastered", exact: true })).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: "Play mastered audio" }).click();
     await expect(page.getByRole("button", { name: "Pause mastered audio" })).toBeVisible();
+    expect(ticketRequests).toBeGreaterThanOrEqual(1);
+
     await page.getByRole("button", { name: "Original", exact: true }).click();
     await expect(page.getByRole("button", { name: "Original", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("button", { name: "Play original audio" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Download original audio" })).toHaveAttribute("href", sourceArtifact.download_url);
-    await expect(page.getByRole("link", { name: "Download original audio" })).toHaveAttribute("download", "transmission.wav");
+    await expect(page.getByRole("button", { name: "Download original audio" })).toBeVisible();
+    const beforeDownload = ticketRequests;
+    await page.getByRole("button", { name: "Download original audio" }).click();
+    await expect.poll(() => ticketRequests).toBeGreaterThan(beforeDownload);
   });
 
   test("does not report playback when the browser denies it", async ({ page }) => {
@@ -73,7 +88,7 @@ test.describe("Library detail", () => {
     await expect(page.getByText("Result not ready", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Master not ready" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Play .* audio/ })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: /Download .* audio/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Download .* audio/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Open listening rig" })).toHaveCount(0);
   });
 
