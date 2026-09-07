@@ -2,6 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // Service workers are disabled by the application in Vite development mode.
+  // The dedicated PWA config builds and serves the production bundle instead.
+  testIgnore: /pwa-(offline|update)\.spec\.ts/,
   timeout: 45 * 1000,
   expect: {
     timeout: 10 * 1000,
@@ -23,7 +26,6 @@ export default defineConfig({
   },
   projects: [
     {
-      // This is the only desktop browser engine in this matrix: Chromium.
       name: 'Desktop-Chromium',
       use: {
         ...devices['Desktop Chrome'],
@@ -31,20 +33,20 @@ export default defineConfig({
       },
     },
     {
-      // Viewport/user-agent emulation only; this does not constitute WebKit coverage.
-      name: 'Chromium-iPad-viewport',
+      // Real WebKit engine rather than Chromium with an iPad user agent.
+      name: 'WebKit-iPad',
       use: {
         ...devices['iPad (gen 7)'],
-        browserName: 'chromium',
+        browserName: 'webkit',
         viewport: { width: 768, height: 1024 },
       },
     },
     {
-      // Viewport/user-agent emulation only; this does not constitute Mobile Safari coverage.
-      name: 'Chromium-iPhone-viewport',
+      // Real WebKit engine gives the mobile release gate Safari-family coverage.
+      name: 'WebKit-iPhone',
       use: {
         ...devices['iPhone 14'],
-        browserName: 'chromium',
+        browserName: 'webkit',
         viewport: { width: 390, height: 844 },
       },
     },
