@@ -1,7 +1,5 @@
 """Behavioral coverage for the immutable mastering worker stage."""
 
-import io
-
 import soundfile as sf
 
 from tests.fixtures.synthetic_audio import generate_synthetic_audio
@@ -72,3 +70,24 @@ def test_custom_profile_controls_reach_the_mastering_dsp_stage(tmp_path, monkeyp
         "target_lra": 5.5,
         "compressor": {"threshold_db": -20.0, "ratio": 3.5, "attack_ms": 12.0, "release_ms": 160.0},
     }
+
+
+def test_long_mastering_uses_streaming_path_instead_of_soundfile_read(tmp_path, monkeypatch):
+    """A recording beyond the array cap must never be decoded as one NumPy array."""
+    import worker.dsp.mastering as mastering
+
+    source = tmp_path / "long-source.wav"
+    source.write_bytes(generate_synthetic_audio(duration_sec=9.0))
+
+    def fail_whole_file_decode(*_args, **_kwargs):
+        raise AssertionError("long-form mastering attempted whole-file soundfile.read")
+
+    monkeypatch.setattr(sf, "read", fail_whole_file_decode)
+    result = mastering.master_audio_file(
+        source,
+        mastering.MasterSettings(project_id="project-a", storage_root=tmp_path),
+    )
+
+    assert result.artifact_key.startswith("projects/project-a/artifacts/mastered/v1/")
+    assert (tmp_path / result.artifact_key).is_file()
+    assert result.true_peak_dbtp <= -0.5
