@@ -66,12 +66,23 @@ export function usePlayer() {
     setError(null);
     setState("starting");
     setUrl(nextUrl);
+
+    let resolvedUrl: string;
     try {
-      const resolvedUrl = await resolveArtifactDownloadUrl(nextUrl);
-      if (request !== requestRef.current) return;
-      audio.pause();
-      audio.src = resolvedUrl;
-      audio.load();
+      resolvedUrl = await resolveArtifactDownloadUrl(nextUrl);
+    } catch {
+      if (request === requestRef.current) {
+        setState("error");
+        setError("Playback could not obtain an authorized audio stream. Reopen the operator session and try again.");
+      }
+      return;
+    }
+    if (request !== requestRef.current) return;
+
+    audio.pause();
+    audio.src = resolvedUrl;
+    audio.load();
+    try {
       await audio.play();
       if (request === requestRef.current) {
         activePlaybackRef.current = { request, url: audio.src };
@@ -81,7 +92,7 @@ export function usePlayer() {
       if (request === requestRef.current) {
         activePlaybackRef.current = null;
         setState("error");
-        setError("Playback could not obtain an authorized audio stream. Reopen the operator session and try again.");
+        setError("Playback needs a browser gesture or supported audio. Check the file and try again.");
       }
     }
   }, []);
