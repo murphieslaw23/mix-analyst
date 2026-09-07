@@ -1,4 +1,5 @@
 import type { ApiProblem } from "./contracts";
+import { authorizedFetch } from "../auth/session";
 
 export type { ApiProblem } from "./contracts";
 
@@ -20,13 +21,13 @@ export class ApiProblemError extends Error implements ApiProblem {
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-/** Build a same-origin API URL for streaming endpoints as well as JSON calls. */
+/** Build an API URL for streaming endpoints as well as JSON calls. */
 export function apiUrl(path: string): string {
   return `${apiBase}${path}`;
 }
 
 function safeProblem(status: number): ApiProblem {
-  if (status === 401 || status === 403) return { status, title: "Sign-in required", detail: "You do not have access to these mixes.", retryable: false };
+  if (status === 401 || status === 403) return { status, title: "Sign-in required", detail: "Open this app from an authorized operator session and try again.", retryable: false };
   if (status === 404) return { status, title: "Not found", detail: "That mix is no longer available.", retryable: false };
   if (status === 408 || status === 429 || status >= 500) return { status, title: "Service temporarily unavailable", detail: "Please try again in a moment.", retryable: true };
   return { status, title: "Could not complete that request", detail: "Please review your request and try again.", retryable: false };
@@ -40,18 +41,14 @@ export function asApiProblem(error: unknown): ApiProblem {
 export async function apiClient<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(apiUrl(path), { ...init, credentials: "include", headers: { Accept: "application/json", ...init.headers } });
+    const headers = new Headers(init.headers);
+    if (!headers.has("Accept")) headers.set("Accept", "application/json");
+    response = await authorizedFetch(apiUrl(path), { ...init, headers });
   } catch (error) {
-    // Callers that own an AbortController need to distinguish deliberate
-    // cancellation from an unavailable service. Do not turn it into a false
-    // connectivity error.
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new ApiProblemError(asApiProblem(undefined));
   }
-  if (!response.ok) {
-    // Do not expose backend error payloads or convert them into fake success.
-    throw new ApiProblemError(safeProblem(response.status));
-  }
+  if (!response.ok) throw new ApiProblemError(safeProblem(response.status));
   if (response.status === 204) return undefined as T;
   try { return (await response.json()) as T; } catch {
     throw new ApiProblemError({ status: response.status, title: "Unexpected response", detail: "The service sent a response we could not read. Please try again.", retryable: true });
