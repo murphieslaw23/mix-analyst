@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from typing import Mapping
 from pathlib import Path
+from typing import Mapping
 
 import numpy as np
 
 
 ALGORITHM_VERSION = "v1"
 _KEY_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+MAX_IN_MEMORY_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ def _integrated_lufs(audio: np.ndarray, sample_rate: int) -> float:
 
 
 def _true_peak_dbtp(audio: np.ndarray) -> float:
-    """Measure a deterministic 4x oversampled peak estimate."""
+    """Measure a deterministic 4x oversampled peak estimate for capped arrays."""
     from scipy.signal import resample_poly
 
     samples = np.asarray(audio, dtype=np.float64)
@@ -73,7 +76,6 @@ def _true_peak_dbtp(audio: np.ndarray) -> float:
 
 
 def _validated_eq_settings(settings: Mapping[str, float]) -> dict[str, float]:
-    """Accept the documented tonal profile controls and bound their effect."""
     allowed = {"sub_boost_db", "mud_cut_db", "high_air_db"}
     unknown = set(settings) - allowed
     if unknown:
@@ -85,7 +87,6 @@ def _validated_eq_settings(settings: Mapping[str, float]) -> dict[str, float]:
 
 
 def _validated_compressor_settings(settings: Mapping[str, float]) -> dict[str, float]:
-    """Validate the complete public compressor profile before a job is claimed."""
     allowed = {"threshold_db", "ratio", "attack_ms", "release_ms"}
     unknown = set(settings) - allowed
     if unknown:
@@ -102,12 +103,7 @@ def _validated_compressor_settings(settings: Mapping[str, float]) -> dict[str, f
 
 
 def _apply_profile_eq(audio: np.ndarray, sample_rate: int, settings: Mapping[str, float]) -> np.ndarray:
-    """Apply a deterministic three-band spectral profile.
-
-    The profiles deliberately use broad, smooth bell/shelf curves rather than
-    a fixed gain post-process, so custom tonal controls have audible, bounded
-    effects on the material before loudness normalization.
-    """
+    """Apply the deterministic reference EQ to a bounded in-memory signal."""
     controls = _validated_eq_settings(settings)
     if not controls:
         return np.asarray(audio, dtype=np.float64)
@@ -117,7 +113,6 @@ def _apply_profile_eq(audio: np.ndarray, sample_rate: int, settings: Mapping[str
     safe_frequency = np.maximum(frequencies, 1.0)
     sub = controls.get("sub_boost_db", 0.0) * np.exp(-0.5 * (np.log2(safe_frequency / 65.0) / 0.9) ** 2)
     mud = controls.get("mud_cut_db", 0.0) * np.exp(-0.5 * (np.log2(safe_frequency / 300.0) / 0.85) ** 2)
-    # A sigmoid avoids a discontinuity around the high-air turnover.
     air = controls.get("high_air_db", 0.0) / (1.0 + np.exp(-(frequencies - 9000.0) / 1600.0))
     gain = 10.0 ** ((sub + mud + air) / 20.0)
     spectrum = np.fft.rfft(samples, axis=0)
@@ -128,13 +123,13 @@ def _apply_profile_eq(audio: np.ndarray, sample_rate: int, settings: Mapping[str
     return np.fft.irfft(spectrum, n=sample_count, axis=0)
 
 
-def _apply_profile_compression(audio: np.ndarray, sample_rate: int, target_lra: float, settings: Mapping[str, float]) -> np.ndarray:
-    """Apply linked-stereo envelope compression using profile attack/release.
-
-    ``target_lra`` contributes a bounded ratio floor: lower requested ranges
-    tighten the dynamics even when a custom profile omits ``ratio``.  This is
-    intentionally deterministic and runs before the final loudness/peak pass.
-    """
+def _apply_profile_compression(
+    audio: np.ndarray,
+    sample_rate: int,
+    target_lra: float,
+    settings: Mapping[str, float],
+) -> np.ndarray:
+    """Apply linked-stereo reference compression to a bounded signal."""
     controls = _validated_compressor_settings(settings)
     threshold_db = controls.get("threshold_db", -18.0)
     ratio = max(controls.get("ratio", 2.0), 1.0 + (12.0 - min(target_lra, 12.0)) / 6.0)
@@ -143,7 +138,10 @@ def _apply_profile_compression(audio: np.ndarray, sample_rate: int, target_lra: 
     samples = np.asarray(audio, dtype=np.float64)
     linked = np.max(np.abs(samples), axis=1) if samples.ndim > 1 else np.abs(samples)
     level_db = 20.0 * np.log10(np.maximum(linked, 1e-12))
-    desired_reduction = np.minimum(0.0, threshold_db + np.maximum(level_db - threshold_db, 0.0) / ratio - level_db)
+    desired_reduction = np.minimum(
+        0.0,
+        threshold_db + np.maximum(level_db - threshold_db, 0.0) / ratio - level_db,
+    )
     envelope = np.empty_like(desired_reduction)
     envelope[0] = desired_reduction[0]
     attack = np.exp(-1.0 / max(1.0, sample_rate * attack_ms / 1000.0))
@@ -159,17 +157,96 @@ def _master_audio(audio: np.ndarray, sample_rate: int, settings: MasterSettings)
     samples = np.asarray(audio, dtype=np.float64)
     if samples.size == 0:
         raise ValueError("audio is empty")
-
     profiled = _apply_profile_eq(samples, sample_rate, settings.eq_settings)
-    profiled = _apply_profile_compression(
-        profiled, sample_rate, settings.target_lra, settings.compressor_settings
-    )
+    profiled = _apply_profile_compression(profiled, sample_rate, settings.target_lra, settings.compressor_settings)
     input_lufs = _integrated_lufs(profiled, sample_rate)
     normalized = profiled * (10.0 ** ((settings.target_lufs - input_lufs) / 20.0))
     true_peak = _true_peak_dbtp(normalized)
     if true_peak > settings.true_peak_dbtp:
         normalized *= 10.0 ** ((settings.true_peak_dbtp - true_peak) / 20.0)
     return np.clip(normalized, -1.0, 1.0).astype(np.float32)
+
+
+def _profile_filters(settings: MasterSettings) -> list[str]:
+    """Translate validated profile controls to streaming FFmpeg filters."""
+    eq = _validated_eq_settings(settings.eq_settings)
+    compressor = _validated_compressor_settings(settings.compressor_settings)
+    filters: list[str] = []
+    if eq.get("sub_boost_db", 0.0):
+        filters.append(f"bass=g={eq['sub_boost_db']:.6f}:f=65")
+    if eq.get("mud_cut_db", 0.0):
+        filters.append(f"equalizer=f=300:t=q:w=1:g={eq['mud_cut_db']:.6f}")
+    if eq.get("high_air_db", 0.0):
+        filters.append(f"treble=g={eq['high_air_db']:.6f}:f=9000")
+    threshold_db = compressor.get("threshold_db", -18.0)
+    ratio = max(compressor.get("ratio", 2.0), 1.0 + (12.0 - min(settings.target_lra, 12.0)) / 6.0)
+    attack_ms = compressor.get("attack_ms", 20.0)
+    release_ms = compressor.get("release_ms", 120.0)
+    threshold_linear = 10.0 ** (threshold_db / 20.0)
+    filters.append(
+        "acompressor="
+        f"threshold={threshold_linear:.8f}:ratio={ratio:.6f}:"
+        f"attack={attack_ms:.6f}:release={release_ms:.6f}:link=maximum"
+    )
+    return filters
+
+
+def _extract_loudnorm_json(stderr: str) -> dict[str, str]:
+    start = stderr.rfind("{\n")
+    end = stderr.rfind("}")
+    if start < 0 or end < start:
+        raise RuntimeError("FFmpeg loudness measurement did not return JSON")
+    try:
+        payload = json.loads(stderr[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("FFmpeg loudness measurement returned invalid JSON") from exc
+    return {str(key): str(value) for key, value in payload.items()}
+
+
+def _run_ffmpeg_measure(source: Path, filters: list[str], settings: MasterSettings) -> dict[str, str]:
+    loudnorm = f"loudnorm=I={settings.target_lufs}:TP={settings.true_peak_dbtp}:LRA={settings.target_lra}:print_format=json"
+    chain = ",".join([*filters, loudnorm])
+    completed = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-v", "info", "-i", str(source), "-af", chain, "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"FFmpeg mastering measurement failed: {completed.stderr[-1200:]}")
+    return _extract_loudnorm_json(completed.stderr)
+
+
+def _stream_master_audio(source: Path, destination: Path, settings: MasterSettings) -> tuple[float, float]:
+    """Two-pass FFmpeg mastering; decoded PCM remains inside bounded pipes."""
+    filters = _profile_filters(settings)
+    measured = _run_ffmpeg_measure(source, filters, settings)
+    required = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+    if any(key not in measured for key in required):
+        raise RuntimeError("FFmpeg loudness measurement omitted required fields")
+    loudnorm = (
+        f"loudnorm=I={settings.target_lufs}:TP={settings.true_peak_dbtp}:LRA={settings.target_lra}:"
+        f"measured_I={measured['input_i']}:measured_TP={measured['input_tp']}:"
+        f"measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}:"
+        f"offset={measured['target_offset']}:linear=true:print_format=summary"
+    )
+    chain = ",".join([*filters, loudnorm])
+    completed = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats", "-v", "error", "-y", "-i", str(source),
+            "-af", chain, "-c:a", "pcm_s24le", str(destination),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"FFmpeg mastering render failed: {completed.stderr[-1200:]}")
+    final = _run_ffmpeg_measure(destination, [], settings)
+    try:
+        return float(final["input_i"]), float(final["input_tp"])
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError("FFmpeg final loudness measurement was incomplete") from exc
 
 
 def _object_key(project_id: str, content_hash: str, algorithm_version: str) -> str:
@@ -185,11 +262,7 @@ def _sha256(path: Path) -> str:
 
 
 def master_audio_file(source_path: Path, settings: MasterSettings) -> MasterResult:
-    """Master a trusted worker-local source and link it once at an opaque key.
-
-    The caller supplies a storage root only inside the worker. API callers never
-    receive or choose local paths; they receive the returned object key instead.
-    """
+    """Master a trusted source with a bounded-memory long-form production path."""
     import soundfile as sf
 
     source = Path(source_path).resolve()
@@ -201,19 +274,25 @@ def master_audio_file(source_path: Path, settings: MasterSettings) -> MasterResu
     except ValueError as exc:
         raise ValueError("mastering source is outside the trusted storage root") from exc
 
-    audio, sample_rate = sf.read(source, always_2d=False, dtype="float32")
-    mastered = _master_audio(audio, int(sample_rate), settings)
-    final_lufs = _integrated_lufs(mastered, int(sample_rate))
-    final_peak = _true_peak_dbtp(mastered)
-
+    info = sf.info(source)
+    if info.frames <= 0 or info.samplerate <= 0:
+        raise ValueError("audio is empty")
     staging_dir = storage_root / ".staging"
     staging_dir.mkdir(parents=True, exist_ok=True)
     descriptor, temp_name = tempfile.mkstemp(prefix="master-", suffix=".wav", dir=staging_dir)
     temporary = Path(temp_name)
+    os.close(descriptor)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            sf.write(handle, mastered, int(sample_rate), format="WAV", subtype="PCM_24")
-            handle.flush()
+        if info.frames <= int(info.samplerate * MAX_IN_MEMORY_SECONDS):
+            audio, sample_rate = sf.read(source, always_2d=False, dtype="float32")
+            mastered = _master_audio(audio, int(sample_rate), settings)
+            sf.write(temporary, mastered, int(sample_rate), format="WAV", subtype="PCM_24")
+            final_lufs = _integrated_lufs(mastered, int(sample_rate))
+            final_peak = _true_peak_dbtp(mastered)
+        else:
+            final_lufs, final_peak = _stream_master_audio(source, temporary, settings)
+
+        with temporary.open("rb") as handle:
             os.fsync(handle.fileno())
         object_key = _object_key(settings.project_id, _sha256(temporary), settings.algorithm_version)
         destination = storage_root / object_key
@@ -221,7 +300,6 @@ def master_audio_file(source_path: Path, settings: MasterSettings) -> MasterResu
         try:
             os.link(temporary, destination)
         except FileExistsError:
-            # A retry produced identical bytes. Keep the already-immutable object.
             pass
     finally:
         if temporary.exists():
