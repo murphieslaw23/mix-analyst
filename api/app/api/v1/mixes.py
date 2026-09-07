@@ -17,11 +17,7 @@ from ...schemas.auth import CurrentPrincipal
 from ...schemas.mix import MixListResponse, MixOut, MixUpdateRequest
 from ...schemas.tracklist import TracklistResponse
 from ...schemas.transition import TransitionListResponse
-from ...services.auth import (
-    ARTIFACT_TICKET_TTL_SECONDS,
-    decode_artifact_ticket,
-    issue_artifact_ticket,
-)
+from ...services.auth import artifact_ticket_ttl, decode_artifact_ticket, issue_artifact_ticket
 from ...services.storage import StorageService
 from ..deps import get_current_principal, get_optional_principal, require_owned_mix
 
@@ -101,13 +97,14 @@ def create_artifact_download_ticket(
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
-    """Mint a short-lived capability so native media can stream with Range requests."""
-    _owned_artifact(db, principal, mix_id, artifact_id)
-    ticket = issue_artifact_ticket(principal, mix_id, artifact_id)
+    """Mint a scoped capability so native media can stream with Range requests."""
+    mix, _ = _owned_artifact(db, principal, mix_id, artifact_id)
+    ttl_seconds = artifact_ticket_ttl(mix.media_asset.duration_seconds)
+    ticket = issue_artifact_ticket(principal, mix_id, artifact_id, ttl_seconds=ttl_seconds)
     protected_url = f"{settings.api_v1_prefix}/mixes/{mix_id}/artifacts/{artifact_id}/download"
     return {
         "download_url": f"{protected_url}?ticket={quote(ticket, safe='')}",
-        "expires_in_seconds": ARTIFACT_TICKET_TTL_SECONDS,
+        "expires_in_seconds": ttl_seconds,
     }
 
 
