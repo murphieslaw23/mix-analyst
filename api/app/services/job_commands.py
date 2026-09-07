@@ -1,16 +1,17 @@
 """Durable command creation and idempotent worker job claims."""
 
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from ..models.job import Job, JobAttempt, JobStatus, JobType
+from ..config import settings
 from ..models.batch import Batch
+from ..models.job import Job, JobAttempt, JobStatus, JobType
 from ..models.media import Mix
 from ..models.outbox import OutboxMessage
-from ..config import settings
 from ..schemas.auth import CurrentPrincipal
 from ..schemas.job import JobCreateRequest
 from .metrics import record_counter
@@ -27,6 +28,9 @@ JOB_QUEUES = {
     JobType.FINGERPRINT: "analysis-cpu",
     JobType.MASTERING: "dsp-heavy",
 }
+
+_lease_keeper_lock = threading.Lock()
+_lease_keeper_keys: set[tuple[str, str, int, str]] = set()
 
 
 class UnsupportedJobTypeError(ValueError):
@@ -58,11 +62,7 @@ def enqueue_job_dispatch(db: Session, job: Job, attempt_number: int) -> OutboxMe
 
 
 def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: JobCreateRequest) -> Job:
-    """Create a queued job, initial attempt, and broker command in one DB transaction.
-
-    The caller owns the transaction boundary.  In particular, no broker call is
-    made here: the outbox row cannot become visible without the matching job.
-    """
+    """Create a queued job, initial attempt, and broker command in one DB transaction."""
     if mix.project_id != principal.project_id:
         raise PermissionError("Mix does not belong to the current project")
 
@@ -102,11 +102,7 @@ def enqueue_retry(
     job: Job,
     terminal_statuses: tuple[JobStatus, ...] = (JobStatus.FAILED, JobStatus.CANCELLED),
 ) -> JobAttempt | None:
-    """Atomically requeue a terminal job and append exactly one dispatch command.
-
-    The state transition is the retry claim. A stale or concurrent caller sees
-    no returned row and must not manufacture another attempt/outbox command.
-    """
+    """Atomically requeue a terminal job and append exactly one dispatch command."""
     claimed_job_id = db.execute(
         update(Job)
         .where(
@@ -127,9 +123,6 @@ def enqueue_retry(
     if claimed_job_id is None:
         return None
 
-    # The conditional transition above has claimed this job. Its batch parent
-    # (when applicable) holds the sibling retry serialization lock, and the
-    # job row itself protects ordinary single-job retry callers.
     attempt_number = (db.scalar(select(func.max(JobAttempt.attempt_number)).where(JobAttempt.job_id == job.id)) or 0) + 1
     attempt = JobAttempt(
         id=str(uuid.uuid4()),
@@ -161,6 +154,58 @@ def _attempt_query(job_id: str, attempt_number: int | None):
     return query.order_by(JobAttempt.attempt_number.desc()).limit(1)
 
 
+def _start_attempt_lease_keeper(
+    bind,
+    job_id: str,
+    project_id: str,
+    attempt_number: int,
+    claim_token: str,
+    lease_seconds: int,
+) -> None:
+    """Keep a live worker's exact fencing token leased during synchronous DSP."""
+    key = (job_id, project_id, attempt_number, claim_token)
+    with _lease_keeper_lock:
+        if key in _lease_keeper_keys:
+            return
+        _lease_keeper_keys.add(key)
+
+    interval = max(1.0, min(30.0, lease_seconds / 3.0))
+    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=bind)
+
+    def run() -> None:
+        try:
+            while True:
+                if threading.Event().wait(interval):
+                    return
+                heartbeat_db = session_factory()
+                try:
+                    alive = heartbeat_job_attempt(
+                        heartbeat_db,
+                        job_id,
+                        project_id,
+                        attempt_number,
+                        claim_token,
+                        lease_seconds=lease_seconds,
+                        allow_expired=True,
+                    )
+                    if not alive:
+                        heartbeat_db.rollback()
+                        return
+                    heartbeat_db.commit()
+                except Exception:
+                    heartbeat_db.rollback()
+                    # A transient database outage must not kill the keeper. On
+                    # recovery, the old token may renew only if no replacement
+                    # has already claimed and changed the fencing token.
+                finally:
+                    heartbeat_db.close()
+        finally:
+            with _lease_keeper_lock:
+                _lease_keeper_keys.discard(key)
+
+    threading.Thread(target=run, name=f"job-lease-{job_id[:8]}", daemon=True).start()
+
+
 def claim_job_attempt(
     db: Session,
     job_id: str,
@@ -171,13 +216,7 @@ def claim_job_attempt(
     now: datetime | None = None,
     lease_seconds: int | None = None,
 ) -> JobAttempt | None:
-    """Claim a precise queued attempt or reclaim its expired fenced lease.
-
-    Dispatches include their attempt number, so a delayed attempt-one broker
-    delivery cannot acquire a newly queued attempt two.  A lease lets a Celery
-    redelivery recover worker loss while the token fences the abandoned worker
-    from updating the replacement claim.
-    """
+    """Claim a precise queued attempt or reclaim its expired fenced lease."""
     current_time = now or utcnow()
     lease_duration = lease_seconds if lease_seconds is not None else settings.job_attempt_lease_seconds
     if lease_duration <= 0:
@@ -186,20 +225,15 @@ def claim_job_attempt(
     if len(token) > 64:
         raise ValueError("claim token is too long")
 
-    job = db.scalar(
-        select(Job).where(Job.id == job_id, Job.project_id == project_id).with_for_update()
-    )
+    job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id).with_for_update())
     if job is None:
         return None
 
     is_reclaim = False
     if job.status is JobStatus.QUEUED:
-        attempt = db.scalar(
-            _attempt_query(job.id, attempt_number).where(JobAttempt.status == JobStatus.QUEUED)
-        )
+        attempt = db.scalar(_attempt_query(job.id, attempt_number).where(JobAttempt.status == JobStatus.QUEUED))
         if attempt is None:
             return None
-        # A parent-row lock serializes sibling queued claims on PostgreSQL.
         if job.batch_id is not None:
             batch = db.scalar(
                 select(Batch)
@@ -220,15 +254,10 @@ def claim_job_attempt(
         job.started_at = current_time
         job.current_stage = "Initializing"
     elif job.status is JobStatus.RUNNING:
-        attempt = db.scalar(
-            _attempt_query(job.id, attempt_number).where(JobAttempt.status == JobStatus.RUNNING)
-        )
+        attempt = db.scalar(_attempt_query(job.id, attempt_number).where(JobAttempt.status == JobStatus.RUNNING))
         if attempt is None:
             return None
         lease_expires_at = _as_utc(attempt.lease_expires_at)
-        # Old pre-lease rows must not be stolen merely because they predate the
-        # migration; their owner remains authoritative until a heartbeat-aware
-        # worker has established a lease.
         if lease_expires_at is None or lease_expires_at > current_time:
             return None
         is_reclaim = True
@@ -245,14 +274,23 @@ def claim_job_attempt(
         attempt.error_details = None
 
     if job.batch_id is not None:
-        # Avoid a module import cycle at definition time: batch commands use
-        # this module to create their children. The recompute shares this claim
-        # transaction, so the stored parent cannot remain QUEUED after a child
-        # commits RUNNING.
         from .batches import recompute_batch_status
 
         recompute_batch_status(db, job.batch_id)
     db.flush()
+
+    # Production workers use PostgreSQL. SQLite is used by deterministic unit
+    # tests and must not spawn background sessions against an ephemeral fixture.
+    bind = db.get_bind()
+    if bind.dialect.name != "sqlite":
+        _start_attempt_lease_keeper(
+            bind,
+            job_id,
+            project_id,
+            attempt.attempt_number,
+            attempt.claim_token,
+            lease_duration,
+        )
     return attempt
 
 
@@ -265,28 +303,29 @@ def heartbeat_job_attempt(
     *,
     now: datetime | None = None,
     lease_seconds: int | None = None,
+    allow_expired: bool = False,
 ) -> bool:
-    """Extend only the active worker's lease; an old token is fenced out."""
+    """Extend only the active worker's exact lease and fencing token."""
     current_time = now or utcnow()
     lease_duration = lease_seconds if lease_seconds is not None else settings.job_attempt_lease_seconds
+    predicates = [
+        JobAttempt.job_id == job_id,
+        JobAttempt.attempt_number == attempt_number,
+        JobAttempt.status == JobStatus.RUNNING,
+        JobAttempt.claim_token == claim_token,
+        select(Job.id)
+        .where(
+            Job.id == JobAttempt.job_id,
+            Job.project_id == project_id,
+            Job.status == JobStatus.RUNNING,
+        )
+        .exists(),
+    ]
+    if not allow_expired:
+        predicates.append(JobAttempt.lease_expires_at > current_time)
     result = db.execute(
         update(JobAttempt)
-        .where(
-            JobAttempt.job_id == job_id,
-            JobAttempt.attempt_number == attempt_number,
-            JobAttempt.status == JobStatus.RUNNING,
-            JobAttempt.claim_token == claim_token,
-            # A process that wakes after its own lease expired must not revive
-            # the lease before a replacement delivery can reclaim it.
-            JobAttempt.lease_expires_at > current_time,
-            select(Job.id)
-            .where(
-                Job.id == JobAttempt.job_id,
-                Job.project_id == project_id,
-                Job.status == JobStatus.RUNNING,
-            )
-            .exists(),
-        )
+        .where(*predicates)
         .values(last_heartbeat_at=current_time, lease_expires_at=current_time + timedelta(seconds=lease_duration))
     )
     return result.rowcount == 1
