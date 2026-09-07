@@ -43,20 +43,29 @@ def _adopt_verified_legacy_baseline(connection) -> bool:
     """Stamp only a complete pre-Alembic schema so later migrations can run."""
     tables = set(inspect(connection).get_table_names())
     if "alembic_version" in tables or not LEGACY_BASELINE_TABLES.issubset(tables):
+        # SQLAlchemy inspection may autobegin a read transaction. Close it so
+        # Alembic can own the migration transaction below.
+        if connection.in_transaction():
+            connection.rollback()
         return False
 
-    with connection.begin():
-        connection.execute(
-            text(
-                "CREATE TABLE alembic_version ("
-                "version_num VARCHAR(32) NOT NULL, "
-                "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
-            )
+    # Inspection can autobegin a transaction in SQLAlchemy 2. End that read
+    # transaction before stamping, then commit the adoption independently so
+    # Alembic's normal migration transaction starts from a stable revision.
+    if connection.in_transaction():
+        connection.rollback()
+    connection.execute(
+        text(
+            "CREATE TABLE alembic_version ("
+            "version_num VARCHAR(32) NOT NULL, "
+            "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
         )
-        connection.execute(
-            text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
-            {"revision": BASELINE_REVISION},
-        )
+    )
+    connection.execute(
+        text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+        {"revision": BASELINE_REVISION},
+    )
+    connection.commit()
     return True
 
 
