@@ -11,7 +11,8 @@ from ..schemas.auth import CurrentPrincipal
 
 
 ARTIFACT_TICKET_AUDIENCE = "mix-analyst-artifact"
-ARTIFACT_TICKET_TTL_SECONDS = 5 * 60
+ARTIFACT_TICKET_MIN_TTL_SECONDS = 15 * 60
+ARTIFACT_TICKET_MAX_TTL_SECONDS = 12 * 60 * 60
 
 
 def decode_principal_token(token: str) -> CurrentPrincipal:
@@ -44,8 +45,21 @@ def require_persisted_project_membership(db: Session, principal: CurrentPrincipa
     return principal
 
 
-def issue_artifact_ticket(principal: CurrentPrincipal, mix_id: str, artifact_id: str) -> str:
-    """Mint a narrowly scoped, short-lived capability for native media requests."""
+def artifact_ticket_ttl(duration_seconds: float | None) -> int:
+    """Cover a complete long-form listen while keeping the capability bounded."""
+    duration = max(0, int(duration_seconds or 0))
+    return min(ARTIFACT_TICKET_MAX_TTL_SECONDS, max(ARTIFACT_TICKET_MIN_TTL_SECONDS, duration + 15 * 60))
+
+
+def issue_artifact_ticket(
+    principal: CurrentPrincipal,
+    mix_id: str,
+    artifact_id: str,
+    *,
+    ttl_seconds: int = ARTIFACT_TICKET_MIN_TTL_SECONDS,
+) -> str:
+    """Mint a narrowly scoped capability for native media Range requests."""
+    ttl = min(ARTIFACT_TICKET_MAX_TTL_SECONDS, max(60, int(ttl_seconds)))
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
@@ -56,7 +70,7 @@ def issue_artifact_ticket(principal: CurrentPrincipal, mix_id: str, artifact_id:
             "scope": "artifact:read",
             "aud": ARTIFACT_TICKET_AUDIENCE,
             "iat": now,
-            "exp": now + timedelta(seconds=ARTIFACT_TICKET_TTL_SECONDS),
+            "exp": now + timedelta(seconds=ttl),
         },
         settings.auth_jwt_secret,
         algorithm=settings.auth_jwt_algorithm,
