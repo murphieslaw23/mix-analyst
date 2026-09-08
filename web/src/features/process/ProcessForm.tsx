@@ -62,14 +62,6 @@ export function ProcessForm({ settings, state, onFileSelected, onPresetChange, o
         <p className="process-form__hint">{presetOptions.find((preset) => preset.id === settings.presetId)?.description}</p>
       </fieldset>
 
-      {busy ? (
-        <div className="process-form__progress" aria-describedby="upload-progress-detail">
-          <div className="process-form__progress-label"><span>{state.stage === "queueing" ? "Starting mastering" : state.stage === "finalizing" ? "Saving audio" : "Uploading audio"}</span><span>{Math.round(state.progressPercent)}%</span></div>
-          <progress aria-label="Upload progress" max={100} value={state.progressPercent} />
-          <p id="upload-progress-detail">Keep this page open while your audio is secured.</p>
-        </div>
-      ) : null}
-
       {state.status === "error" && state.problem ? <p className="process-form__problem" role="alert"><strong>{state.problem.title}</strong> {state.problem.detail}</p> : null}
       <LiveRegion className="process-form__live">{announce(state)}</LiveRegion>
 
@@ -79,6 +71,14 @@ export function ProcessForm({ settings, state, onFileSelected, onPresetChange, o
         {busy ? <Button type="button" onClick={onCancel} tone="secondary">{state.stage === "queueing" ? "Cancel request" : "Cancel upload"}</Button> : null}
         {(state.status === "error" || state.status === "aborted") ? <Button onClick={onReset} tone="quiet">Choose another file</Button> : null}
       </div>
+
+      {busy ? (
+        <div className="process-form__progress" aria-describedby="upload-progress-detail">
+          <div className="process-form__progress-label"><span>{state.stage === "queueing" ? "Starting mastering" : state.stage === "finalizing" ? "Saving audio" : "Uploading audio"}</span><span>{Math.round(state.progressPercent)}%</span></div>
+          <progress aria-label="Upload progress" max={100} value={state.progressPercent} />
+          <p id="upload-progress-detail">Keep this page open while your audio is secured.</p>
+        </div>
+      ) : null}
     </form>
   );
 }
