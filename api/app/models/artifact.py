@@ -15,7 +15,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -52,4 +52,4 @@ class Artifact(Base):
         nullable=False,
     )
 
-    mix: Mix = relationship("Mix", back_populates="artifacts")
+    mix: Mapped[Mix] = relationship("Mix", back_populates="artifacts")

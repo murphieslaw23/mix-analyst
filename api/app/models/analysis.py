@@ -12,7 +12,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -32,19 +32,19 @@ class AnalysisResult(Base):
     )
 
     # Tempo / BPM
-    primary_bpm: float = Column(Float, nullable=False)
-    bpm_confidence: float = Column(Float, nullable=False)
+    primary_bpm: Mapped[float] = Column(Float, nullable=False)
+    bpm_confidence: Mapped[float] = Column(Float, nullable=False)
     bpm_candidates: str | None = Column(Text, nullable=True)
 
     # Key / Camelot
     detected_key: str = Column(String(50), nullable=False)
     camelot_code: str = Column(String(10), nullable=False)
-    key_confidence: float = Column(Float, nullable=False)
+    key_confidence: Mapped[float] = Column(Float, nullable=False)
 
     # Loudness / Dynamics (EBU R128)
-    integrated_lufs: float = Column(Float, nullable=False)
-    loudness_range_lra: float = Column(Float, nullable=False)
-    true_peak_db: float = Column(Float, nullable=False)
+    integrated_lufs: Mapped[float] = Column(Float, nullable=False)
+    loudness_range_lra: Mapped[float] = Column(Float, nullable=False)
+    true_peak_db: Mapped[float] = Column(Float, nullable=False)
 
     # Spectral & Quality Findings
     spectral_summary: str | None = Column(Text, nullable=True)
@@ -56,4 +56,4 @@ class AnalysisResult(Base):
         nullable=False,
     )
 
-    mix: Mix = relationship("Mix", back_populates="analysis_result")
+    mix: Mapped[Mix] = relationship("Mix", back_populates="analysis_result")

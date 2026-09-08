@@ -15,7 +15,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -44,4 +44,4 @@ class JobEvent(Base):
         nullable=False,
     )
 
-    job: Job = relationship("Job", back_populates="events")
+    job: Mapped[Job] = relationship("Job", back_populates="events")

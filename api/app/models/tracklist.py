@@ -13,7 +13,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -27,11 +27,11 @@ class TrackSegment(Base):
     id: str = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     mix_id: str = Column(String(36), ForeignKey("mixes.id"), nullable=False, index=True)
     segment_index: int = Column(Integer, nullable=False)
-    start_time_seconds: float = Column(Float, nullable=False)
-    end_time_seconds: float = Column(Float, nullable=False)
-    duration_seconds: float = Column(Float, nullable=False)
+    start_time_seconds: Mapped[float] = Column(Float, nullable=False)
+    end_time_seconds: Mapped[float] = Column(Float, nullable=False)
+    duration_seconds: Mapped[float] = Column(Float, nullable=False)
     fingerprint: str | None = Column(Text, nullable=True)
-    confidence: float = Column(Float, default=0.0, nullable=False)
+    confidence: Mapped[float] = Column(Float, default=0.0, nullable=False)
 
     created_at: datetime = Column(
         DateTime(timezone=True),
@@ -39,12 +39,9 @@ class TrackSegment(Base):
         nullable=False,
     )
 
-    mix: Mix = relationship("Mix", back_populates="track_segments")
-    match: TrackMatch | None = relationship(
-        "TrackMatch",
-        back_populates="segment",
-        uselist=False,
-        cascade="all, delete-orphan",
+    mix: Mapped[Mix] = relationship("Mix", back_populates="track_segments")
+    match: Mapped[TrackMatch | None] = relationship(
+        "TrackMatch", back_populates="segment", cascade="all, delete-orphan"
     )
 
 
@@ -68,7 +65,7 @@ class TrackMatch(Base):
     isrc: str | None = Column(String(50), nullable=True)
     acoustid_id: str | None = Column(String(100), nullable=True)
     musicbrainz_recording_id: str | None = Column(String(100), nullable=True)
-    match_score: float = Column(Float, nullable=False)
+    match_score: Mapped[float] = Column(Float, nullable=False)
     source: str = Column(String(50), default="acoustid", nullable=False)
 
     created_at: datetime = Column(
@@ -77,4 +74,4 @@ class TrackMatch(Base):
         nullable=False,
     )
 
-    segment: TrackSegment = relationship("TrackSegment", back_populates="match")
+    segment: Mapped[TrackSegment] = relationship("TrackSegment", back_populates="match")

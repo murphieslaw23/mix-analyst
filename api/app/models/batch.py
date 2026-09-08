@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -56,8 +56,8 @@ class Batch(Base):
         nullable=False,
     )
 
-    jobs: list[Job] = relationship(
-        "Job", back_populates="batch", order_by="Job.created_at", uselist=True
+    jobs: Mapped[list[Job]] = relationship(
+        "Job", back_populates="batch", order_by="Job.created_at"
     )
 
     @property

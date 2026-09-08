@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, UniqueConstraint
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -47,4 +47,4 @@ class Notification(Base):
         index=True,
     )
 
-    job: Job | None = relationship("Job", back_populates="notifications")
+    job: Mapped[Job | None] = relationship("Job", back_populates="notifications")

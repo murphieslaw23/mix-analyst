@@ -14,7 +14,7 @@ from sqlalchemy import (
     String,
 )
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -45,7 +45,7 @@ class MediaAsset(Base):
     file_size_bytes: int = Column(BigInteger, nullable=False)
     sha256_hash: str = Column(String(64), nullable=False, index=True)
     mime_type: str | None = Column(String(100), nullable=True)
-    duration_seconds: float = Column(Float, nullable=False)
+    duration_seconds: Mapped[float] = Column(Float, nullable=False)
     sample_rate: int = Column(BigInteger, nullable=False)
     channels: int = Column(BigInteger, nullable=False)
     codec: str = Column(String(50), nullable=False)
@@ -57,11 +57,8 @@ class MediaAsset(Base):
         nullable=False,
     )
 
-    mixes: list[Mix] = relationship(
-        "Mix",
-        back_populates="media_asset",
-        cascade="all, delete-orphan",
-        uselist=True,
+    mixes: Mapped[list[Mix]] = relationship(
+        "Mix", back_populates="media_asset", cascade="all, delete-orphan"
     )
 
 
@@ -144,28 +141,18 @@ class Mix(Base):
         nullable=False,
     )
 
-    media_asset: MediaAsset = relationship("MediaAsset", back_populates="mixes")
-    analysis_result: AnalysisResult | None = relationship(
+    media_asset: Mapped[MediaAsset] = relationship("MediaAsset", back_populates="mixes")
+    analysis_result: Mapped[AnalysisResult | None] = relationship(
         "AnalysisResult",
         back_populates="mix",
-        uselist=False,
         cascade="all, delete-orphan",
     )
-    track_segments: list[TrackSegment] = relationship(
-        "TrackSegment",
-        back_populates="mix",
-        cascade="all, delete-orphan",
-        uselist=True,
+    track_segments: Mapped[list[TrackSegment]] = relationship(
+        "TrackSegment", back_populates="mix", cascade="all, delete-orphan"
     )
-    transitions: list[TransitionEvent] = relationship(
-        "TransitionEvent",
-        back_populates="mix",
-        cascade="all, delete-orphan",
-        uselist=True,
+    transitions: Mapped[list[TransitionEvent]] = relationship(
+        "TransitionEvent", back_populates="mix", cascade="all, delete-orphan"
     )
-    artifacts: list[Artifact] = relationship(
-        "Artifact",
-        back_populates="mix",
-        cascade="all, delete-orphan",
-        uselist=True,
+    artifacts: Mapped[list[Artifact]] = relationship(
+        "Artifact", back_populates="mix", cascade="all, delete-orphan"
     )

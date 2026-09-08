@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -38,4 +38,4 @@ class OutboxMessage(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
 
-    job: Job = relationship("Job", back_populates="outbox_messages")
+    job: Mapped[Job] = relationship("Job", back_populates="outbox_messages")

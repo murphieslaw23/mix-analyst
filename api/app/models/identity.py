@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, String
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -19,9 +19,7 @@ class User(Base):
         nullable=False,
     )
 
-    projects: list[Project] = relationship(
-        "Project", back_populates="owner", uselist=True
-    )
+    projects: Mapped[list[Project]] = relationship("Project", back_populates="owner")
 
 
 class Project(Base):
@@ -37,4 +35,4 @@ class Project(Base):
         nullable=False,
     )
 
-    owner: User = relationship("User", back_populates="projects")
+    owner: Mapped[User] = relationship("User", back_populates="projects")

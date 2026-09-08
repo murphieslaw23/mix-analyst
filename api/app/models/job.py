@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 
 from ..db.session import Base
 
@@ -68,7 +68,7 @@ class Job(Base):
     status: JobStatus = Column(
         SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True
     )
-    progress_percent: float = Column(Float, default=0.0, nullable=False)
+    progress_percent: Mapped[float] = Column(Float, default=0.0, nullable=False)
     current_stage: str | None = Column(String(100), nullable=True)
     parameters: dict[str, Any] = Column(JSON, default=dict, nullable=False)
     celery_task_id: str | None = Column(String(100), nullable=True, index=True)
@@ -82,40 +82,31 @@ class Job(Base):
     started_at: datetime | None = Column(DateTime(timezone=True), nullable=True)
     finished_at: datetime | None = Column(DateTime(timezone=True), nullable=True)
 
-    stage_runs: list[StageRun] = relationship(
+    stage_runs: Mapped[list[StageRun]] = relationship(
         "StageRun",
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="StageRun.started_at",
-        uselist=True,
     )
-    attempts: list[JobAttempt] = relationship(
+    attempts: Mapped[list[JobAttempt]] = relationship(
         "JobAttempt",
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="JobAttempt.attempt_number",
-        uselist=True,
     )
-    outbox_messages: list[OutboxMessage] = relationship(
-        "OutboxMessage",
-        back_populates="job",
-        cascade="all, delete-orphan",
-        uselist=True,
+    outbox_messages: Mapped[list[OutboxMessage]] = relationship(
+        "OutboxMessage", back_populates="job", cascade="all, delete-orphan"
     )
-    events: list[JobEvent] = relationship(
+    events: Mapped[list[JobEvent]] = relationship(
         "JobEvent",
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="JobEvent.sequence",
-        uselist=True,
     )
-    notifications: list[Notification] = relationship(
-        "Notification",
-        back_populates="job",
-        cascade="all, delete-orphan",
-        uselist=True,
+    notifications: Mapped[list[Notification]] = relationship(
+        "Notification", back_populates="job", cascade="all, delete-orphan"
     )
-    batch: Batch | None = relationship("Batch", back_populates="jobs")
+    batch: Mapped[Batch | None] = relationship("Batch", back_populates="jobs")
 
 
 class JobAttempt(Base):
@@ -144,7 +135,7 @@ class JobAttempt(Base):
     )
     finished_at: datetime | None = Column(DateTime(timezone=True), nullable=True)
 
-    job: Job = relationship("Job", back_populates="attempts")
+    job: Mapped[Job] = relationship("Job", back_populates="attempts")
 
 
 class StageRun(Base):
@@ -158,7 +149,7 @@ class StageRun(Base):
     status: StageStatus = Column(
         SQLEnum(StageStatus), default=StageStatus.PENDING, nullable=False
     )
-    progress_percent: float = Column(Float, default=0.0, nullable=False)
+    progress_percent: Mapped[float] = Column(Float, default=0.0, nullable=False)
     stage_output: str | None = Column(Text, nullable=True)
     error_message: str | None = Column(Text, nullable=True)
     started_at: datetime = Column(
@@ -168,4 +159,4 @@ class StageRun(Base):
     )
     finished_at: datetime | None = Column(DateTime(timezone=True), nullable=True)
 
-    job: Job = relationship("Job", back_populates="stage_runs")
+    job: Mapped[Job] = relationship("Job", back_populates="stage_runs")
