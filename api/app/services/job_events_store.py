@@ -182,9 +182,13 @@ def complete_job_attempt(
         .returning(JobAttempt.id)
     ).scalar_one_or_none()
     if completed_attempt_id is None:
-        raise RuntimeError(f"Running job {job_id} has no attempt claimed by {worker_name}")
+        raise RuntimeError(
+            f"Running job {job_id} has no attempt claimed by {worker_name}"
+        )
 
-    job = db.scalar(select(Job).where(Job.id == completed_job_id, Job.project_id == project_id))
+    job = db.scalar(
+        select(Job).where(Job.id == completed_job_id, Job.project_id == project_id)
+    )
     if job is None:
         raise RuntimeError(f"Completed job {job_id} is outside project {project_id}")
     record_job_event(

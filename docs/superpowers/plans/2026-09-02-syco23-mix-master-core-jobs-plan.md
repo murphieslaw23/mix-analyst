@@ -35,12 +35,15 @@
 ```python
 def test_app_uses_declared_settings_contract():
     from api.app.main import app
+
     assert app.title == "Mix Analyst"
     assert app.openapi_url == "/api/v1/openapi.json"
+
 
 def test_compose_storage_alias_is_applied(monkeypatch):
     monkeypatch.setenv("STORAGE_DIR", "/storage")
     from api.app.config import Settings
+
     assert Settings().storage_root == "/storage"
 ```
 
@@ -53,8 +56,11 @@ Expected: import/settings failure caused by uppercase settings and stale model r
 - [ ] **Step 3: Align model imports, foreign-key table names, and settings**
 
 ```python
-app = FastAPI(title=settings.app_name, openapi_url=f"{settings.api_v1_prefix}/openapi.json")
+app = FastAPI(
+    title=settings.app_name, openapi_url=f"{settings.api_v1_prefix}/openapi.json"
+)
 app.include_router(health.router, prefix=settings.api_v1_prefix, tags=["health"])
+
 
 class Settings(BaseSettings):
     storage_root: str = Field("/data/storage", validation_alias="STORAGE_DIR")
@@ -69,6 +75,7 @@ def upgrade() -> None:
     op.create_table("media_assets", ...)
     op.create_table("mixes", ...)
     op.create_table("jobs", ...)
+
 
 def downgrade() -> None:
     op.drop_table("jobs")
@@ -106,8 +113,12 @@ git commit -m "fix: establish bootable API and migration baseline"
 
 ```python
 def test_user_cannot_read_another_users_mix(client, user_a_token, user_b_mix):
-    response = client.get(f"/api/v1/mixes/{user_b_mix.id}", headers={"Authorization": f"Bearer {user_a_token}"})
+    response = client.get(
+        f"/api/v1/mixes/{user_b_mix.id}",
+        headers={"Authorization": f"Bearer {user_a_token}"},
+    )
     assert response.status_code == 404
+
 
 def test_unauthenticated_job_event_stream_is_rejected(client, job):
     assert client.get(f"/api/v1/jobs/{job.id}/events").status_code == 401
@@ -126,8 +137,14 @@ class CurrentPrincipal(BaseModel):
     user_id: str
     project_id: str
 
+
 def require_owned_job(db: Session, principal: CurrentPrincipal, job_id: str) -> Job:
-    return db.scalar(select(Job).where(Job.id == job_id, Job.project_id == principal.project_id)) or raise_not_found()
+    return (
+        db.scalar(
+            select(Job).where(Job.id == job_id, Job.project_id == principal.project_id)
+        )
+        or raise_not_found()
+    )
 ```
 
 Add `users`, `projects`, and `project_id`/`owner_id` columns through migration. Ensure every mix/job query applies project scope before returning data or opening SSE.
@@ -160,11 +177,20 @@ git commit -m "feat: scope media and jobs to authenticated projects"
 
 ```python
 def test_chunk_larger_than_configured_limit_is_rejected(client, token, upload_session):
-    response = client.patch(upload_session.url, headers={"Authorization": f"Bearer {token}", "Upload-Offset": "0"}, content=b"x" * (MAX_CHUNK + 1))
+    response = client.patch(
+        upload_session.url,
+        headers={"Authorization": f"Bearer {token}", "Upload-Offset": "0"},
+        content=b"x" * (MAX_CHUNK + 1),
+    )
     assert response.status_code == 413
 
+
 def test_stale_offset_returns_conflict(client, token, upload_session):
-    response = client.patch(upload_session.url, headers={"Authorization": f"Bearer {token}", "Upload-Offset": "0"}, content=b"chunk")
+    response = client.patch(
+        upload_session.url,
+        headers={"Authorization": f"Bearer {token}", "Upload-Offset": "0"},
+        content=b"chunk",
+    )
     assert response.status_code == 409
 ```
 
@@ -180,8 +206,11 @@ Expected: current implementation accepts chunks without a locked authoritative o
 def derived_object_key(project_id: str, sha256: str, role: str, version: str) -> str:
     return f"projects/{project_id}/artifacts/{role}/{version}/{sha256}"
 
+
 with db.begin():
-    session = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
+    session = db.scalar(
+        select(UploadSession).where(UploadSession.id == session_id).with_for_update()
+    )
     assert_offset(session, requested_offset)
     write_limited_chunk(session.quarantine_key, chunk, settings.max_chunk_size_bytes)
     session.offset += bytes_written
@@ -218,7 +247,13 @@ git commit -m "feat: add bounded owned upload lifecycle"
 ```python
 def test_create_job_persists_outbox_before_broker_publish(db, principal, mix):
     job = enqueue_job(db, principal, mix, JobCreateRequest(job_type="ANALYSIS"))
-    assert db.scalar(select(OutboxMessage).where(OutboxMessage.aggregate_id == job.id)).kind == "job.dispatch"
+    assert (
+        db.scalar(
+            select(OutboxMessage).where(OutboxMessage.aggregate_id == job.id)
+        ).kind
+        == "job.dispatch"
+    )
+
 
 def test_only_one_worker_claims_queued_attempt(db, job):
     assert claim_job_attempt(db, job.id, "worker-a") is not None
@@ -269,9 +304,15 @@ git commit -m "feat: dispatch durable jobs through transactional outbox"
 - [ ] **Step 1: Write event replay and cancellation-race tests**
 
 ```python
-def test_sse_replays_terminal_event_committed_before_subscription(client, token, job_with_succeeded_event):
-    response = client.get(job_with_succeeded_event.events_url, headers={"Authorization": f"Bearer {token}"})
+def test_sse_replays_terminal_event_committed_before_subscription(
+    client, token, job_with_succeeded_event
+):
+    response = client.get(
+        job_with_succeeded_event.events_url,
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert "id: 3" in response.text and "SUCCEEDED" in response.text
+
 
 def test_cancelled_job_cannot_be_overwritten_by_late_worker(db, cancelled_job):
     assert complete_job_attempt(db, cancelled_job.id, "worker-a") is False
@@ -287,7 +328,11 @@ Expected: failure because current SSE has no DB snapshot, ID, or replay path.
 
 ```python
 def complete_job_attempt(db: Session, job_id: str, worker_name: str) -> bool:
-    result = db.execute(update(Job).where(Job.id == job_id, Job.status == JobStatus.RUNNING).values(status=JobStatus.SUCCEEDED))
+    result = db.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+        .values(status=JobStatus.SUCCEEDED)
+    )
     return result.rowcount == 1
 ```
 
@@ -320,7 +365,9 @@ git commit -m "feat: persist job events and replay SSE progress"
 
 ```python
 def test_master_stage_writes_immutable_result_artifact(tmp_path, synthetic_audio):
-    result = run_master_mix(synthetic_audio, MasterSettings(target_lufs=-9.0, true_peak_dbtp=-1.0))
+    result = run_master_mix(
+        synthetic_audio, MasterSettings(target_lufs=-9.0, true_peak_dbtp=-1.0)
+    )
     assert result.integrated_lufs <= -8.5
     assert result.artifact_key.startswith("projects/")
 ```
@@ -377,6 +424,7 @@ def test_waveform_key_is_stable_for_source_and_algorithm(synthetic_audio):
     assert first.sha256 == second.sha256
     assert first.key == second.key
 
+
 def test_tagger_suggests_download_name_without_mutating_source_key(tagged_mix):
     assert tagged_mix.source_artifact.key != tagged_mix.suggested_download_name
 ```
@@ -423,10 +471,18 @@ git commit -m "feat: add metadata and waveform artifact stages"
 - [ ] **Step 1: Write aggregate and partial-failure tests**
 
 ```python
-def test_batch_reports_partial_failure_without_losing_successes(client, token, owned_mix_ids):
-    batch = client.post("/api/v1/batches", headers={"Authorization": f"Bearer {token}"}, json={"mix_ids": owned_mix_ids, "max_parallelism": 2}).json()
+def test_batch_reports_partial_failure_without_losing_successes(
+    client, token, owned_mix_ids
+):
+    batch = client.post(
+        "/api/v1/batches",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"mix_ids": owned_mix_ids, "max_parallelism": 2},
+    ).json()
     mark_child_states(batch, ["SUCCEEDED", "FAILED"])
-    response = client.get(f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {token}"})
+    response = client.get(
+        f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.json()["status"] == "PARTIAL_FAILED"
 ```
 
@@ -440,7 +496,11 @@ Expected: failure because current code has no batch domain or durable aggregate.
 
 ```python
 def recompute_batch_status(db: Session, batch_id: str) -> Batch:
-    counts = db.execute(select(Job.status, func.count()).where(Job.batch_id == batch_id).group_by(Job.status)).all()
+    counts = db.execute(
+        select(Job.status, func.count())
+        .where(Job.batch_id == batch_id)
+        .group_by(Job.status)
+    ).all()
     return apply_counts_to_batch(db.get(Batch, batch_id), counts)
 ```
 
@@ -477,6 +537,7 @@ def test_ready_fails_when_broker_check_fails(client, monkeypatch):
     monkeypatch.setattr("api.app.api.v1.health.ping_redis", lambda: False)
     assert client.get("/api/v1/health/ready").status_code == 503
 
+
 def test_metric_tags_do_not_accept_filename_or_user_content():
     with pytest.raises(ValueError):
         record_counter("job.completed", tags={"filename": "private.wav"})
@@ -492,6 +553,7 @@ Expected: failure because readiness currently asserts Redis health without check
 
 ```python
 ALLOWED_TAGS = {"job_type", "status", "stage", "queue"}
+
 
 def record_counter(name: str, value: int = 1, tags: Mapping[str, str] = {}) -> None:
     if set(tags) - ALLOWED_TAGS:

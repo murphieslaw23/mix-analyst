@@ -10,9 +10,9 @@ from ..models.job import Job, JobAttempt, JobStatus, JobType
 from ..models.media import Mix
 from ..schemas.auth import CurrentPrincipal
 from ..schemas.batch import BatchCreateRequest
-from .mastering_presets import resolve_mastering_parameters
 from ..schemas.job import JobCreateRequest
 from .job_commands import enqueue_job, enqueue_job_dispatch, enqueue_retry
+from .mastering_presets import resolve_mastering_parameters
 
 
 def _status_counts(counts: Iterable[tuple[JobStatus, int]]) -> dict[JobStatus, int]:
@@ -22,7 +22,9 @@ def _status_counts(counts: Iterable[tuple[JobStatus, int]]) -> dict[JobStatus, i
     return result
 
 
-def apply_counts_to_batch(batch: Batch, counts: Iterable[tuple[JobStatus, int]]) -> Batch:
+def apply_counts_to_batch(
+    batch: Batch, counts: Iterable[tuple[JobStatus, int]]
+) -> Batch:
     """Apply a complete persisted-child snapshot, never an incremental counter."""
     by_status = _status_counts(counts)
     total = sum(by_status.values())
@@ -74,7 +76,9 @@ def recompute_batch_status(db: Session, batch_id: str) -> Batch:
     return batch
 
 
-def create_batch(db: Session, principal: CurrentPrincipal, request: BatchCreateRequest) -> Batch:
+def create_batch(
+    db: Session, principal: CurrentPrincipal, request: BatchCreateRequest
+) -> Batch:
     """Create one batch and one durable outbox-backed mastering command per mix."""
     mix_ids = list(dict.fromkeys(request.mix_ids))
     if len(mix_ids) != len(request.mix_ids):
@@ -96,8 +100,18 @@ def create_batch(db: Session, principal: CurrentPrincipal, request: BatchCreateR
     if isinstance(preset_id, str):
         target_lufs = requested_preset.get("target_lufs")
         true_peak_dbtp = requested_preset.get("true_peak_dbtp")
-        if (target_lufs is not None and (isinstance(target_lufs, bool) or not isinstance(target_lufs, (int, float)))) or (
-            true_peak_dbtp is not None and (isinstance(true_peak_dbtp, bool) or not isinstance(true_peak_dbtp, (int, float)))
+        if (
+            target_lufs is not None
+            and (
+                isinstance(target_lufs, bool)
+                or not isinstance(target_lufs, (int, float))
+            )
+        ) or (
+            true_peak_dbtp is not None
+            and (
+                isinstance(true_peak_dbtp, bool)
+                or not isinstance(true_peak_dbtp, (int, float))
+            )
         ):
             raise ValueError("Preset loudness overrides must be numeric")
         parameters = resolve_mastering_parameters(
@@ -114,7 +128,11 @@ def create_batch(db: Session, principal: CurrentPrincipal, request: BatchCreateR
             "algorithm_version": "v1",
             **requested_preset,
         }
-    batch = Batch(project_id=principal.project_id, preset=parameters, max_parallelism=request.max_parallelism)
+    batch = Batch(
+        project_id=principal.project_id,
+        preset=parameters,
+        max_parallelism=request.max_parallelism,
+    )
     db.add(batch)
     db.flush()
     for mix_id in mix_ids:
@@ -146,7 +164,11 @@ def retry_batch_items(db: Session, batch: Batch, job_ids: list[str]) -> Batch:
         raise PermissionError("Batch does not belong to the current project")
     children = db.scalars(
         select(Job)
-        .where(Job.batch_id == locked_batch.id, Job.project_id == locked_batch.project_id, Job.id.in_(unique_ids))
+        .where(
+            Job.batch_id == locked_batch.id,
+            Job.project_id == locked_batch.project_id,
+            Job.id.in_(unique_ids),
+        )
         .with_for_update()
     ).all()
     if len(children) != len(unique_ids):
@@ -180,7 +202,9 @@ def advance_batch_after_terminal_job(db: Session, job_id: str, project_id: str) 
         raise RuntimeError(f"Batch {job.batch_id} is outside project {project_id}")
     recompute_batch_status(db, batch.id)
     running_count = db.scalar(
-        select(func.count()).select_from(Job).where(
+        select(func.count())
+        .select_from(Job)
+        .where(
             Job.batch_id == batch.id,
             Job.status == JobStatus.RUNNING,
         )
@@ -200,10 +224,15 @@ def advance_batch_after_terminal_job(db: Session, job_id: str, project_id: str) 
     if queued_job is not None:
         queued_attempt = db.scalar(
             select(JobAttempt.attempt_number)
-            .where(JobAttempt.job_id == queued_job.id, JobAttempt.status == JobStatus.QUEUED)
+            .where(
+                JobAttempt.job_id == queued_job.id,
+                JobAttempt.status == JobStatus.QUEUED,
+            )
             .order_by(JobAttempt.attempt_number.desc())
             .limit(1)
         )
         if queued_attempt is None:
-            raise RuntimeError(f"Queued batch job {queued_job.id} has no queued attempt")
+            raise RuntimeError(
+                f"Queued batch job {queued_job.id} has no queued attempt"
+            )
         enqueue_job_dispatch(db, queued_job, attempt_number=queued_attempt)

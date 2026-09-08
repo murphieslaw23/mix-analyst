@@ -9,7 +9,6 @@ from ..models.media import Mix, UploadSession
 from ..schemas.auth import CurrentPrincipal
 from ..services.auth import decode_principal_token, require_persisted_project_membership
 
-
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -27,7 +26,9 @@ def get_optional_principal(
             headers={"WWW-Authenticate": "Bearer"},
         )
     try:
-        return require_persisted_project_membership(db, decode_principal_token(credentials.credentials))
+        return require_persisted_project_membership(
+            db, decode_principal_token(credentials.credentials)
+        )
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -50,20 +51,30 @@ def get_current_principal(
 
 
 def require_owned_mix(db: Session, principal: CurrentPrincipal, mix_id: str) -> Mix:
-    mix = db.scalar(select(Mix).where(Mix.id == mix_id, Mix.project_id == principal.project_id))
+    mix = db.scalar(
+        select(Mix).where(Mix.id == mix_id, Mix.project_id == principal.project_id)
+    )
     if mix is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
     return mix
 
 
 def require_owned_job(db: Session, principal: CurrentPrincipal, job_id: str) -> Job:
-    job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == principal.project_id))
+    job = db.scalar(
+        select(Job).where(Job.id == job_id, Job.project_id == principal.project_id)
+    )
     if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
+        )
     return job
 
 
-def require_owned_upload_session(db: Session, principal: CurrentPrincipal, upload_id: str) -> UploadSession:
+def require_owned_upload_session(
+    db: Session, principal: CurrentPrincipal, upload_id: str
+) -> UploadSession:
     upload_session = db.scalar(
         select(UploadSession).where(
             UploadSession.id == upload_id,
@@ -71,5 +82,7 @@ def require_owned_upload_session(db: Session, principal: CurrentPrincipal, uploa
         )
     )
     if upload_session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found"
+        )
     return upload_session

@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 from .job import JobOut
 
-
 MAX_BATCH_PARALLELISM = 4
 
 

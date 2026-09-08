@@ -8,12 +8,11 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 import numpy as np
-
 
 ALGORITHM_VERSION = "v1"
 _KEY_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -59,7 +58,9 @@ class MasterResult:
 def _integrated_lufs(audio: np.ndarray, sample_rate: int) -> float:
     import pyloudnorm as pyln
 
-    loudness = float(pyln.Meter(sample_rate).integrated_loudness(np.asarray(audio, dtype=np.float64)))
+    loudness = float(
+        pyln.Meter(sample_rate).integrated_loudness(np.asarray(audio, dtype=np.float64))
+    )
     if not np.isfinite(loudness):
         raise ValueError("audio has no measurable integrated loudness")
     return loudness
@@ -90,7 +91,9 @@ def _validated_compressor_settings(settings: Mapping[str, float]) -> dict[str, f
     allowed = {"threshold_db", "ratio", "attack_ms", "release_ms"}
     unknown = set(settings) - allowed
     if unknown:
-        raise ValueError(f"unsupported compressor setting(s): {', '.join(sorted(unknown))}")
+        raise ValueError(
+            f"unsupported compressor setting(s): {', '.join(sorted(unknown))}"
+        )
     result = {key: float(value) for key, value in settings.items()}
     if "threshold_db" in result and not -60.0 <= result["threshold_db"] <= 0.0:
         raise ValueError("compressor threshold must be between -60 and 0 dB")
@@ -102,7 +105,9 @@ def _validated_compressor_settings(settings: Mapping[str, float]) -> dict[str, f
     return result
 
 
-def _apply_profile_eq(audio: np.ndarray, sample_rate: int, settings: Mapping[str, float]) -> np.ndarray:
+def _apply_profile_eq(
+    audio: np.ndarray, sample_rate: int, settings: Mapping[str, float]
+) -> np.ndarray:
     """Apply the deterministic reference EQ to a bounded in-memory signal."""
     controls = _validated_eq_settings(settings)
     if not controls:
@@ -111,9 +116,15 @@ def _apply_profile_eq(audio: np.ndarray, sample_rate: int, settings: Mapping[str
     sample_count = samples.shape[0]
     frequencies = np.fft.rfftfreq(sample_count, d=1.0 / sample_rate)
     safe_frequency = np.maximum(frequencies, 1.0)
-    sub = controls.get("sub_boost_db", 0.0) * np.exp(-0.5 * (np.log2(safe_frequency / 65.0) / 0.9) ** 2)
-    mud = controls.get("mud_cut_db", 0.0) * np.exp(-0.5 * (np.log2(safe_frequency / 300.0) / 0.85) ** 2)
-    air = controls.get("high_air_db", 0.0) / (1.0 + np.exp(-(frequencies - 9000.0) / 1600.0))
+    sub = controls.get("sub_boost_db", 0.0) * np.exp(
+        -0.5 * (np.log2(safe_frequency / 65.0) / 0.9) ** 2
+    )
+    mud = controls.get("mud_cut_db", 0.0) * np.exp(
+        -0.5 * (np.log2(safe_frequency / 300.0) / 0.85) ** 2
+    )
+    air = controls.get("high_air_db", 0.0) / (
+        1.0 + np.exp(-(frequencies - 9000.0) / 1600.0)
+    )
     gain = 10.0 ** ((sub + mud + air) / 20.0)
     spectrum = np.fft.rfft(samples, axis=0)
     if samples.ndim == 1:
@@ -147,18 +158,27 @@ def _apply_profile_compression(
     attack = np.exp(-1.0 / max(1.0, sample_rate * attack_ms / 1000.0))
     release = np.exp(-1.0 / max(1.0, sample_rate * release_ms / 1000.0))
     for index in range(1, len(desired_reduction)):
-        coefficient = attack if desired_reduction[index] < envelope[index - 1] else release
-        envelope[index] = coefficient * envelope[index - 1] + (1.0 - coefficient) * desired_reduction[index]
+        coefficient = (
+            attack if desired_reduction[index] < envelope[index - 1] else release
+        )
+        envelope[index] = (
+            coefficient * envelope[index - 1]
+            + (1.0 - coefficient) * desired_reduction[index]
+        )
     gain = 10.0 ** (envelope / 20.0)
     return samples * (gain[:, np.newaxis] if samples.ndim > 1 else gain)
 
 
-def _master_audio(audio: np.ndarray, sample_rate: int, settings: MasterSettings) -> np.ndarray:
+def _master_audio(
+    audio: np.ndarray, sample_rate: int, settings: MasterSettings
+) -> np.ndarray:
     samples = np.asarray(audio, dtype=np.float64)
     if samples.size == 0:
         raise ValueError("audio is empty")
     profiled = _apply_profile_eq(samples, sample_rate, settings.eq_settings)
-    profiled = _apply_profile_compression(profiled, sample_rate, settings.target_lra, settings.compressor_settings)
+    profiled = _apply_profile_compression(
+        profiled, sample_rate, settings.target_lra, settings.compressor_settings
+    )
     input_lufs = _integrated_lufs(profiled, sample_rate)
     normalized = profiled * (10.0 ** ((settings.target_lufs - input_lufs) / 20.0))
     true_peak = _true_peak_dbtp(normalized)
@@ -179,7 +199,10 @@ def _profile_filters(settings: MasterSettings) -> list[str]:
     if eq.get("high_air_db", 0.0):
         filters.append(f"treble=g={eq['high_air_db']:.6f}:f=9000")
     threshold_db = compressor.get("threshold_db", -18.0)
-    ratio = max(compressor.get("ratio", 2.0), 1.0 + (12.0 - min(settings.target_lra, 12.0)) / 6.0)
+    ratio = max(
+        compressor.get("ratio", 2.0),
+        1.0 + (12.0 - min(settings.target_lra, 12.0)) / 6.0,
+    )
     attack_ms = compressor.get("attack_ms", 20.0)
     release_ms = compressor.get("release_ms", 120.0)
     threshold_linear = 10.0 ** (threshold_db / 20.0)
@@ -203,21 +226,40 @@ def _extract_loudnorm_json(stderr: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in payload.items()}
 
 
-def _run_ffmpeg_measure(source: Path, filters: list[str], settings: MasterSettings) -> dict[str, str]:
+def _run_ffmpeg_measure(
+    source: Path, filters: list[str], settings: MasterSettings
+) -> dict[str, str]:
     loudnorm = f"loudnorm=I={settings.target_lufs}:TP={settings.true_peak_dbtp}:LRA={settings.target_lra}:print_format=json"
     chain = ",".join([*filters, loudnorm])
     completed = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostats", "-v", "info", "-i", str(source), "-af", chain, "-f", "null", "-"],
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostats",
+            "-v",
+            "info",
+            "-i",
+            str(source),
+            "-af",
+            chain,
+            "-f",
+            "null",
+            "-",
+        ],
         capture_output=True,
         text=True,
         check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError(f"FFmpeg mastering measurement failed: {completed.stderr[-1200:]}")
+        raise RuntimeError(
+            f"FFmpeg mastering measurement failed: {completed.stderr[-1200:]}"
+        )
     return _extract_loudnorm_json(completed.stderr)
 
 
-def _stream_master_audio(source: Path, destination: Path, settings: MasterSettings) -> tuple[float, float]:
+def _stream_master_audio(
+    source: Path, destination: Path, settings: MasterSettings
+) -> tuple[float, float]:
     """Two-pass FFmpeg mastering; decoded PCM remains inside bounded pipes."""
     filters = _profile_filters(settings)
     measured = _run_ffmpeg_measure(source, filters, settings)
@@ -233,15 +275,28 @@ def _stream_master_audio(source: Path, destination: Path, settings: MasterSettin
     chain = ",".join([*filters, loudnorm])
     completed = subprocess.run(
         [
-            "ffmpeg", "-hide_banner", "-nostats", "-v", "error", "-y", "-i", str(source),
-            "-af", chain, "-c:a", "pcm_s24le", str(destination),
+            "ffmpeg",
+            "-hide_banner",
+            "-nostats",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-af",
+            chain,
+            "-c:a",
+            "pcm_s24le",
+            str(destination),
         ],
         capture_output=True,
         text=True,
         check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError(f"FFmpeg mastering render failed: {completed.stderr[-1200:]}")
+        raise RuntimeError(
+            f"FFmpeg mastering render failed: {completed.stderr[-1200:]}"
+        )
     final = _run_ffmpeg_measure(destination, [], settings)
     try:
         return float(final["input_i"]), float(final["input_tp"])
@@ -250,7 +305,9 @@ def _stream_master_audio(source: Path, destination: Path, settings: MasterSettin
 
 
 def _object_key(project_id: str, content_hash: str, algorithm_version: str) -> str:
-    return f"projects/{project_id}/artifacts/mastered/{algorithm_version}/{content_hash}"
+    return (
+        f"projects/{project_id}/artifacts/mastered/{algorithm_version}/{content_hash}"
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -272,21 +329,27 @@ def master_audio_file(source_path: Path, settings: MasterSettings) -> MasterResu
     try:
         source.relative_to(storage_root)
     except ValueError as exc:
-        raise ValueError("mastering source is outside the trusted storage root") from exc
+        raise ValueError(
+            "mastering source is outside the trusted storage root"
+        ) from exc
 
     info = sf.info(source)
     if info.frames <= 0 or info.samplerate <= 0:
         raise ValueError("audio is empty")
     staging_dir = storage_root / ".staging"
     staging_dir.mkdir(parents=True, exist_ok=True)
-    descriptor, temp_name = tempfile.mkstemp(prefix="master-", suffix=".wav", dir=staging_dir)
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix="master-", suffix=".wav", dir=staging_dir
+    )
     temporary = Path(temp_name)
     os.close(descriptor)
     try:
         if info.frames <= int(info.samplerate * MAX_IN_MEMORY_SECONDS):
             audio, sample_rate = sf.read(source, always_2d=False, dtype="float32")
             mastered = _master_audio(audio, int(sample_rate), settings)
-            sf.write(temporary, mastered, int(sample_rate), format="WAV", subtype="PCM_24")
+            sf.write(
+                temporary, mastered, int(sample_rate), format="WAV", subtype="PCM_24"
+            )
             final_lufs = _integrated_lufs(mastered, int(sample_rate))
             final_peak = _true_peak_dbtp(mastered)
         else:
@@ -294,7 +357,9 @@ def master_audio_file(source_path: Path, settings: MasterSettings) -> MasterResu
 
         with temporary.open("rb") as handle:
             os.fsync(handle.fileno())
-        object_key = _object_key(settings.project_id, _sha256(temporary), settings.algorithm_version)
+        object_key = _object_key(
+            settings.project_id, _sha256(temporary), settings.algorithm_version
+        )
         destination = storage_root / object_key
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:

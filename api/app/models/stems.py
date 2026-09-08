@@ -1,7 +1,10 @@
 """Stem separation and bassline analysis models."""
-from sqlalchemy import Column, String, Float, Integer, ForeignKey, JSON, DateTime, Boolean
+
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, String
 from sqlalchemy.sql import func
+
 from api.app.db.session import Base
+
 
 class StemJob(Base):
     __tablename__ = "stem_jobs"

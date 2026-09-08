@@ -17,7 +17,11 @@ from ...schemas.auth import CurrentPrincipal
 from ...schemas.mix import MixListResponse, MixOut, MixUpdateRequest
 from ...schemas.tracklist import TracklistResponse
 from ...schemas.transition import TransitionListResponse
-from ...services.auth import artifact_ticket_ttl, decode_artifact_ticket, issue_artifact_ticket
+from ...services.auth import (
+    artifact_ticket_ttl,
+    decode_artifact_ticket,
+    issue_artifact_ticket,
+)
 from ...services.storage import StorageService
 from ..deps import get_current_principal, get_optional_principal, require_owned_mix
 
@@ -41,9 +45,16 @@ def _artifact_out(artifact: Artifact, mix_id: str) -> dict:
 
 
 def _present_mix(mix: Mix) -> dict:
-    artifacts = sorted(mix.artifacts, key=lambda artifact: (artifact.created_at, artifact.id))
-    metadata = next((artifact for artifact in reversed(artifacts) if artifact.role == "metadata"), None)
-    suggested_name = (metadata.report or {}).get("suggested_download_name") if metadata else None
+    artifacts = sorted(
+        mix.artifacts, key=lambda artifact: (artifact.created_at, artifact.id)
+    )
+    metadata = next(
+        (artifact for artifact in reversed(artifacts) if artifact.role == "metadata"),
+        None,
+    )
+    suggested_name = (
+        (metadata.report or {}).get("suggested_download_name") if metadata else None
+    )
     return {
         "id": mix.id,
         "title": mix.title,
@@ -58,15 +69,25 @@ def _present_mix(mix: Mix) -> dict:
     }
 
 
-def _owned_artifact(db: Session, principal: CurrentPrincipal, mix_id: str, artifact_id: str) -> tuple[Mix, Artifact]:
+def _owned_artifact(
+    db: Session, principal: CurrentPrincipal, mix_id: str, artifact_id: str
+) -> tuple[Mix, Artifact]:
     mix = require_owned_mix(db, principal, mix_id)
-    artifact = db.query(Artifact).filter(
-        Artifact.id == artifact_id,
-        Artifact.mix_id == mix.id,
-        Artifact.project_id == principal.project_id,
-    ).first()
-    if artifact is None or not artifact.key.startswith(f"projects/{principal.project_id}/"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found")
+    artifact = (
+        db.query(Artifact)
+        .filter(
+            Artifact.id == artifact_id,
+            Artifact.mix_id == mix.id,
+            Artifact.project_id == principal.project_id,
+        )
+        .first()
+    )
+    if artifact is None or not artifact.key.startswith(
+        f"projects/{principal.project_id}/"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found"
+        )
     return mix, artifact
 
 
@@ -76,7 +97,12 @@ def list_mixes(
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
     """List all analyzed and registered DJ mixes."""
-    mixes = db.query(Mix).filter(Mix.project_id == principal.project_id).order_by(Mix.created_at.desc()).all()
+    mixes = (
+        db.query(Mix)
+        .filter(Mix.project_id == principal.project_id)
+        .order_by(Mix.created_at.desc())
+        .all()
+    )
     return MixListResponse(total=len(mixes), items=[_present_mix(mix) for mix in mixes])
 
 
@@ -100,8 +126,12 @@ def create_artifact_download_ticket(
     """Mint a scoped capability so native media can stream with Range requests."""
     mix, _ = _owned_artifact(db, principal, mix_id, artifact_id)
     ttl_seconds = artifact_ticket_ttl(mix.media_asset.duration_seconds)
-    ticket = issue_artifact_ticket(principal, mix_id, artifact_id, ttl_seconds=ttl_seconds)
-    protected_url = f"{settings.api_v1_prefix}/mixes/{mix_id}/artifacts/{artifact_id}/download"
+    ticket = issue_artifact_ticket(
+        principal, mix_id, artifact_id, ttl_seconds=ttl_seconds
+    )
+    protected_url = (
+        f"{settings.api_v1_prefix}/mixes/{mix_id}/artifacts/{artifact_id}/download"
+    )
     return {
         "download_url": f"{protected_url}?ticket={quote(ticket, safe='')}",
         "expires_in_seconds": ttl_seconds,
@@ -128,24 +158,35 @@ def download_artifact(
         try:
             effective_principal = decode_artifact_ticket(ticket, mix_id, artifact_id)
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid artifact ticket") from None
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid artifact ticket",
+            ) from None
 
     mix, artifact = _owned_artifact(db, effective_principal, mix_id, artifact_id)
     try:
         path = StorageService(settings.storage_root).object_path(artifact.key)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found") from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found"
+        ) from None
     if not path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact is unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Artifact is unavailable"
+        )
     metadata = next(
         (
             item
-            for item in sorted(mix.artifacts, key=lambda item: (item.created_at, item.id), reverse=True)
+            for item in sorted(
+                mix.artifacts, key=lambda item: (item.created_at, item.id), reverse=True
+            )
             if item.role == "metadata"
         ),
         None,
     )
-    suggested_name = (metadata.report or {}).get("suggested_download_name") if metadata else None
+    suggested_name = (
+        (metadata.report or {}).get("suggested_download_name") if metadata else None
+    )
     if artifact.role == "source":
         filename = mix.media_asset.original_filename
     elif artifact.role == "mastered" and suggested_name:
@@ -167,10 +208,15 @@ def get_mix_analysis(
     require_owned_mix(db, principal, mix_id)
     analysis = db.query(AnalysisResult).filter(AnalysisResult.mix_id == mix_id).first()
     if not analysis:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis results not found for this mix")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Analysis results not found for this mix",
+        )
 
     bpm_cand = json.loads(analysis.bpm_candidates) if analysis.bpm_candidates else []
-    spectral = json.loads(analysis.spectral_summary) if analysis.spectral_summary else {}
+    spectral = (
+        json.loads(analysis.spectral_summary) if analysis.spectral_summary else {}
+    )
     quality = json.loads(analysis.quality_findings) if analysis.quality_findings else []
 
     return AnalysisResultOut(
@@ -201,7 +247,12 @@ def get_mix_tracklist(
     """Retrieve detected track segments and identified song metadata for a mix."""
     require_owned_mix(db, principal, mix_id)
 
-    segments = db.query(TrackSegment).filter(TrackSegment.mix_id == mix_id).order_by(TrackSegment.segment_index.asc()).all()
+    segments = (
+        db.query(TrackSegment)
+        .filter(TrackSegment.mix_id == mix_id)
+        .order_by(TrackSegment.segment_index.asc())
+        .all()
+    )
     identified_count = sum(1 for segment in segments if segment.match is not None)
 
     return TracklistResponse(
@@ -221,7 +272,12 @@ def get_mix_transitions(
     """Retrieve detected transition blend regions, cue points, and harmonic compatibility."""
     require_owned_mix(db, principal, mix_id)
 
-    transitions = db.query(TransitionEvent).filter(TransitionEvent.mix_id == mix_id).order_by(TransitionEvent.transition_index.asc()).all()
+    transitions = (
+        db.query(TransitionEvent)
+        .filter(TransitionEvent.mix_id == mix_id)
+        .order_by(TransitionEvent.transition_index.asc())
+        .all()
+    )
 
     return TransitionListResponse(
         mix_id=mix_id,
@@ -261,4 +317,3 @@ def delete_mix(
 
     db.delete(mix)
     db.commit()
-    return None

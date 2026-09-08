@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from ..models.job import JobType
 
@@ -11,10 +12,10 @@ class StageRunOut(BaseModel):
     stage_version: str
     status: str
     progress_percent: float
-    stage_output: Optional[str] = None
-    error_message: Optional[str] = None
+    stage_output: str | None = None
+    error_message: str | None = None
     started_at: datetime
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -24,9 +25,9 @@ class JobAttemptOut(BaseModel):
     id: str
     attempt_number: int
     status: str
-    worker_hostname: Optional[str] = None
+    worker_hostname: str | None = None
     started_at: datetime
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -37,19 +38,19 @@ class JobOut(BaseModel):
     mix_id: str
     # Child jobs retain the durable parent identifier so the UI can link to
     # aggregate recovery without deriving it from transient browser state.
-    batch_id: Optional[str] = None
+    batch_id: str | None = None
     job_type: str
     status: str
     progress_percent: float
-    current_stage: Optional[str] = None
-    parameters: Dict[str, Any] = Field(default_factory=dict)
-    celery_task_id: Optional[str] = None
-    error_message: Optional[str] = None
+    current_stage: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    celery_task_id: str | None = None
+    error_message: str | None = None
     created_at: datetime
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    stage_runs: List[StageRunOut] = []
-    attempts: List[JobAttemptOut] = []
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    stage_runs: list[StageRunOut] = []
+    attempts: list[JobAttemptOut] = []
 
     class Config:
         from_attributes = True
@@ -62,11 +63,11 @@ class JobListResponse(BaseModel):
     it deliberately does not grow while a caller walks that history.
     """
 
-    items: List[JobOut]
+    items: list[JobOut]
     total: int
-    next_cursor: Optional[str] = None
+    next_cursor: str | None = None
 
 
 class JobCreateRequest(BaseModel):
     job_type: JobType = JobType.ANALYSIS
-    parameters: Dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)

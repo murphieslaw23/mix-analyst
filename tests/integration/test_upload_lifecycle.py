@@ -33,16 +33,26 @@ from api.app.services.upload_sessions import finalize_upload
 
 def _bearer_token(user_id: str, project_id: str) -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=")
-    claims = json.dumps({"sub": user_id, "project_id": project_id}, separators=(",", ":")).encode()
+    claims = json.dumps(
+        {"sub": user_id, "project_id": project_id}, separators=(",", ":")
+    ).encode()
     payload = base64.urlsafe_b64encode(claims).rstrip(b"=")
-    signature = hmac.new(b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256).digest()
-    return b".".join((header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))).decode()
+    signature = hmac.new(
+        b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256
+    ).digest()
+    return b".".join(
+        (header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))
+    ).decode()
 
 
 @pytest.fixture
 def lifecycle_client(tmp_path, monkeypatch):
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    session_factory = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
+    )
     Base.metadata.create_all(bind=engine)
     db = session_factory()
     try:
@@ -98,11 +108,17 @@ def user_b_token():
     return _bearer_token("user-b", "project-b")
 
 
-def _start_upload(client, token, *, filename="mix.wav", size=4, content_type="audio/wav"):
+def _start_upload(
+    client, token, *, filename="mix.wav", size=4, content_type="audio/wav"
+):
     response = client.post(
         "/api/v1",
         headers={"Authorization": f"Bearer {token}"},
-        json={"filename": filename, "total_size_bytes": size, "content_type": content_type},
+        json={
+            "filename": filename,
+            "total_size_bytes": size,
+            "content_type": content_type,
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -135,7 +151,9 @@ def test_stale_offset_returns_conflict(lifecycle_client, user_a_token):
     assert stale.status_code == 409
 
 
-def test_retry_reconciles_file_ahead_of_committed_offset(lifecycle_client, user_a_token):
+def test_retry_reconciles_file_ahead_of_committed_offset(
+    lifecycle_client, user_a_token
+):
     """A crash after fsync but before the offset commit must not wedge the upload."""
     client, session_factory, storage = lifecycle_client
     upload = _start_upload(client, user_a_token, size=4)
@@ -159,13 +177,17 @@ def test_retry_reconciles_file_ahead_of_committed_offset(lifecycle_client, user_
     assert storage.object_path(quarantine_key).read_bytes() == b"abcd"
 
 
-def test_finalization_promotes_validated_quarantine_object_to_derived_key(lifecycle_client, user_a_token, monkeypatch):
+def test_finalization_promotes_validated_quarantine_object_to_derived_key(
+    lifecycle_client, user_a_token, monkeypatch
+):
     """Replacing server-derived promotion with a client path would fail this ownership/key assertion."""
     client, session_factory, storage = lifecycle_client
     upload = _start_upload(client, user_a_token, filename="set.wav", size=4)
     monkeypatch.setattr(
         "api.app.services.upload_sessions.probe_audio",
-        lambda _path: AudioProbeResult(duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"),
+        lambda _path: AudioProbeResult(
+            duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"
+        ),
     )
 
     append = client.patch(
@@ -195,13 +217,17 @@ def test_finalization_promotes_validated_quarantine_object_to_derived_key(lifecy
         db.close()
 
 
-def test_finalization_resumes_database_pending_object_promotion(lifecycle_client, user_a_token, monkeypatch):
+def test_finalization_resumes_database_pending_object_promotion(
+    lifecycle_client, user_a_token, monkeypatch
+):
     """A crash after DB prepare must resume without exposing or deleting the result rows."""
     client, session_factory, storage = lifecycle_client
     upload = _start_upload(client, user_a_token, filename="recover.wav", size=4)
     monkeypatch.setattr(
         "api.app.services.upload_sessions.probe_audio",
-        lambda _path: AudioProbeResult(duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"),
+        lambda _path: AudioProbeResult(
+            duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"
+        ),
     )
     appended = client.patch(
         upload["upload_url"],
@@ -237,7 +263,9 @@ def test_finalization_resumes_database_pending_object_promotion(lifecycle_client
         assert recovered.mix.status == "ready"
         assert storage.object_exists(pending.final_key)
         db.expire_all()
-        assert db.get(UploadSession, upload["upload_id"]).status is UploadStatus.COMPLETED
+        assert (
+            db.get(UploadSession, upload["upload_id"]).status is UploadStatus.COMPLETED
+        )
     finally:
         db.close()
 
@@ -249,7 +277,9 @@ def test_same_project_duplicate_finalization_reuses_asset_and_cleans_redundant_q
     client, session_factory, storage = lifecycle_client
     monkeypatch.setattr(
         "api.app.services.upload_sessions.probe_audio",
-        lambda _path: AudioProbeResult(duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"),
+        lambda _path: AudioProbeResult(
+            duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"
+        ),
     )
     first = _start_upload(client, user_a_token, filename="first.wav", size=4)
     second = _start_upload(client, user_a_token, filename="second.wav", size=4)
@@ -274,7 +304,10 @@ def test_same_project_duplicate_finalization_reuses_asset_and_cleans_redundant_q
 
     assert first_complete.status_code == 200, first_complete.text
     assert second_complete.status_code == 200, second_complete.text
-    assert first_complete.json()["media_asset_id"] == second_complete.json()["media_asset_id"]
+    assert (
+        first_complete.json()["media_asset_id"]
+        == second_complete.json()["media_asset_id"]
+    )
     db = session_factory()
     try:
         second_session = db.get(UploadSession, second["upload_id"])
@@ -286,12 +319,16 @@ def test_same_project_duplicate_finalization_reuses_asset_and_cleans_redundant_q
         db.close()
 
 
-def test_finalization_recovers_from_same_final_key_insert_race(lifecycle_client, user_a_token, monkeypatch):
+def test_finalization_recovers_from_same_final_key_insert_race(
+    lifecycle_client, user_a_token, monkeypatch
+):
     """Removing the savepoint/reload path turns a concurrent winner into a 500 and leaked quarantine object."""
     client, session_factory, storage = lifecycle_client
     monkeypatch.setattr(
         "api.app.services.upload_sessions.probe_audio",
-        lambda _path: AudioProbeResult(duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"),
+        lambda _path: AudioProbeResult(
+            duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le"
+        ),
     )
     upload = _start_upload(client, user_a_token, size=4)
     appended = client.patch(
@@ -348,7 +385,9 @@ def test_finalization_recovers_from_same_final_key_insert_race(lifecycle_client,
         db.close()
 
 
-def test_expired_session_is_aborted_and_quarantine_is_cleaned(lifecycle_client, user_a_token):
+def test_expired_session_is_aborted_and_quarantine_is_cleaned(
+    lifecycle_client, user_a_token
+):
     """Removing expiry cleanup would leave an upload writable and its object present."""
     client, session_factory, storage = lifecycle_client
     upload = _start_upload(client, user_a_token, size=4)
@@ -358,6 +397,19 @@ def test_expired_session_is_aborted_and_quarantine_is_cleaned(lifecycle_client, 
         session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         quarantine_key = session.quarantine_key
         db.commit()
+    finally:
+        db.close()
+
+    response = client.patch(
+        upload["upload_url"],
+        headers={"Authorization": f"Bearer {user_a_token}", "Upload-Offset": "0"},
+        content=b"abcd",
+    )
+    assert response.status_code == 410
+    assert not storage.object_exists(quarantine_key)
+    db = session_factory()
+    try:
+        assert db.get(UploadSession, upload["upload_id"]).status is UploadStatus.ABORTED
     finally:
         db.close()
 
@@ -383,13 +435,18 @@ def test_trusted_global_cleanup_removes_expired_quarantine_across_projects(
         db.commit()
 
         assert cleanup_expired_uploads_global(db, storage) == 2
-        assert all(db.get(UploadSession, upload["upload_id"]).status is UploadStatus.ABORTED for upload in uploads)
+        assert all(
+            db.get(UploadSession, upload["upload_id"]).status is UploadStatus.ABORTED
+            for upload in uploads
+        )
         assert all(not storage.object_exists(key) for key in keys)
     finally:
         db.close()
 
 
-def test_audio_probe_details_are_not_returned_to_upload_client(lifecycle_client, user_a_token, monkeypatch):
+def test_audio_probe_details_are_not_returned_to_upload_client(
+    lifecycle_client, user_a_token, monkeypatch
+):
     """Absolute paths and raw ffprobe stderr are server-only diagnostics."""
     client, _, _ = lifecycle_client
     upload = _start_upload(client, user_a_token, filename="invalid.wav", size=4)
@@ -402,7 +459,9 @@ def test_audio_probe_details_are_not_returned_to_upload_client(lifecycle_client,
     monkeypatch.setattr(
         "api.app.services.upload_sessions.probe_audio",
         lambda _path: (_ for _ in ()).throw(
-            AudioProbeError("ffprobe failed for /storage/projects/secret.wav: private decoder stderr")
+            AudioProbeError(
+                "ffprobe failed for /storage/projects/secret.wav: private decoder stderr"
+            )
         ),
     )
 
@@ -416,20 +475,6 @@ def test_audio_probe_details_are_not_returned_to_upload_client(lifecycle_client,
     assert response.json()["detail"] == "Uploaded file is not valid audio"
     assert "/storage/" not in response.text
     assert "decoder stderr" not in response.text
-
-    response = client.patch(
-        upload["upload_url"],
-        headers={"Authorization": f"Bearer {user_a_token}", "Upload-Offset": "0"},
-        content=b"abcd",
-    )
-
-    assert response.status_code == 410
-    assert not storage.object_exists(quarantine_key)
-    db = session_factory()
-    try:
-        assert db.get(UploadSession, upload["upload_id"]).status is UploadStatus.ABORTED
-    finally:
-        db.close()
 
 
 def test_new_upload_does_not_cleanup_expired_session_from_another_project(
@@ -451,17 +496,23 @@ def test_new_upload_does_not_cleanup_expired_session_from_another_project(
 
     db = session_factory()
     try:
-        assert db.get(UploadSession, upload_b["upload_id"]).status is UploadStatus.PENDING
+        assert (
+            db.get(UploadSession, upload_b["upload_id"]).status is UploadStatus.PENDING
+        )
     finally:
         db.close()
     assert storage.object_exists(quarantine_key_b)
 
 
-def test_cross_project_upload_session_remains_not_found(lifecycle_client, user_a_token, user_b_token):
+def test_cross_project_upload_session_remains_not_found(
+    lifecycle_client, user_a_token, user_b_token
+):
     """Dropping the project predicate would disclose this other project's session."""
     client, _, _ = lifecycle_client
     upload = _start_upload(client, user_b_token, size=4)
 
-    response = client.get(upload["upload_url"], headers={"Authorization": f"Bearer {user_a_token}"})
+    response = client.get(
+        upload["upload_url"], headers={"Authorization": f"Bearer {user_a_token}"}
+    )
 
     assert response.status_code == 404

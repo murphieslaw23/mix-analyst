@@ -1,12 +1,13 @@
 from worker.broadcast.ffmpeg_compositor import FFmpegBroadcastCompositor
 
+
 def test_build_filter_complex():
     """Verify filtergraph contains audio-reactive spectrum, totem branding, and key display."""
     graph = FFmpegBroadcastCompositor.build_filter_complex(
         title="Acid Tribal Ritual",
         artist="Curley Korrupt",
         bpm=154.0,
-        camelot_key="10A"
+        camelot_key="10A",
     )
 
     assert "showfreqs" in graph
@@ -15,12 +16,13 @@ def test_build_filter_complex():
     assert "10A" in graph
     assert "154.0 BPM" in graph
 
+
 def test_build_ffmpeg_command():
     """Verify FFmpeg arguments for MP4 export and RTMP streaming."""
     cmd_mp4 = FFmpegBroadcastCompositor.build_ffmpeg_command(
         input_audio="/storage/audio/mix1.wav",
         output_dest="/storage/broadcast/mix1.mp4",
-        is_rtmp=False
+        is_rtmp=False,
     )
     assert "-c:v" in cmd_mp4
     assert "libx264" in cmd_mp4
@@ -29,7 +31,7 @@ def test_build_ffmpeg_command():
     cmd_rtmp = FFmpegBroadcastCompositor.build_ffmpeg_command(
         input_audio="/storage/audio/mix1.wav",
         output_dest="rtmp://a.rtmp.youtube.com/live2/key123",
-        is_rtmp=True
+        is_rtmp=True,
     )
     assert "-f" in cmd_rtmp
     assert "flv" in cmd_rtmp

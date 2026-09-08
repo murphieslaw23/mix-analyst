@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SAFE_TEST_SECRET = "test-only-compose-secret-with-at-least-32-bytes"

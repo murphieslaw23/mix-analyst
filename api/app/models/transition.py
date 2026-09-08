@@ -1,13 +1,13 @@
 import uuid
 from datetime import datetime, timezone
+
 from sqlalchemy import (
     Column,
-    String,
-    Float,
-    Integer,
     DateTime,
+    Float,
     ForeignKey,
-    Text,
+    Integer,
+    String,
 )
 from sqlalchemy.orm import relationship
 
@@ -32,6 +32,10 @@ class TransitionEvent(Base):
     camelot_compatibility = Column(String(50), default="PERFECT_MATCH", nullable=False)
     confidence = Column(Float, default=0.8, nullable=False)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     mix = relationship("Mix", back_populates="transitions")

@@ -5,21 +5,22 @@ Revises: 20260902_04_outbox_attempts
 Create Date: 2026-09-02
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260902_04_outbox_project_scope"
-down_revision: Union[str, Sequence[str], None] = "20260902_04_outbox_attempts"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "20260902_04_outbox_attempts"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     with op.batch_alter_table("outbox_messages") as batch_op:
-        batch_op.add_column(sa.Column("project_id", sa.String(length=36), nullable=True))
+        batch_op.add_column(
+            sa.Column("project_id", sa.String(length=36), nullable=True)
+        )
 
     # Every Task 4 outbox aggregate is a job. Backfill from that authoritative
     # owner before making the tenant boundary mandatory.
@@ -39,5 +40,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("outbox_messages") as batch_op:
         batch_op.drop_index("ix_outbox_messages_project_id")
-        batch_op.drop_constraint("fk_outbox_messages_project_id_projects", type_="foreignkey")
+        batch_op.drop_constraint(
+            "fk_outbox_messages_project_id_projects", type_="foreignkey"
+        )
         batch_op.drop_column("project_id")

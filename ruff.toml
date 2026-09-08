@@ -1,0 +1,4 @@
+[lint.flake8-bugbear]
+# FastAPI evaluates dependency markers at request handling time; these are not
+# mutable defaults shared between calls. Keep B008 enabled for every other call.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends"]

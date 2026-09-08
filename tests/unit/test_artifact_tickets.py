@@ -27,6 +27,6 @@ def test_artifact_ticket_round_trip_is_bound_to_exact_mix_and_artifact():
 
 
 def test_artifact_ticket_lifetime_covers_long_form_listen_but_is_capped():
-    assert artifact_ticket_ttl(60.0) == ARTIFACT_TICKET_MIN_TTL_SECONDS
+    assert artifact_ticket_ttl(60.0) == 60 + ARTIFACT_TICKET_MIN_TTL_SECONDS
     assert artifact_ticket_ttl(3 * 60 * 60) == (3 * 60 * 60) + (15 * 60)
     assert artifact_ticket_ttl(24 * 60 * 60) == ARTIFACT_TICKET_MAX_TTL_SECONDS

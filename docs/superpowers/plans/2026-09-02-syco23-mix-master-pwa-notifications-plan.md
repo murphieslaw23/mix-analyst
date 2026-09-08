@@ -36,7 +36,10 @@
 def test_manifest_declares_stable_identity_and_raster_maskable_icon():
     manifest = json.loads(Path("web/public/manifest.webmanifest").read_text())
     assert manifest["id"] == "/"
-    assert any(icon["src"] == "/icon-maskable-512.png" and icon["purpose"] == "maskable" for icon in manifest["icons"])
+    assert any(
+        icon["src"] == "/icon-maskable-512.png" and icon["purpose"] == "maskable"
+        for icon in manifest["icons"]
+    )
 ```
 
 - [ ] **Step 2: Run the manifest test**
@@ -168,7 +171,9 @@ Expected: failure because current notification is an ephemeral string in `App.ts
 ```python
 def create_job_notification(db: Session, job: Job, kind: str) -> Notification:
     dedupe_key = f"{kind}:{job.id}:{job.finished_at.isoformat()}"
-    return get_or_create_notification(db, user_id=job.owner_id, dedupe_key=dedupe_key, deep_link=f"/jobs/{job.id}")
+    return get_or_create_notification(
+        db, user_id=job.owner_id, dedupe_key=dedupe_key, deep_link=f"/jobs/{job.id}"
+    )
 ```
 
 Create the notification inside the same transaction as terminal job state/event/outbox. Render center data from the API; foreground job events create an accessible toast that links to the center item without emitting an OS notification.
@@ -209,7 +214,9 @@ test('notification permission is not requested until the user enables job notifi
 ```
 
 ```python
-def test_gone_push_endpoint_is_deactivated_after_one_delivery_attempt(client, subscription, notification):
+def test_gone_push_endpoint_is_deactivated_after_one_delivery_attempt(
+    client, subscription, notification
+):
     outcome = deliver_notification(notification.id)
     assert outcome.status == "deactivated"
 ```
@@ -223,8 +230,17 @@ Expected: failure because no Push endpoint, subscription model, or user-triggere
 - [ ] **Step 3: Implement encrypted subscription persistence and sender policy**
 
 ```python
-payload = {"version": 1, "notification_id": notification.id, "deep_link": notification.deep_link}
-webpush(subscription_info=decrypt(subscription.encrypted_payload), data=json.dumps(payload), vapid_private_key=settings.vapid_private_key, vapid_claims={"sub": settings.vapid_contact})
+payload = {
+    "version": 1,
+    "notification_id": notification.id,
+    "deep_link": notification.deep_link,
+}
+webpush(
+    subscription_info=decrypt(subscription.encrypted_payload),
+    data=json.dumps(payload),
+    vapid_private_key=settings.vapid_private_key,
+    vapid_claims={"sub": settings.vapid_contact},
+)
 ```
 
 Keep VAPID private material server-only. Deduplicate deliveries by notification/subscription pair; back off 429/5xx, deactivate 404/410, and never include filename/error/credential data in payload.

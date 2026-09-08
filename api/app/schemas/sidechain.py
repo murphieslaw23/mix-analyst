@@ -1,11 +1,12 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+
 
 class SidechainProcessRequest(BaseModel):
     media_id: str
-    threshold_db: Optional[float] = -12.0
-    max_ducking_db: Optional[float] = 6.0
+    threshold_db: float | None = -12.0
+    max_ducking_db: float | None = 6.0
     auto_phase_align: bool = True
+
 
 class SidechainProcessResponse(BaseModel):
     job_id: str

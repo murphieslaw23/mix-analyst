@@ -9,7 +9,6 @@ from ..config import settings
 from ..models.identity import Project, User
 from ..schemas.auth import CurrentPrincipal
 
-
 ARTIFACT_TICKET_AUDIENCE = "mix-analyst-artifact"
 ARTIFACT_TICKET_MIN_TTL_SECONDS = 15 * 60
 ARTIFACT_TICKET_MAX_TTL_SECONDS = 12 * 60 * 60
@@ -29,7 +28,9 @@ def decode_principal_token(token: str) -> CurrentPrincipal:
         raise ValueError("Invalid bearer token") from None
 
 
-def require_persisted_project_membership(db: Session, principal: CurrentPrincipal) -> CurrentPrincipal:
+def require_persisted_project_membership(
+    db: Session, principal: CurrentPrincipal
+) -> CurrentPrincipal:
     """Ensure a correctly signed claim names a project actually owned by its user."""
     membership = db.scalar(
         select(Project.id)
@@ -48,7 +49,10 @@ def require_persisted_project_membership(db: Session, principal: CurrentPrincipa
 def artifact_ticket_ttl(duration_seconds: float | None) -> int:
     """Cover a complete long-form listen while keeping the capability bounded."""
     duration = max(0, int(duration_seconds or 0))
-    return min(ARTIFACT_TICKET_MAX_TTL_SECONDS, max(ARTIFACT_TICKET_MIN_TTL_SECONDS, duration + 15 * 60))
+    return min(
+        ARTIFACT_TICKET_MAX_TTL_SECONDS,
+        max(ARTIFACT_TICKET_MIN_TTL_SECONDS, duration + 15 * 60),
+    )
 
 
 def issue_artifact_ticket(
@@ -77,7 +81,9 @@ def issue_artifact_ticket(
     )
 
 
-def decode_artifact_ticket(token: str, mix_id: str, artifact_id: str) -> CurrentPrincipal:
+def decode_artifact_ticket(
+    token: str, mix_id: str, artifact_id: str
+) -> CurrentPrincipal:
     """Validate an artifact ticket and bind it to the exact requested object."""
     try:
         claims = jwt.decode(
@@ -85,9 +91,22 @@ def decode_artifact_ticket(token: str, mix_id: str, artifact_id: str) -> Current
             settings.auth_jwt_secret,
             algorithms=[settings.auth_jwt_algorithm],
             audience=ARTIFACT_TICKET_AUDIENCE,
-            options={"require": ["sub", "project_id", "mix_id", "artifact_id", "scope", "exp"]},
+            options={
+                "require": [
+                    "sub",
+                    "project_id",
+                    "mix_id",
+                    "artifact_id",
+                    "scope",
+                    "exp",
+                ]
+            },
         )
-        if claims["scope"] != "artifact:read" or claims["mix_id"] != mix_id or claims["artifact_id"] != artifact_id:
+        if (
+            claims["scope"] != "artifact:read"
+            or claims["mix_id"] != mix_id
+            or claims["artifact_id"] != artifact_id
+        ):
             raise ValueError("Artifact ticket scope mismatch")
         return CurrentPrincipal(user_id=claims["sub"], project_id=claims["project_id"])
     except (InvalidTokenError, KeyError, TypeError, ValueError):

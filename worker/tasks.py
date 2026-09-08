@@ -1,22 +1,20 @@
-import os
 import json
 import math
+import os
 import socket
 import tempfile
 import uuid
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+
 from sqlalchemy import select, text
-from .celery_app import celery_app
-from .db import SessionLocal
-from .analysis.orchestrator import AudioAnalysisOrchestrator
+
+from api.app.config import settings as app_settings
+from api.app.models.artifact import Artifact as ArtifactRecord
 from api.app.models.job import Job, JobAttempt, JobStatus, StageRun, StageStatus
 from api.app.models.job_event import JobEvent
-from api.app.models.artifact import Artifact as ArtifactRecord
-from api.app.config import settings as app_settings
-from api.app.services.storage import StorageService
-from api.app.services.job_commands import claim_job_attempt, heartbeat_job_attempt
 from api.app.services.batches import advance_batch_after_terminal_job
+from api.app.services.job_commands import claim_job_attempt, heartbeat_job_attempt
 from api.app.services.job_events import event_notification, publish_event
 from api.app.services.job_events_store import (
     complete_job_attempt,
@@ -24,11 +22,21 @@ from api.app.services.job_events_store import (
     record_job_event,
 )
 from api.app.services.notifications import create_job_notification
-from api.app.services.upload_sessions import cleanup_expired_uploads_global, reconcile_pending_upload_promotions
-from .stages.master_mix import MasterSettings, run_master_mix as run_master_mix_stage
-from .stages.tag_mix import Artifact as StageArtifact, tag_mix
-from .stages.generate_waveform import generate_waveform
+from api.app.services.storage import StorageService
+from api.app.services.upload_sessions import (
+    cleanup_expired_uploads_global,
+    reconcile_pending_upload_promotions,
+)
+
+from .analysis.orchestrator import AudioAnalysisOrchestrator
+from .celery_app import celery_app
+from .db import SessionLocal
 from .services.metrics import record_job_finished, record_job_started, started_at
+from .stages.generate_waveform import generate_waveform
+from .stages.master_mix import MasterSettings
+from .stages.master_mix import run_master_mix as run_master_mix_stage
+from .stages.tag_mix import Artifact as StageArtifact
+from .stages.tag_mix import tag_mix
 
 # API, Compose, and every worker role use the same declared settings alias.
 # ``STORAGE_ROOT`` existed only as an undocumented worker-only spelling and
@@ -62,12 +70,19 @@ def require_running_job(
     ).scalar_one_or_none()
     if status != "RUNNING":
         raise JobStopped(f"Job {job_id} is no longer running")
-    if attempt_number is not None and claim_token is not None:
-        if not heartbeat_job_attempt(db, job_id, project_id, attempt_number, claim_token):
-            raise JobStopped(f"Job {job_id} attempt lease is no longer active")
+    if (
+        attempt_number is not None
+        and claim_token is not None
+        and not heartbeat_job_attempt(
+            db, job_id, project_id, attempt_number, claim_token
+        )
+    ):
+        raise JobStopped(f"Job {job_id} attempt lease is no longer active")
 
 
-def _claim_task_attempt(self, db, job_id: str, project_id: str, hostname: str, attempt_number: int | None):
+def _claim_task_attempt(
+    self, db, job_id: str, project_id: str, hostname: str, attempt_number: int | None
+):
     """Claim an exact dispatched attempt and retain its fencing identity."""
     # Celery's request id belongs to the broker message and is preserved by
     # ``retry``/redelivery. It is therefore not a fencing token. Every process
@@ -77,7 +92,9 @@ def _claim_task_attempt(self, db, job_id: str, project_id: str, hostname: str, a
     if attempt_number is None:
         # Direct task invocation remains useful in existing developer tests;
         # normal broker dispatches always carry the attempt number below.
-        attempt = claim_job_attempt(db, job_id, hostname, project_id, claim_token=claim_token)
+        attempt = claim_job_attempt(
+            db, job_id, hostname, project_id, claim_token=claim_token
+        )
     else:
         attempt = claim_job_attempt(
             db,
@@ -152,13 +169,23 @@ def persist_immutable_payload(storage_root: str, key: str, payload: bytes) -> No
             os.link(temporary, destination)
         except FileExistsError:
             if destination.read_bytes() != payload:
-                raise RuntimeError("immutable artifact key already contains different bytes")
+                raise RuntimeError(
+                    "immutable artifact key already contains different bytes"
+                )
     finally:
         if temporary.exists():
             temporary.unlink()
 
 
-def persist_artifact_record(db, *, project_id: str, mix_id: str, artifact: StageArtifact, key: str, report: dict | None = None):
+def persist_artifact_record(
+    db,
+    *,
+    project_id: str,
+    mix_id: str,
+    artifact: StageArtifact,
+    key: str,
+    report: dict | None = None,
+):
     """Attach an immutable object to one mix without replacing other attachments."""
     existing = db.scalar(
         select(ArtifactRecord).where(
@@ -168,16 +195,37 @@ def persist_artifact_record(db, *, project_id: str, mix_id: str, artifact: Stage
         )
     )
     if existing is not None:
-        immutable_fields = ("role", "sha256", "algorithm_version", "media_type", "byte_length")
-        expected = (artifact.role, artifact.sha256, artifact.algorithm_version, artifact.media_type, artifact.byte_length)
+        immutable_fields = (
+            "role",
+            "sha256",
+            "algorithm_version",
+            "media_type",
+            "byte_length",
+        )
+        expected = (
+            artifact.role,
+            artifact.sha256,
+            artifact.algorithm_version,
+            artifact.media_type,
+            artifact.byte_length,
+        )
         actual = tuple(getattr(existing, field) for field in immutable_fields)
         if actual != expected:
-            raise RuntimeError("immutable artifact record conflicts with its existing identity")
+            raise RuntimeError(
+                "immutable artifact record conflicts with its existing identity"
+            )
         return existing
     record = ArtifactRecord(
-        id=str(uuid.uuid4()), project_id=project_id, mix_id=mix_id, role=artifact.role, key=key,
-        sha256=artifact.sha256, algorithm_version=artifact.algorithm_version, media_type=artifact.media_type,
-        byte_length=artifact.byte_length, report=report,
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        mix_id=mix_id,
+        role=artifact.role,
+        key=key,
+        sha256=artifact.sha256,
+        algorithm_version=artifact.algorithm_version,
+        media_type=artifact.media_type,
+        byte_length=artifact.byte_length,
+        report=report,
     )
     db.add(record)
     return record
@@ -373,8 +421,13 @@ def publish_analysis_results(
         )
 
         # Replace dependent rows only inside this publication savepoint.
-        db.execute(text("DELETE FROM track_matches WHERE mix_id = :mix_id"), {"mix_id": mix_id})
-        db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.execute(
+            text("DELETE FROM track_matches WHERE mix_id = :mix_id"), {"mix_id": mix_id}
+        )
+        db.execute(
+            text("DELETE FROM track_segments WHERE mix_id = :mix_id"),
+            {"mix_id": mix_id},
+        )
         for segment in analysis_data.get("track_segments", []):
             segment_id = str(uuid.uuid4())
             db.execute(
@@ -430,7 +483,10 @@ def publish_analysis_results(
                     },
                 )
 
-        db.execute(text("DELETE FROM transition_events WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.execute(
+            text("DELETE FROM transition_events WHERE mix_id = :mix_id"),
+            {"mix_id": mix_id},
+        )
         for transition in analysis_data.get("transitions", []):
             db.execute(
                 text(
@@ -463,14 +519,23 @@ def publish_analysis_results(
                 },
             )
 
-        persist_artifact_record(db, project_id=project_id, mix_id=mix_id, artifact=source_artifact, key=source_key)
+        persist_artifact_record(
+            db,
+            project_id=project_id,
+            mix_id=mix_id,
+            artifact=source_artifact,
+            key=source_key,
+        )
         persist_artifact_record(
             db,
             project_id=project_id,
             mix_id=mix_id,
             artifact=tagged_mix.metadata_artifact,
             key=metadata_key,
-            report={"suggested_download_name": tagged_mix.suggested_download_name, **tagged_mix.report.as_dict()},
+            report={
+                "suggested_download_name": tagged_mix.suggested_download_name,
+                **tagged_mix.report.as_dict(),
+            },
         )
         waveform_descriptor = StageArtifact(
             role=waveform.role,
@@ -486,7 +551,10 @@ def publish_analysis_results(
             mix_id=mix_id,
             artifact=waveform_descriptor,
             key=waveform_key,
-            report={"points": waveform.points, "duration_seconds": waveform.duration_seconds},
+            report={
+                "points": waveform.points,
+                "duration_seconds": waveform.duration_seconds,
+            },
         )
         db.add_all(
             [
@@ -498,7 +566,10 @@ def publish_analysis_results(
                     status=StageStatus.COMPLETED,
                     progress_percent=100.0,
                     stage_output=json.dumps(
-                        {"artifact_key": metadata_key, "suggested_download_name": tagged_mix.suggested_download_name}
+                        {
+                            "artifact_key": metadata_key,
+                            "suggested_download_name": tagged_mix.suggested_download_name,
+                        }
                     ),
                     finished_at=datetime.now(timezone.utc),
                 ),
@@ -509,19 +580,25 @@ def publish_analysis_results(
                     stage_version="v1",
                     status=StageStatus.COMPLETED,
                     progress_percent=100.0,
-                    stage_output=json.dumps({"artifact_key": waveform_key, "points": waveform.points}),
+                    stage_output=json.dumps(
+                        {"artifact_key": waveform_key, "points": waveform.points}
+                    ),
                     finished_at=datetime.now(timezone.utc),
                 ),
             ]
         )
-        if not complete_job_attempt(db, job_id, project_id, hostname, attempt_number, claim_token):
+        if not complete_job_attempt(
+            db, job_id, project_id, hostname, attempt_number, claim_token
+        ):
             raise JobStopped(f"Job {job_id} lost its terminal publication race")
         advance_batch_after_terminal_job(db, job_id, project_id)
         return latest_job_event(db, job_id, project_id)
 
 
 @celery_app.task(bind=True, name="tasks.run_master_mix", max_retries=None)
-def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | None = None):
+def run_master_mix(
+    self, job_id: str, project_id: str, attempt_number: int | None = None
+):
     """Run a MASTERING command as an immutable worker-owned artifact stage."""
     db = SessionLocal()
     hostname = socket.gethostname()
@@ -530,18 +607,24 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
     active_claim_token: str | None = None
     metric_started = started_at()
     try:
-        claimed = _claim_task_attempt(self, db, job_id, project_id, hostname, attempt_number)
+        claimed = _claim_task_attempt(
+            self, db, job_id, project_id, hostname, attempt_number
+        )
         if claimed is None:
             db.rollback()
             return {"status": "already_claimed", "job_id": job_id}
         active_attempt_number, active_claim_token = claimed
-        running_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
+        running_job = db.scalar(
+            select(Job).where(Job.id == job_id, Job.project_id == project_id)
+        )
         if running_job is None:
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
         if running_job.job_type.value != "MASTERING":
             raise RuntimeError(f"Job {job_id} is not a mastering command")
         record_job_started(running_job.job_type.value)
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         running_event = record_job_event(
             db,
             running_job,
@@ -573,9 +656,15 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
 
         source_key = job_row.storage_path
         if not source_key.startswith(f"projects/{project_id}/"):
-            raise RuntimeError("Mastering source artifact is outside the owning project")
+            raise RuntimeError(
+                "Mastering source artifact is outside the owning project"
+            )
         source_path = StorageService(STORAGE_ROOT).object_path(source_key)
-        parameters = job_row.parameters if isinstance(job_row.parameters, dict) else json.loads(job_row.parameters or "{}")
+        parameters = (
+            job_row.parameters
+            if isinstance(job_row.parameters, dict)
+            else json.loads(job_row.parameters or "{}")
+        )
         settings = MasterSettings(
             target_lufs=float(parameters.get("target_lufs", -9.0)),
             true_peak_dbtp=float(parameters.get("true_peak_dbtp", -1.0)),
@@ -598,17 +687,26 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
         db.add(stage)
 
         def progress_tracker(percent: float, stage_name: str) -> None:
-            require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+            require_running_job(
+                db, job_id, project_id, active_attempt_number, active_claim_token
+            )
             updated = db.execute(
                 text(
                     "UPDATE jobs SET current_stage = :stage, progress_percent = :pct "
                     "WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"
                 ),
-                {"id": job_id, "project_id": project_id, "stage": stage_name, "pct": percent},
+                {
+                    "id": job_id,
+                    "project_id": project_id,
+                    "stage": stage_name,
+                    "pct": percent,
+                },
             )
             if updated.rowcount != 1:
                 raise JobStopped(f"Job {job_id} is no longer running")
-            progress_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
+            progress_job = db.scalar(
+                select(Job).where(Job.id == job_id, Job.project_id == project_id)
+            )
             if progress_job is None:
                 raise JobStopped(f"Job {job_id} is outside project {project_id}")
             progress_event = record_job_event(
@@ -626,14 +724,20 @@ def run_master_mix(self, job_id: str, project_id: str, attempt_number: int | Non
             publish_event(project_id, job_id, event_notification(progress_event))
 
         progress_tracker(5.0, "Mastering")
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         result = run_master_mix_stage(source_path, settings)
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         # Persist the visible stage result only in the same commit that wins
         # the fenced terminal transition.  The immutable bytes may already
         # exist, but no user can download them without this attachment.
         progress_tracker(95.0, "Mastered")
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         stage = db.get(StageRun, stage_id)
         if stage is None:
             raise RuntimeError(f"Mastering stage for job {job_id} was not persisted")
@@ -742,7 +846,9 @@ def cleanup_expired_uploads() -> dict[str, int]:
 
 
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline", max_retries=None)
-def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: int | None = None):
+def run_analysis_pipeline(
+    self, job_id: str, project_id: str, attempt_number: int | None = None
+):
     """
     Execute the real bounded-memory audio analysis, fingerprinting & transition detection pipeline.
     """
@@ -755,17 +861,23 @@ def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: in
     try:
         # A broker message is at-least-once.  The conditional claim lets only
         # one worker begin, including after a dispatcher restart/redelivery.
-        claimed = _claim_task_attempt(self, db, job_id, project_id, hostname, attempt_number)
+        claimed = _claim_task_attempt(
+            self, db, job_id, project_id, hostname, attempt_number
+        )
         if claimed is None:
             db.rollback()
             return {"status": "already_claimed", "job_id": job_id}
         active_attempt_number, active_claim_token = claimed
-        running_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
+        running_job = db.scalar(
+            select(Job).where(Job.id == job_id, Job.project_id == project_id)
+        )
         if running_job is None:
             raise RuntimeError(f"Claimed job {job_id} is outside project {project_id}")
         metric_job_type = running_job.job_type.value
         record_job_started(running_job.job_type.value)
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         running_event = record_job_event(
             db,
             running_job,
@@ -805,14 +917,25 @@ def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: in
         audio_abs_path = StorageService(STORAGE_ROOT).object_path(storage_rel_path)
 
         def progress_tracker(pct: float, stage_name: str):
-            require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+            require_running_job(
+                db, job_id, project_id, active_attempt_number, active_claim_token
+            )
             progress_result = db.execute(
-                text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"),
-                {"id": job_id, "project_id": project_id, "stage": stage_name, "pct": pct},
+                text(
+                    "UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id AND project_id = :project_id AND status = 'RUNNING'"
+                ),
+                {
+                    "id": job_id,
+                    "project_id": project_id,
+                    "stage": stage_name,
+                    "pct": pct,
+                },
             )
             if progress_result.rowcount != 1:
                 raise JobStopped(f"Job {job_id} is no longer running")
-            progress_job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id))
+            progress_job = db.scalar(
+                select(Job).where(Job.id == job_id, Job.project_id == project_id)
+            )
             if progress_job is None:
                 raise JobStopped(f"Job {job_id} is outside project {project_id}")
             progress_event = record_job_event(
@@ -831,30 +954,52 @@ def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: in
 
         # Run real orchestrator. Its progress callbacks provide cooperative
         # cancellation checkpoints during bounded processing.
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         orchestrator = AudioAnalysisOrchestrator(audio_abs_path, duration_seconds)
-        analysis_data = orchestrator.execute_pipeline(progress_callback=progress_tracker)
+        analysis_data = orchestrator.execute_pipeline(
+            progress_callback=progress_tracker
+        )
 
         # Compute immutable payloads first.  They are not user-visible until
         # the atomic publication below attaches their database records.
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         source_artifact = StageArtifact(
-            role="source", key=storage_rel_path, sha256=job_row.sha256_hash, algorithm_version="v1",
-            media_type=job_row.mime_type or "application/octet-stream", byte_length=int(job_row.file_size_bytes),
+            role="source",
+            key=storage_rel_path,
+            sha256=job_row.sha256_hash,
+            algorithm_version="v1",
+            media_type=job_row.mime_type or "application/octet-stream",
+            byte_length=int(job_row.file_size_bytes),
         )
         progress_tracker(82.0, "Generating metadata report")
-        tagged_mix = tag_mix(audio_abs_path, source_artifact, job_row.original_filename, "v1")
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
-        metadata_key = owner_scoped_artifact_key(project_id, tagged_mix.metadata_artifact.key)
+        tagged_mix = tag_mix(
+            audio_abs_path, source_artifact, job_row.original_filename, "v1"
+        )
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
+        metadata_key = owner_scoped_artifact_key(
+            project_id, tagged_mix.metadata_artifact.key
+        )
         persist_immutable_payload(STORAGE_ROOT, metadata_key, tagged_mix.payload)
         progress_tracker(90.0, "Generating waveform artifact")
-        waveform = generate_waveform(audio_abs_path, points=2048, algorithm_version="v1")
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        waveform = generate_waveform(
+            audio_abs_path, points=2048, algorithm_version="v1"
+        )
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         waveform_key = owner_scoped_artifact_key(project_id, waveform.key)
         persist_immutable_payload(STORAGE_ROOT, waveform_key, waveform.payload)
 
         progress_tracker(95.0, "Publishing analysis")
-        require_running_job(db, job_id, project_id, active_attempt_number, active_claim_token)
+        require_running_job(
+            db, job_id, project_id, active_attempt_number, active_claim_token
+        )
         terminal_event = publish_analysis_results(
             db,
             job_id=job_id,
@@ -904,6 +1049,6 @@ def run_analysis_pipeline(self, job_id: str, project_id: str, attempt_number: in
         terminal_event = latest_job_event(db, job_id, project_id)
         db.commit()
         publish_event(project_id, job_id, event_notification(terminal_event))
-        raise e
+        raise
     finally:
         db.close()

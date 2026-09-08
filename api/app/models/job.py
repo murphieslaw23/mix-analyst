@@ -1,16 +1,18 @@
-import uuid
 import enum
+import uuid
 from datetime import datetime, timezone
+
 from sqlalchemy import (
-    Column,
-    String,
-    BigInteger,
-    Integer,
-    Float,
-    DateTime,
-    ForeignKey,
-    Text,
     JSON,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy import (
     Enum as SQLEnum,
 )
 from sqlalchemy.orm import relationship
@@ -46,26 +48,53 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=False, index=True
+    )
     mix_id = Column(String(36), ForeignKey("mixes.id"), nullable=False, index=True)
     batch_id = Column(String(36), ForeignKey("batches.id"), nullable=True, index=True)
     job_type = Column(SQLEnum(JobType), default=JobType.ANALYSIS, nullable=False)
-    status = Column(SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True)
+    status = Column(
+        SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True
+    )
     progress_percent = Column(Float, default=0.0, nullable=False)
     current_stage = Column(String(100), nullable=True)
     parameters = Column(JSON, default=dict, nullable=False)
     celery_task_id = Column(String(100), nullable=True, index=True)
     error_message = Column(Text, nullable=True)
     event_sequence = Column(Integer, default=0, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
-    stage_runs = relationship("StageRun", back_populates="job", cascade="all, delete-orphan", order_by="StageRun.started_at")
-    attempts = relationship("JobAttempt", back_populates="job", cascade="all, delete-orphan", order_by="JobAttempt.attempt_number")
-    outbox_messages = relationship("OutboxMessage", back_populates="job", cascade="all, delete-orphan")
-    events = relationship("JobEvent", back_populates="job", cascade="all, delete-orphan", order_by="JobEvent.sequence")
-    notifications = relationship("Notification", back_populates="job", cascade="all, delete-orphan")
+    stage_runs = relationship(
+        "StageRun",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="StageRun.started_at",
+    )
+    attempts = relationship(
+        "JobAttempt",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobAttempt.attempt_number",
+    )
+    outbox_messages = relationship(
+        "OutboxMessage", back_populates="job", cascade="all, delete-orphan"
+    )
+    events = relationship(
+        "JobEvent",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobEvent.sequence",
+    )
+    notifications = relationship(
+        "Notification", back_populates="job", cascade="all, delete-orphan"
+    )
     batch = relationship("Batch", back_populates="jobs")
 
 
@@ -84,7 +113,11 @@ class JobAttempt(Base):
     last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
     lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     error_details = Column(Text, nullable=True)
-    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    started_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     job = relationship("Job", back_populates="attempts")
@@ -102,7 +135,11 @@ class StageRun(Base):
     progress_percent = Column(Float, default=0.0, nullable=False)
     stage_output = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
-    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    started_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     job = relationship("Job", back_populates="stage_runs")

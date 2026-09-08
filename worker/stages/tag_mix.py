@@ -30,10 +30,17 @@ class TaggedMix:
     payload: bytes
 
 
-def tag_mix(source: Path, source_artifact: Artifact, source_filename: str, algorithm_version: str) -> TaggedMix:
+def tag_mix(
+    source: Path,
+    source_artifact: Artifact,
+    source_filename: str,
+    algorithm_version: str,
+) -> TaggedMix:
     """Analyze a source and produce an immutable report, never retagging it in place."""
     report = analyze_audio(source)
-    suggested_name = suggest_download_name(source_filename, report.genre, Path(source_filename).suffix or ".wav")
+    suggested_name = suggest_download_name(
+        source_filename, report.genre, Path(source_filename).suffix or ".wav"
+    )
     payload = json.dumps(
         {"report": report.as_dict(), "suggested_download_name": suggested_name},
         separators=(",", ":"),

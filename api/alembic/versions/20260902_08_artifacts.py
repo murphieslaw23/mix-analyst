@@ -5,16 +5,15 @@ Revises: 20260902_06_mastering_job_parameters
 Create Date: 2026-09-02
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260902_08_artifacts"
-down_revision: Union[str, Sequence[str], None] = "20260902_06_mastering_job_parameters"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "20260902_06_mastering_job_parameters"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -39,7 +38,9 @@ def upgrade() -> None:
     op.create_index("ix_artifacts_project_id", "artifacts", ["project_id"])
     op.create_index("ix_artifacts_mix_id", "artifacts", ["mix_id"])
     op.create_index("ix_artifacts_sha256", "artifacts", ["sha256"])
-    op.create_index("ix_artifacts_project_mix_role", "artifacts", ["project_id", "mix_id", "role"])
+    op.create_index(
+        "ix_artifacts_project_mix_role", "artifacts", ["project_id", "mix_id", "role"]
+    )
 
 
 def downgrade() -> None:

@@ -6,7 +6,6 @@ import time
 
 from api.app.services.metrics import record_counter
 
-
 JOB_STAGES = {
     "ANALYSIS": "analysis",
     "FINGERPRINT": "analysis",
@@ -28,7 +27,10 @@ def started_at() -> float:
 
 
 def record_job_started(job_type: str) -> None:
-    record_counter("job.started", tags={"job_type": job_type, "queue": JOB_QUEUES[job_type], "status": "running"})
+    record_counter(
+        "job.started",
+        tags={"job_type": job_type, "queue": JOB_QUEUES[job_type], "status": "running"},
+    )
 
 
 def record_job_finished(job_type: str, start_time: float, status: str) -> None:

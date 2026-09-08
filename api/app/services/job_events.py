@@ -14,7 +14,6 @@ from ..models.job import Job, JobAttempt, JobStatus
 from ..models.job_event import JobEvent
 from .metrics import record_counter
 
-
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 
 
@@ -38,7 +37,7 @@ def publish_event(project_id: str, job_id: str, payload: dict) -> None:
     client = redis.from_url(settings.redis_url, decode_responses=True)
     try:
         client.publish(job_event_channel(project_id, job_id), json.dumps(payload))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - durable events remain available if Redis is down.
         print(f"Failed to publish Redis event: {exc}")
     finally:
         client.close()
@@ -104,7 +103,10 @@ async def stream_job_events(
             encoded.append(encode_sse_event(event))
             # A terminal row from a prior attempt remains replayable, but it
             # cannot close a stream whose job has been retried.
-            if is_terminal_event(event) and event.attempt_number == current_attempt_number():
+            if (
+                is_terminal_event(event)
+                and event.attempt_number == current_attempt_number()
+            ):
                 terminal_delivered = True
         return encoded
 
@@ -116,7 +118,9 @@ async def stream_job_events(
 
     for encoded in replay_pending():
         yield encoded
-    if terminal_delivered or (job_is_terminal() and current_attempt_number() is not None):
+    if terminal_delivered or (
+        job_is_terminal() and current_attempt_number() is not None
+    ):
         return
 
     client = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -126,7 +130,7 @@ async def stream_job_events(
         try:
             await pubsub.subscribe(job_event_channel(project_id, job_id))
             subscribed = True
-        except Exception:
+        except Exception:  # noqa: BLE001 - Redis subscription is an optional acceleration layer.
             # Persisted rows remain replayable even when the optional Redis
             # acceleration layer is unavailable.
             await client.aclose()
@@ -134,7 +138,9 @@ async def stream_job_events(
         # Close the replay/subscription race with another ordered DB read.
         for encoded in replay_pending():
             yield encoded
-        if terminal_delivered or (job_is_terminal() and current_attempt_number() is not None):
+        if terminal_delivered or (
+            job_is_terminal() and current_attempt_number() is not None
+        ):
             return
 
         while True:
@@ -145,7 +151,9 @@ async def stream_job_events(
             encoded_events = replay_pending()
             for encoded in encoded_events:
                 yield encoded
-            if terminal_delivered or (job_is_terminal() and current_attempt_number() is not None):
+            if terminal_delivered or (
+                job_is_terminal() and current_attempt_number() is not None
+            ):
                 return
             if not encoded_events:
                 yield ": keepalive\n\n"

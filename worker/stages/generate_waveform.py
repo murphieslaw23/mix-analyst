@@ -35,13 +35,20 @@ class WaveformArtifact:
     duration_seconds: float
 
 
-def generate_waveform(source: Path, points: int, algorithm_version: str) -> WaveformArtifact:
+def generate_waveform(
+    source: Path, points: int, algorithm_version: str
+) -> WaveformArtifact:
     """Create canonical waveform JSON for a source, without writing storage."""
     if not algorithm_version:
         raise ValueError("algorithm_version must not be empty")
     peaks, sample_rate, duration_seconds = extract_peaks(Path(source), points)
     payload = json.dumps(
-        {"duration_seconds": duration_seconds, "peaks": peaks, "points": points, "sample_rate": sample_rate},
+        {
+            "duration_seconds": duration_seconds,
+            "peaks": peaks,
+            "points": points,
+            "sample_rate": sample_rate,
+        },
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")

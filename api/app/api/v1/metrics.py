@@ -19,35 +19,47 @@ from ...schemas.auth import CurrentPrincipal
 from ...services.metrics import shared_counter_samples
 from ..deps import get_current_principal
 
-
 router = APIRouter()
 QUEUES = ("analysis-cpu", "dsp-heavy", "metadata-network", "exports")
 
 
 def _operator_ids() -> frozenset[str]:
     """Read an explicit server-side allowlist; absence denies every caller."""
-    return frozenset(item.strip() for item in environ.get("OPERATOR_USER_IDS", "").split(",") if item.strip())
+    return frozenset(
+        item.strip()
+        for item in environ.get("OPERATOR_USER_IDS", "").split(",")
+        if item.strip()
+    )
 
 
-def require_operator(principal: CurrentPrincipal = Depends(get_current_principal)) -> CurrentPrincipal:
+def require_operator(
+    principal: CurrentPrincipal = Depends(get_current_principal),
+) -> CurrentPrincipal:
     if principal.user_id not in _operator_ids():
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operator access required")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Operator access required"
+        )
     return principal
 
 
 def _labels(tags: dict[str, str]) -> str:
     if not tags:
         return ""
-    return "{" + ",".join(f'{key}="{value}"' for key, value in sorted(tags.items())) + "}"
+    return (
+        "{" + ",".join(f'{key}="{value}"' for key, value in sorted(tags.items())) + "}"
+    )
 
 
-def _sample(name: str, value: int | float, tags: dict[str, str] | None = None) -> str:
+def _sample(name: str, value: float, tags: dict[str, str] | None = None) -> str:
     return f"mix_analyst_{name}{_labels(tags or {})} {value}"
 
 
 def _queue_depths() -> list[tuple[str, int]]:
     client = redis.from_url(
-        settings.redis_url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
     )
     try:
         return [(queue, int(client.llen(queue))) for queue in QUEUES]
@@ -68,7 +80,9 @@ def metrics(
     lines.append(_sample("counter_backend_available", int(shared_metrics_available)))
 
     for job_type, job_status, count in db.execute(
-        select(Job.job_type, Job.status, func.count()).group_by(Job.job_type, Job.status)
+        select(Job.job_type, Job.status, func.count()).group_by(
+            Job.job_type, Job.status
+        )
     ):
         lines.append(
             _sample(
@@ -78,13 +92,26 @@ def metrics(
             )
         )
 
-    oldest_pending = db.scalar(select(func.min(OutboxMessage.created_at)).where(OutboxMessage.delivered_at.is_(None)))
-    pending = int(db.scalar(select(func.count()).select_from(OutboxMessage).where(OutboxMessage.delivered_at.is_(None))) or 0)
+    oldest_pending = db.scalar(
+        select(func.min(OutboxMessage.created_at)).where(
+            OutboxMessage.delivered_at.is_(None)
+        )
+    )
+    pending = int(
+        db.scalar(
+            select(func.count())
+            .select_from(OutboxMessage)
+            .where(OutboxMessage.delivered_at.is_(None))
+        )
+        or 0
+    )
     lag_seconds = 0
     if oldest_pending is not None:
         if oldest_pending.tzinfo is None:
             oldest_pending = oldest_pending.replace(tzinfo=timezone.utc)
-        lag_seconds = max(0, int((datetime.now(timezone.utc) - oldest_pending).total_seconds()))
+        lag_seconds = max(
+            0, int((datetime.now(timezone.utc) - oldest_pending).total_seconds())
+        )
     lines.append(_sample("outbox_pending", pending, {"status": "pending"}))
     lines.append(_sample("outbox_lag_seconds", lag_seconds, {"status": "pending"}))
 
@@ -92,7 +119,9 @@ def metrics(
         for queue, depth in _queue_depths():
             lines.append(_sample("queue_depth", depth, {"queue": queue}))
         lines.append(_sample("queue_check_available", 1))
-    except Exception:
+    except Exception:  # noqa: BLE001 - queue visibility is optional for metrics availability.
         lines.append(_sample("queue_check_available", 0))
 
-    return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+    return PlainTextResponse(
+        "\n".join(lines) + "\n", media_type="text/plain; version=0.0.4"
+    )

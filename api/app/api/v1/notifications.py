@@ -11,11 +11,12 @@ from ...schemas.auth import CurrentPrincipal
 from ...schemas.notification import NotificationListResponse, NotificationOut
 from ...services.notifications import dismiss_notification, mark_notification_read
 
-
 router = APIRouter()
 
 
-def _owned_notification(db: Session, principal: CurrentPrincipal, notification_id: str) -> Notification:
+def _owned_notification(
+    db: Session, principal: CurrentPrincipal, notification_id: str
+) -> Notification:
     notification = db.scalar(
         select(Notification).where(
             Notification.id == notification_id,
@@ -24,7 +25,9 @@ def _owned_notification(db: Session, principal: CurrentPrincipal, notification_i
         )
     )
     if notification is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found"
+        )
     return notification
 
 
@@ -42,7 +45,13 @@ def list_notifications(
     if not include_dismissed:
         scoped = scoped.where(Notification.dismissed_at.is_(None))
     total = db.scalar(select(func.count()).select_from(scoped.subquery())) or 0
-    items = list(db.scalars(scoped.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(limit)))
+    items = list(
+        db.scalars(
+            scoped.order_by(
+                Notification.created_at.desc(), Notification.id.desc()
+            ).limit(limit)
+        )
+    )
     return NotificationListResponse(items=items, total=total)
 
 
@@ -52,7 +61,9 @@ def read_notification(
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
-    notification = mark_notification_read(db, _owned_notification(db, principal, notification_id))
+    notification = mark_notification_read(
+        db, _owned_notification(db, principal, notification_id)
+    )
     db.commit()
     db.refresh(notification)
     return notification
@@ -64,7 +75,9 @@ def dismiss_notification_route(
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
-    notification = dismiss_notification(db, _owned_notification(db, principal, notification_id))
+    notification = dismiss_notification(
+        db, _owned_notification(db, principal, notification_id)
+    )
     db.commit()
     db.refresh(notification)
     return notification

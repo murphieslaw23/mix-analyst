@@ -12,13 +12,21 @@ def test_e2e_mix_pipeline_execution(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "worker.analysis.orchestrator.generate_audio_fingerprint",
-        lambda _path, _offset, duration_seconds=60.0: {"fingerprint": "fixture", "duration": duration_seconds},
+        lambda _path, _offset, duration_seconds=60.0: {
+            "fingerprint": "fixture",
+            "duration": duration_seconds,
+        },
     )
-    monkeypatch.setattr("worker.analysis.orchestrator.query_acoustid_metadata", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "worker.analysis.orchestrator.query_acoustid_metadata",
+        lambda *_args, **_kwargs: None,
+    )
 
     progress = []
     orchestrator = AudioAnalysisOrchestrator(audio_path=mix_file, duration_seconds=30.0)
-    result = orchestrator.execute_pipeline(lambda percent, stage: progress.append((percent, stage)))
+    result = orchestrator.execute_pipeline(
+        lambda percent, stage: progress.append((percent, stage))
+    )
 
     assert result is not None
     assert result["primary_bpm"] > 0

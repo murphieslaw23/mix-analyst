@@ -1,7 +1,7 @@
+from collections.abc import Generator
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from typing import Generator
-import os
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from ..config import settings
 
@@ -29,4 +29,5 @@ def get_db() -> Generator:
 def init_db() -> None:
     """Initialize database tables."""
     from ..models import Base as ModelsBase
+
     ModelsBase.metadata.create_all(bind=engine)

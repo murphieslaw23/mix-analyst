@@ -5,20 +5,25 @@ Revises: 20260902_08_artifact_mix_attachments
 Create Date: 2026-09-02
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260902_09_batches"
-down_revision: Union[str, Sequence[str], None] = "20260902_08_artifact_mix_attachments"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "20260902_08_artifact_mix_attachments"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 batch_status = sa.Enum(
-    "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "PARTIAL_FAILED", "CANCELLED", name="batchstatus"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "FAILED",
+    "PARTIAL_FAILED",
+    "CANCELLED",
+    name="batchstatus",
 )
 
 
@@ -43,7 +48,9 @@ def upgrade() -> None:
     op.create_index("ix_batches_status", "batches", ["status"])
     with op.batch_alter_table("jobs") as batch_op:
         batch_op.add_column(sa.Column("batch_id", sa.String(length=36), nullable=True))
-        batch_op.create_foreign_key("fk_jobs_batch_id_batches", "batches", ["batch_id"], ["id"])
+        batch_op.create_foreign_key(
+            "fk_jobs_batch_id_batches", "batches", ["batch_id"], ["id"]
+        )
         batch_op.create_index("ix_jobs_batch_id", ["batch_id"])
 
 

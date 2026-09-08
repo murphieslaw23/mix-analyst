@@ -1,6 +1,6 @@
-from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, List
+
+from pydantic import BaseModel
 
 
 class TrackMatchOut(BaseModel):
@@ -9,11 +9,11 @@ class TrackMatchOut(BaseModel):
     mix_id: str
     title: str
     artist: str
-    album: Optional[str] = None
-    label: Optional[str] = None
-    isrc: Optional[str] = None
-    acoustid_id: Optional[str] = None
-    musicbrainz_recording_id: Optional[str] = None
+    album: str | None = None
+    label: str | None = None
+    isrc: str | None = None
+    acoustid_id: str | None = None
+    musicbrainz_recording_id: str | None = None
     match_score: float
     source: str
     created_at: datetime
@@ -29,9 +29,9 @@ class TrackSegmentOut(BaseModel):
     start_time_seconds: float
     end_time_seconds: float
     duration_seconds: float
-    fingerprint: Optional[str] = None
+    fingerprint: str | None = None
     confidence: float
-    match: Optional[TrackMatchOut] = None
+    match: TrackMatchOut | None = None
     created_at: datetime
 
     class Config:
@@ -42,4 +42,4 @@ class TracklistResponse(BaseModel):
     mix_id: str
     total_tracks: int
     identified_tracks: int
-    tracks: List[TrackSegmentOut]
+    tracks: list[TrackSegmentOut]

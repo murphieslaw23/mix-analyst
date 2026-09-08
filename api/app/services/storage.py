@@ -11,7 +11,6 @@ import shutil
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _KEY_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -20,7 +19,11 @@ def derived_object_key(project_id: str, sha256: str, role: str, version: str) ->
     """Build the only final-asset key shape accepted by the storage port."""
     if not _SHA256.fullmatch(sha256):
         raise ValueError("sha256 must be a lowercase 64-character hex digest")
-    for name, value in (("project_id", project_id), ("role", role), ("version", version)):
+    for name, value in (
+        ("project_id", project_id),
+        ("role", role),
+        ("version", version),
+    ):
         if not _KEY_SEGMENT.fullmatch(value):
             raise ValueError(f"{name} contains an unsafe object-key segment")
     return f"projects/{project_id}/artifacts/{role}/{version}/{sha256}"
@@ -40,7 +43,11 @@ class StorageService:
     def path_for_key(self, key: str) -> Path:
         """Resolve a relative object key under storage, rejecting traversal."""
         key_path = PurePosixPath(key)
-        if key_path.is_absolute() or not key or any(part in {"", ".", ".."} for part in key_path.parts):
+        if (
+            key_path.is_absolute()
+            or not key
+            or any(part in {"", ".", ".."} for part in key_path.parts)
+        ):
             raise ValueError("object key must be a non-empty relative path")
         target = (self.root / Path(*key_path.parts)).resolve()
         try:
@@ -135,12 +142,16 @@ class StorageService:
     def append_chunk(self, temp_path: Path, chunk_bytes: bytes, offset: int) -> int:
         current_size = temp_path.stat().st_size
         if current_size != offset:
-            raise ValueError(f"Offset mismatch: expected offset {current_size}, got {offset}")
+            raise ValueError(
+                f"Offset mismatch: expected offset {current_size}, got {offset}"
+            )
         with open(temp_path, "ab") as destination:
             destination.write(chunk_bytes)
         return temp_path.stat().st_size
 
-    def finalize_asset(self, temp_path: Path, asset_id: str, original_filename: str) -> tuple[str, Path]:
+    def finalize_asset(
+        self, temp_path: Path, asset_id: str, original_filename: str
+    ) -> tuple[str, Path]:
         final_rel_path = f"assets/audio/{asset_id}{Path(original_filename).suffix.lower() or '.audio'}"
         final_abs_path = self.path_for_key(final_rel_path)
         final_abs_path.parent.mkdir(parents=True, exist_ok=True)

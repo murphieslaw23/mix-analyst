@@ -5,11 +5,11 @@ from pathlib import Path
 import redis
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from ...db.session import get_db
 from ...config import settings
+from ...db.session import get_db
 
 router = APIRouter()
 
@@ -17,11 +17,14 @@ router = APIRouter()
 def ping_redis() -> bool:
     """Perform a real broker round-trip for readiness, not a configuration check."""
     client = redis.from_url(
-        settings.redis_url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
     )
     try:
         return bool(client.ping())
-    except Exception:
+    except Exception:  # noqa: BLE001 - readiness must degrade for any broker failure.
         return False
     finally:
         client.close()
@@ -38,18 +41,17 @@ def storage_is_ready() -> bool:
         # A fixed sentinel races concurrent readiness probes and can cause one
         # healthy request to unlink another's file. The OS allocates a unique
         # name, and the finally block makes cleanup deterministic on failures.
-        descriptor, raw_path = tempfile.mkstemp(prefix=".healthcheck-", dir=storage_path)
+        descriptor, raw_path = tempfile.mkstemp(
+            prefix=".healthcheck-", dir=storage_path
+        )
         test_path = Path(raw_path)
-        try:
-            # A successful open alone is not enough for a persistence volume.
-            # Flush the tiny sentinel before declaring the path writable.
-            with open(descriptor, "wb", closefd=True) as handle:
-                handle.write(b"ok")
-                handle.flush()
-        except Exception:
-            raise
+        # A successful open alone is not enough for a persistence volume.
+        # Flush the tiny sentinel before declaring the path writable.
+        with open(descriptor, "wb", closefd=True) as handle:
+            handle.write(b"ok")
+            handle.flush()
         return test_path.is_file()
-    except Exception:
+    except Exception:  # noqa: BLE001 - readiness must degrade for filesystem failures.
         return False
     finally:
         if test_path is not None:
@@ -72,7 +74,7 @@ def health_ready(db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         db_ok = True
-    except Exception:
+    except Exception:  # noqa: BLE001 - readiness must degrade for database failures.
         db_ok = False
 
     storage_ok = storage_is_ready()

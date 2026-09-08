@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 GENRE_PROFILES = {
     "Freetekno": {"bpm": (140, 180), "spectral": "mid-balanced"},
     "Jungle": {"bpm": (155, 175), "spectral": "bass-heavy"},
@@ -57,18 +56,33 @@ def _spectral_score(actual: str, expected: str) -> float:
         "mid-balanced": {"mid-resonant"},
         "mid-resonant": {"mid-balanced"},
     }
-    return 0.55 if actual in aliases.get(expected, set()) or expected in aliases.get(actual, set()) else 0.2
+    return (
+        0.55
+        if actual in aliases.get(expected, set())
+        or expected in aliases.get(actual, set())
+        else 0.2
+    )
 
 
-def score_genres(bpm: float, centroid_hz: float, spectral_profile: str | None = None) -> dict[str, float]:
-    profile = spectral_profile or ("high-energy" if centroid_hz > 4200 else "mid-balanced")
+def score_genres(
+    bpm: float, centroid_hz: float, spectral_profile: str | None = None
+) -> dict[str, float]:
+    profile = spectral_profile or (
+        "high-energy" if centroid_hz > 4200 else "mid-balanced"
+    )
     return {
-        name: round(0.7 * _bpm_score(bpm, *values["bpm"]) + 0.3 * _spectral_score(profile, values["spectral"]), 4)
+        name: round(
+            0.7 * _bpm_score(bpm, *values["bpm"])
+            + 0.3 * _spectral_score(profile, values["spectral"]),
+            4,
+        )
         for name, values in GENRE_PROFILES.items()
     }
 
 
-def _spectral_profile(librosa, samples: np.ndarray, sample_rate: int, centroid_hz: float) -> str:
+def _spectral_profile(
+    librosa, samples: np.ndarray, sample_rate: int, centroid_hz: float
+) -> str:
     spectrum = np.abs(librosa.stft(samples, n_fft=2048, hop_length=1024))
     frequencies = librosa.fft_frequencies(sr=sample_rate, n_fft=2048)
     power = np.square(spectrum).mean(axis=1) + 1e-12
@@ -77,7 +91,12 @@ def _spectral_profile(librosa, samples: np.ndarray, sample_rate: int, centroid_h
     def band(low: int, high: int) -> float:
         return float(power[(frequencies >= low) & (frequencies < high)].sum() / total)
 
-    sub, bass, mid, high = band(20, 100), band(100, 250), band(250, 2000), band(6000, 16000)
+    sub, bass, mid, high = (
+        band(20, 100),
+        band(100, 250),
+        band(250, 2000),
+        band(6000, 16000),
+    )
     if high + mid > 0.55 or centroid_hz > 4200:
         return "high-energy" if high > 0.18 else "broad-spectrum"
     if sub > 0.22:
@@ -98,7 +117,9 @@ def analyze_audio(source: Path, max_seconds: float = 120.0) -> TagReport:
     except ImportError as exc:  # pragma: no cover - deployment dependency error
         raise RuntimeError("librosa is required for metadata analysis") from exc
 
-    samples, sample_rate = librosa.load(str(source), sr=None, mono=True, duration=max_seconds)
+    samples, sample_rate = librosa.load(
+        str(source), sr=None, mono=True, duration=max_seconds
+    )
     if samples.size == 0:
         raise ValueError("audio is empty")
     samples = np.nan_to_num(samples.astype(np.float32), copy=False)
@@ -126,9 +147,17 @@ def suggest_download_name(filename: str, genre: str, extension: str = ".wav") ->
     """Return a normalized presentation name; this never changes an object key."""
     original = Path(filename).name
     stem = Path(original).stem
-    live = re.match(r"^(?P<artist>.+?)\s*-?\s*live\s*@\s*(?P<venue>[^\[\](){}]+?)", stem, re.I)
+    live = re.match(
+        r"^(?P<artist>.+?)\s*-?\s*live\s*@\s*(?P<venue>[^\[\](){}]+?)",
+        stem,
+        re.IGNORECASE,
+    )
     parts = re.split(r"\s+[-–—]\s+", stem, maxsplit=1)
-    artist, title = (parts[0], parts[1]) if len(parts) == 2 else ("Unknown Artist", re.sub(r"_+", " ", stem).strip() or "Untitled")
+    artist, title = (
+        (parts[0], parts[1])
+        if len(parts) == 2
+        else ("Unknown Artist", re.sub(r"_+", " ", stem).strip() or "Untitled")
+    )
     if live:
         artist, title = live.group("artist"), "Live Set"
     safe = lambda value: re.sub(r'[\\/:*?"<>|]+', "", str(value)).strip()
@@ -136,4 +165,10 @@ def suggest_download_name(filename: str, genre: str, extension: str = ".wav") ->
     return f"{safe(artist) or 'Unknown Artist'} - {safe(title) or 'Untitled'} [{safe(genre) or 'Neutral'}]{suffix}"
 
 
-__all__ = ["GENRE_PROFILES", "TagReport", "analyze_audio", "score_genres", "suggest_download_name"]
+__all__ = [
+    "GENRE_PROFILES",
+    "TagReport",
+    "analyze_audio",
+    "score_genres",
+    "suggest_download_name",
+]

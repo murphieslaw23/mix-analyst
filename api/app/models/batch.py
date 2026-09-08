@@ -4,7 +4,8 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum as SQLEnum, ForeignKey, Integer, JSON, String
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 
 from ..db.session import Base
@@ -23,17 +24,25 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=False, index=True
+    )
     preset = Column(JSON, default=dict, nullable=False)
     max_parallelism = Column(Integer, nullable=False)
     # These are a persisted read model. They are never incremented directly:
     # services.batches recomputes every value from the child jobs table.
-    status = Column(SQLEnum(BatchStatus), default=BatchStatus.QUEUED, nullable=False, index=True)
+    status = Column(
+        SQLEnum(BatchStatus), default=BatchStatus.QUEUED, nullable=False, index=True
+    )
     total_count = Column(Integer, default=0, nullable=False)
     completed_count = Column(Integer, default=0, nullable=False)
     failed_count = Column(Integer, default=0, nullable=False)
     cancelled_count = Column(Integer, default=0, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     updated_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

@@ -7,21 +7,34 @@ key, token, or other caller supplied value as a label.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Mapping
-import json
 from threading import Lock
 
 import redis
 
 from ..config import settings
 
-
 ALLOWED_TAGS = frozenset({"job_type", "status", "stage", "queue"})
 ALLOWED_TAG_VALUES = {
-    "job_type": frozenset({"ANALYSIS", "FINGERPRINT", "RESTORATION", "MASTERING", "EXPORT"}),
-    "status": frozenset({"queued", "running", "succeeded", "failed", "cancelled", "rejected", "pending"}),
-    "stage": frozenset({"analysis", "mastering", "restoration", "export", "metadata", "waveform", "upload"}),
+    "job_type": frozenset(
+        {"ANALYSIS", "FINGERPRINT", "RESTORATION", "MASTERING", "EXPORT"}
+    ),
+    "status": frozenset(
+        {"queued", "running", "succeeded", "failed", "cancelled", "rejected", "pending"}
+    ),
+    "stage": frozenset(
+        {
+            "analysis",
+            "mastering",
+            "restoration",
+            "export",
+            "metadata",
+            "waveform",
+            "upload",
+        }
+    ),
     "queue": frozenset({"analysis-cpu", "dsp-heavy", "metadata-network", "exports"}),
 }
 ALLOWED_COUNTERS = frozenset(
@@ -72,7 +85,7 @@ def record_counter(name: str, value: int = 1, tags: Mapping[str, str] = {}) -> N
             client.hincrby(_COUNTER_HASH_KEY, _metric_field(*key), value)
         finally:
             client.close()
-    except Exception:
+    except Exception:  # noqa: BLE001 - retain process-local counters during Redis outages.
         with _lock:
             _counters[key] += value
 
@@ -80,7 +93,10 @@ def record_counter(name: str, value: int = 1, tags: Mapping[str, str] = {}) -> N
 def counter_samples() -> list[tuple[str, int, dict[str, str]]]:
     """Return process-local fallback samples when shared aggregation is down."""
     with _lock:
-        return [(name, value, dict(tags)) for (name, tags), value in sorted(_counters.items())]
+        return [
+            (name, value, dict(tags))
+            for (name, tags), value in sorted(_counters.items())
+        ]
 
 
 def shared_counter_samples() -> tuple[list[tuple[str, int, dict[str, str]]], bool]:
@@ -92,7 +108,7 @@ def shared_counter_samples() -> tuple[list[tuple[str, int, dict[str, str]]], boo
             stored = client.hgetall(_COUNTER_HASH_KEY)
         finally:
             client.close()
-    except Exception:
+    except Exception:  # noqa: BLE001 - return the safe local fallback during Redis outages.
         return counter_samples(), False
 
     samples = []
@@ -107,7 +123,9 @@ def shared_counter_samples() -> tuple[list[tuple[str, int, dict[str, str]]], boo
         if value >= 0:
             name, tags = decoded
             samples.append((name, value, dict(tags)))
-    return sorted(samples, key=lambda sample: (sample[0], tuple(sorted(sample[2].items())))), True
+    return sorted(
+        samples, key=lambda sample: (sample[0], tuple(sorted(sample[2].items())))
+    ), True
 
 
 def _flush_local_counters(client) -> None:
@@ -139,7 +157,10 @@ def _flush_local_counters(client) -> None:
 
 def _metrics_redis_client():
     return redis.from_url(
-        settings.redis_url, decode_responses=True, socket_connect_timeout=0.1, socket_timeout=0.1
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=0.1,
+        socket_timeout=0.1,
     )
 
 

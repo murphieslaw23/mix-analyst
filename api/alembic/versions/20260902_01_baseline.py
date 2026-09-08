@@ -5,22 +5,29 @@ Revises:
 Create Date: 2026-09-02
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260902_01"
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
-upload_status = sa.Enum("PENDING", "UPLOADING", "COMPLETED", "FAILED", "ABORTED", name="uploadstatus")
-job_type = sa.Enum("ANALYSIS", "FINGERPRINT", "RESTORATION", "MASTERING", "EXPORT", name="jobtype")
-job_status = sa.Enum("QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", name="jobstatus")
-stage_status = sa.Enum("PENDING", "RUNNING", "COMPLETED", "FAILED", "SKIPPED", name="stagestatus")
+upload_status = sa.Enum(
+    "PENDING", "UPLOADING", "COMPLETED", "FAILED", "ABORTED", name="uploadstatus"
+)
+job_type = sa.Enum(
+    "ANALYSIS", "FINGERPRINT", "RESTORATION", "MASTERING", "EXPORT", name="jobtype"
+)
+job_status = sa.Enum(
+    "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", name="jobstatus"
+)
+stage_status = sa.Enum(
+    "PENDING", "RUNNING", "COMPLETED", "FAILED", "SKIPPED", name="stagestatus"
+)
 
 
 def upgrade() -> None:
@@ -83,7 +90,12 @@ def upgrade() -> None:
         sa.Column("eq_settings", sa.JSON(), nullable=True),
         sa.Column("compressor_settings", sa.JSON(), nullable=True),
         sa.Column("is_builtin", sa.Boolean(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=True,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_mastering_presets_id", "mastering_presets", ["id"])
@@ -182,7 +194,12 @@ def upgrade() -> None:
         sa.Column("output_lra", sa.Float(), nullable=True),
         sa.Column("output_storage_path", sa.String(), nullable=True),
         sa.Column("metrics", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=True,
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["media_id"], ["media_assets.id"]),
         sa.ForeignKeyConstraint(["preset_id"], ["mastering_presets.id"]),
@@ -202,7 +219,12 @@ def upgrade() -> None:
         sa.Column("cue_markers_synced", sa.Integer(), nullable=True),
         sa.Column("scheduled_start", sa.DateTime(timezone=True), nullable=True),
         sa.Column("details", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=True,
+        ),
         sa.Column("synced_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["media_id"], ["media_assets.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -223,7 +245,12 @@ def upgrade() -> None:
         sa.Column("bass_fundamental_hz", sa.Float(), nullable=True),
         sa.Column("kick_sub_collision_score", sa.Float(), nullable=True),
         sa.Column("resonance_peaks", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=True,
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["media_id"], ["media_assets.id"]),
         sa.PrimaryKeyConstraint("id"),

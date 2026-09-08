@@ -5,21 +5,24 @@ Revises: 20260902_04_outbox_project_scope
 Create Date: 2026-09-02
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260902_05_job_events"
-down_revision: Union[str, Sequence[str], None] = "20260902_04_outbox_project_scope"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "20260902_04_outbox_project_scope"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     with op.batch_alter_table("jobs") as batch_op:
-        batch_op.add_column(sa.Column("event_sequence", sa.Integer(), nullable=False, server_default="0"))
+        batch_op.add_column(
+            sa.Column(
+                "event_sequence", sa.Integer(), nullable=False, server_default="0"
+            )
+        )
 
     op.create_table(
         "job_events",
@@ -37,7 +40,11 @@ def upgrade() -> None:
     )
     op.create_index("ix_job_events_project_id", "job_events", ["project_id"])
     op.create_index("ix_job_events_job_id", "job_events", ["job_id"])
-    op.create_index("ix_job_events_project_job_sequence", "job_events", ["project_id", "job_id", "sequence"])
+    op.create_index(
+        "ix_job_events_project_job_sequence",
+        "job_events",
+        ["project_id", "job_id", "sequence"],
+    )
 
 
 def downgrade() -> None:

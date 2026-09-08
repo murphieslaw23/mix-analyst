@@ -34,7 +34,11 @@ def extract_peaks(source: Path, points: int) -> tuple[list[float], int, float]:
     maximum = float(np.max(peaks)) if peaks.size else 0.0
     if maximum > 1.0:
         peaks /= maximum
-    return peaks.round(6).tolist(), int(sample_rate), round(float(mono.size / sample_rate), 6)
+    return (
+        peaks.round(6).tolist(),
+        int(sample_rate),
+        round(float(mono.size / sample_rate), 6),
+    )
 
 
 __all__ = ["extract_peaks"]

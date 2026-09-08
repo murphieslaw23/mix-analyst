@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from ..models.mastering import MasteringPreset
 from ..schemas.auth import CurrentPrincipal
 
-
 # Versioned, server-owned built-ins do not need a mutable database row. The
 # selected identifier and all effective values are persisted on the Job so a
 # queued master remains reproducible if a later release changes these defaults.
@@ -21,7 +20,12 @@ BUILTIN_PRESETS: dict[str, dict] = {
         "true_peak_dbtp": -0.8,
         "target_lra": 6.0,
         "eq_settings": {"sub_boost_db": 2.5, "high_air_db": 1.5, "mud_cut_db": -1.5},
-        "compressor_settings": {"threshold_db": -16.0, "ratio": 3.0, "attack_ms": 20.0, "release_ms": 100.0},
+        "compressor_settings": {
+            "threshold_db": -16.0,
+            "ratio": 3.0,
+            "attack_ms": 20.0,
+            "release_ms": 100.0,
+        },
     },
     "club_broadcast": {
         "preset_id": "club_broadcast",
@@ -30,7 +34,12 @@ BUILTIN_PRESETS: dict[str, dict] = {
         "true_peak_dbtp": -1.0,
         "target_lra": 7.0,
         "eq_settings": {"sub_boost_db": 1.0, "high_air_db": 1.0, "mud_cut_db": -1.0},
-        "compressor_settings": {"threshold_db": -18.0, "ratio": 2.5, "attack_ms": 30.0, "release_ms": 120.0},
+        "compressor_settings": {
+            "threshold_db": -18.0,
+            "ratio": 2.5,
+            "attack_ms": 30.0,
+            "release_ms": 120.0,
+        },
     },
     "vinyl_premaster": {
         "preset_id": "vinyl_premaster",
@@ -39,7 +48,12 @@ BUILTIN_PRESETS: dict[str, dict] = {
         "true_peak_dbtp": -1.5,
         "target_lra": 9.0,
         "eq_settings": {"sub_boost_db": 0.0, "high_air_db": 0.5, "mud_cut_db": -0.5},
-        "compressor_settings": {"threshold_db": -22.0, "ratio": 2.0, "attack_ms": 40.0, "release_ms": 150.0},
+        "compressor_settings": {
+            "threshold_db": -22.0,
+            "ratio": 2.0,
+            "attack_ms": 40.0,
+            "release_ms": 150.0,
+        },
     },
 }
 
@@ -70,7 +84,10 @@ def resolve_mastering_parameters(
         )
         if preset is None:
             # Keep a foreign project's identifier non-enumerable.
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mastering preset not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Mastering preset not found",
+            )
         parameters = {
             "preset_id": preset.id,
             "preset_name": preset.name,

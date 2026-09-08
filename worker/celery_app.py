@@ -1,6 +1,7 @@
+import os
+
 from celery import Celery
 from kombu import Queue
-import os
 
 celery_app = Celery(
     "mix_analyst_worker",
@@ -33,7 +34,12 @@ celery_app.conf.update(
         "tasks.cleanup_expired_uploads": {"queue": "metadata-network"},
     },
     task_publish_retry=True,
-    task_publish_retry_policy={"max_retries": 3, "interval_start": 0, "interval_step": 0.2, "interval_max": 1},
+    task_publish_retry_policy={
+        "max_retries": 3,
+        "interval_start": 0,
+        "interval_step": 0.2,
+        "interval_max": 1,
+    },
     beat_schedule={
         "cleanup-expired-uploads": {
             "task": "tasks.cleanup_expired_uploads",

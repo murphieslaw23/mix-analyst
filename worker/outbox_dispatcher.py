@@ -14,7 +14,6 @@ from api.app.models.outbox import OutboxMessage
 from .celery_app import celery_app
 from .db import SessionLocal
 
-
 logger = logging.getLogger(__name__)
 POLL_SECONDS = float(os.getenv("OUTBOX_POLL_SECONDS", "1"))
 
@@ -23,7 +22,9 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def dispatch_pending_messages(db: Session, celery_client=celery_app, batch_size: int = 100) -> int:
+def dispatch_pending_messages(
+    db: Session, celery_client=celery_app, batch_size: int = 100
+) -> int:
     """Deliver up to ``batch_size`` committed messages.
 
     A row remains locked while the broker accepts it and is marked delivered in
@@ -47,14 +48,18 @@ def dispatch_pending_messages(db: Session, celery_client=celery_app, batch_size:
         try:
             payload = message.payload
             if payload.get("project_id") != message.project_id:
-                raise ValueError("Outbox project scope does not match its command payload")
+                raise ValueError(
+                    "Outbox project scope does not match its command payload"
+                )
             if payload.get("job_id") != message.aggregate_id:
                 raise ValueError("Outbox job does not match its command aggregate")
             attempt_number = payload.get("attempt_number")
             if not isinstance(attempt_number, int) or attempt_number < 1:
                 raise ValueError("Outbox command has no valid attempt number")
             job = db.scalar(
-                select(Job).where(Job.id == message.aggregate_id, Job.project_id == message.project_id)
+                select(Job).where(
+                    Job.id == message.aggregate_id, Job.project_id == message.project_id
+                )
             )
             if job is None:
                 raise ValueError("Outbox command has no job in its project scope")
@@ -70,7 +75,7 @@ def dispatch_pending_messages(db: Session, celery_client=celery_app, batch_size:
             job.celery_task_id = result.id
             db.commit()
             delivered += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - dispatcher records broker and persistence failures for retry.
             db.rollback()
             # Store delivery diagnostics in a new short transaction.  This
             # preserves retryability rather than turning a broker outage into a

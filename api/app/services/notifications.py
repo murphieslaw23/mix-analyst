@@ -10,7 +10,6 @@ from ..models.identity import Project
 from ..models.job import Job, JobStatus
 from ..models.notification import Notification
 
-
 _TERMINAL_KINDS: dict[JobStatus, str] = {
     JobStatus.SUCCEEDED: "job.succeeded",
     JobStatus.FAILED: "job.failed",
@@ -30,13 +29,21 @@ def _notification_copy(kind: str, job: Job) -> tuple[str, str]:
     if kind == "job.succeeded":
         return f"{job_label} complete", "Your finished audio is ready in the Library."
     if kind == "job.failed":
-        return f"{job_label} needs attention", "Processing stopped. Review the job and retry when you are ready."
+        return (
+            f"{job_label} needs attention",
+            "Processing stopped. Review the job and retry when you are ready.",
+        )
     if kind == "job.cancelled":
-        return f"{job_label} cancelled", "This job was cancelled before a result was published."
+        return (
+            f"{job_label} cancelled",
+            "This job was cancelled before a result was published.",
+        )
     raise ValueError("Unsupported notification kind")
 
 
-def create_job_notification(db: Session, job: Job, kind: str | None = None) -> Notification:
+def create_job_notification(
+    db: Session, job: Job, kind: str | None = None
+) -> Notification:
     """Create exactly one durable item for a terminal job outcome.
 
     This function only flushes. Its caller owns the surrounding terminal job
@@ -48,7 +55,9 @@ def create_job_notification(db: Session, job: Job, kind: str | None = None) -> N
         raise ValueError("Notification kind does not match the terminal job state")
     kind = expected_kind
     dedupe_key = f"{kind}:{job.id}"
-    existing = db.scalar(select(Notification).where(Notification.dedupe_key == dedupe_key))
+    existing = db.scalar(
+        select(Notification).where(Notification.dedupe_key == dedupe_key)
+    )
     if existing is not None:
         return existing
 
@@ -74,7 +83,9 @@ def create_job_notification(db: Session, job: Job, kind: str | None = None) -> N
             db.flush()
         return notification
     except IntegrityError:
-        existing = db.scalar(select(Notification).where(Notification.dedupe_key == dedupe_key))
+        existing = db.scalar(
+            select(Notification).where(Notification.dedupe_key == dedupe_key)
+        )
         if existing is None:
             raise
         return existing

@@ -5,10 +5,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, inspect, pool, text
 
+import api.app.models  # noqa: F401 - imports the canonical model metadata
 from api.app.config import settings
 from api.app.db.session import Base
-import api.app.models  # noqa: F401 - imports the canonical model metadata
-
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

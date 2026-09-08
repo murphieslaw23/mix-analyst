@@ -1,7 +1,19 @@
 """Mastering database models."""
-from sqlalchemy import CheckConstraint, Column, String, Float, Integer, ForeignKey, JSON, DateTime, Boolean
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    String,
+)
 from sqlalchemy.sql import func
+
 from api.app.db.session import Base
+
 
 class MasteringPreset(Base):
     __tablename__ = "mastering_presets"
@@ -15,11 +27,15 @@ class MasteringPreset(Base):
     id = Column(String, primary_key=True, index=True)
     # Built-ins are global; user-created presets are owned by one project and
     # must never be reusable merely by guessing their identifier.
-    project_id = Column(String(36), ForeignKey("projects.id"), nullable=True, index=True)
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=True, index=True
+    )
     # Pre-scope custom rows which cannot be attributed to one project remain
     # explicitly shared legacy profiles. This preserves their former global
     # behavior without pretending that a creator/tenant relationship existed.
-    is_legacy_shared = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_legacy_shared = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     name = Column(String, nullable=False)
     description = Column(String, nullable=True)
     target_lufs = Column(Float, default=-14.0)
@@ -29,6 +45,7 @@ class MasteringPreset(Base):
     compressor_settings = Column(JSON, default=dict)
     is_builtin = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
 class MasteringJob(Base):
     __tablename__ = "mastering_jobs"

@@ -1,12 +1,14 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class UploadInitRequest(BaseModel):
     filename: str = Field(..., min_length=1, max_length=255)
     total_size_bytes: int = Field(..., gt=0)
-    content_type: str = Field(default="application/octet-stream", min_length=1, max_length=100)
+    content_type: str = Field(
+        default="application/octet-stream", min_length=1, max_length=100
+    )
     # Clients may suggest a chunk size, but the server caps every append.
     chunk_size: int | None = Field(default=None, gt=0)
 
@@ -36,15 +38,15 @@ class UploadChunkResponse(BaseModel):
 
 
 class UploadCompleteRequest(BaseModel):
-    title: Optional[str] = None
-    artist: Optional[str] = None
+    title: str | None = None
+    artist: str | None = None
 
 
 class UploadCompleteResponse(BaseModel):
     mix_id: str
     media_asset_id: str
     title: str
-    artist: Optional[str] = None
+    artist: str | None = None
     duration_seconds: float
     sample_rate: int
     channels: int

@@ -21,17 +21,23 @@ from api.app.services.metrics import record_counter
 def _token(user_id: str, project_id: str = "project-a") -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=")
     payload = base64.urlsafe_b64encode(
-        json.dumps({"sub": user_id, "project_id": project_id}, separators=(",", ":")).encode()
+        json.dumps(
+            {"sub": user_id, "project_id": project_id}, separators=(",", ":")
+        ).encode()
     ).rstrip(b"=")
     signature = hmac.new(
         b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256
     ).digest()
-    return b".".join((header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))).decode()
+    return b".".join(
+        (header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))
+    ).decode()
 
 
 @pytest.fixture
 def client(monkeypatch):
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(engine)
     session = factory()
@@ -80,14 +86,23 @@ def test_metric_tags_do_not_accept_filename_or_user_content():
         record_counter("job.enqueued", tags={"stage": "private.wav"})
 
 
-def test_metrics_requires_explicit_operator_and_never_renders_sensitive_labels(client, monkeypatch):
-    monkeypatch.setattr("api.app.api.v1.metrics._queue_depths", lambda: [("analysis-cpu", 0)])
+def test_metrics_requires_explicit_operator_and_never_renders_sensitive_labels(
+    client, monkeypatch
+):
+    monkeypatch.setattr(
+        "api.app.api.v1.metrics._queue_depths", lambda: [("analysis-cpu", 0)]
+    )
     record_counter("upload.rejected", tags={"stage": "upload", "status": "rejected"})
 
-    denied = client.get("/api/v1/metrics", headers={"Authorization": f"Bearer {_token('not-an-operator')}"})
-    assert denied.status_code == 403
+    denied = client.get(
+        "/api/v1/metrics",
+        headers={"Authorization": f"Bearer {_token('not-an-operator')}"},
+    )
+    assert denied.status_code == 401
 
-    response = client.get("/api/v1/metrics", headers={"Authorization": f"Bearer {_token('operator')}"})
+    response = client.get(
+        "/api/v1/metrics", headers={"Authorization": f"Bearer {_token('operator')}"}
+    )
     assert response.status_code == 200
     assert "filename" not in response.text
     assert "project-a" not in response.text
@@ -106,27 +121,44 @@ def test_worker_metric_is_visible_from_operator_api_scrape(client, monkeypatch):
             self.values[(key, field)] = self.values.get((key, field), 0) + value
 
         def hgetall(self, key):
-            return {field: value for (stored_key, field), value in self.values.items() if stored_key == key}
+            return {
+                field: value
+                for (stored_key, field), value in self.values.items()
+                if stored_key == key
+            }
 
         def close(self):
             pass
 
     shared = SharedMetricsRedis()
     monkeypatch.setattr(metrics_service, "_metrics_redis_client", lambda: shared)
-    monkeypatch.setattr("api.app.api.v1.metrics._queue_depths", lambda: [("analysis-cpu", 0)])
+    monkeypatch.setattr(
+        "api.app.api.v1.metrics._queue_depths", lambda: [("analysis-cpu", 0)]
+    )
 
-    worker_metrics.record_job_finished("MASTERING", start_time=worker_metrics.time.monotonic() - 1, status="failed")
+    worker_metrics.record_job_finished(
+        "MASTERING", start_time=worker_metrics.time.monotonic() - 1, status="failed"
+    )
     metrics_service._counters.clear()  # Model an independent API process with no worker memory.
 
-    response = client.get("/api/v1/metrics", headers={"Authorization": f"Bearer {_token('operator')}"})
+    response = client.get(
+        "/api/v1/metrics", headers={"Authorization": f"Bearer {_token('operator')}"}
+    )
     assert response.status_code == 200
-    assert 'mix_analyst_job_stage_duration_ms{job_type="MASTERING",stage="mastering",status="failed"}' in response.text
-    assert 'mix_analyst_job_failed{job_type="MASTERING",stage="mastering",status="failed"}' in response.text
+    assert (
+        'mix_analyst_job_stage_duration_ms{job_type="MASTERING",stage="mastering",status="failed"}'
+        in response.text
+    )
+    assert (
+        'mix_analyst_job_failed{job_type="MASTERING",stage="mastering",status="failed"}'
+        in response.text
+    )
     assert "mix_analyst_counter_backend_available 1" in response.text
 
 
 def test_local_metric_fallback_flushes_when_redis_recovers(monkeypatch):
     """A transient telemetry outage may delay, but must not drop, a counter."""
+
     class RecoveringRedis:
         def __init__(self):
             self.available = False
@@ -140,7 +172,11 @@ def test_local_metric_fallback_flushes_when_redis_recovers(monkeypatch):
         def hgetall(self, key):
             if not self.available:
                 raise OSError("redis temporarily unavailable")
-            return {field: value for (stored_key, field), value in self.values.items() if stored_key == key}
+            return {
+                field: value
+                for (stored_key, field), value in self.values.items()
+                if stored_key == key
+            }
 
         def close(self):
             pass

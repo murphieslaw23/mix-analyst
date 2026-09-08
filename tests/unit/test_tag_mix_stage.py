@@ -23,5 +23,8 @@ def test_tagger_suggests_download_name_without_mutating_source_key(tmp_path):
 
     assert tagged_mix.source_artifact.key != tagged_mix.suggested_download_name
     assert tagged_mix.metadata_artifact.key.startswith("artifacts/metadata/1/")
-    assert tagged_mix.metadata_artifact.sha256 == hashlib.sha256(tagged_mix.payload).hexdigest()
+    assert (
+        tagged_mix.metadata_artifact.sha256
+        == hashlib.sha256(tagged_mix.payload).hexdigest()
+    )
     assert tagged_mix.suggested_download_name.endswith(".wav")

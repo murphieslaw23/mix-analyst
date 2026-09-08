@@ -19,8 +19,8 @@ from ...schemas.upload import (
     UploadInitResponse,
     UploadStatusResponse,
 )
-from ...services.storage import StorageService
 from ...services.metrics import record_counter
+from ...services.storage import StorageService
 from ...services.upload_sessions import (
     UploadExpiredError,
     UploadLifecycleError,
@@ -36,7 +36,6 @@ from ...services.upload_sessions import (
 )
 from ..deps import get_current_principal, require_owned_upload_session
 
-
 router = APIRouter()
 storage = StorageService(settings.storage_root)
 
@@ -49,13 +48,21 @@ def _http_error(exc: UploadLifecycleError) -> HTTPException:
     if isinstance(exc, UploadExpiredError):
         return HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc))
     if isinstance(exc, UploadTooLargeError):
-        record_counter("upload.rejected", tags={"stage": "upload", "status": "rejected"})
-        return HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc))
+        record_counter(
+            "upload.rejected", tags={"stage": "upload", "status": "rejected"}
+        )
+        return HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+        )
     if isinstance(exc, UploadValidationError):
-        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
     if isinstance(exc, UploadStateError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload storage error")
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload storage error"
+    )
 
 
 async def _bounded_request_body(request: Request, max_bytes: int):
@@ -64,17 +71,23 @@ async def _bounded_request_body(request: Request, max_bytes: int):
     if content_length is not None:
         try:
             if int(content_length) > max_bytes:
-                raise UploadTooLargeError(f"Chunk exceeds maximum size of {max_bytes} bytes")
+                raise UploadTooLargeError(
+                    f"Chunk exceeds maximum size of {max_bytes} bytes"
+                )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Content-Length") from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Content-Length"
+            ) from exc
 
-    temporary = TemporaryFile(mode="w+b")
+    temporary = TemporaryFile(mode="w+b")  # noqa: SIM115 - caller closes the returned streaming buffer.
     received = 0
     try:
         async for payload in request.stream():
             received += len(payload)
             if received > max_bytes:
-                raise UploadTooLargeError(f"Chunk exceeds maximum size of {max_bytes} bytes")
+                raise UploadTooLargeError(
+                    f"Chunk exceeds maximum size of {max_bytes} bytes"
+                )
             temporary.write(payload)
         temporary.seek(0)
         return temporary
@@ -121,13 +134,22 @@ async def upload_chunk(
     require_owned_upload_session(db, principal, upload_id)
     db.rollback()
     if upload_offset is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Upload-Offset header is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload-Offset header is required",
+        )
     try:
         offset = int(upload_offset)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Upload-Offset must be an integer") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload-Offset must be an integer",
+        ) from exc
     if offset < 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Upload-Offset must be non-negative")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload-Offset must be non-negative",
+        )
 
     try:
         body = await _bounded_request_body(request, settings.max_chunk_size_bytes)
@@ -148,7 +170,9 @@ async def upload_chunk(
 
     upload = db.get(UploadSession, upload_id)
     if upload is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found"
+        )
     progress = round((next_offset / upload.total_size_bytes) * 100, 2)
     return UploadChunkResponse(
         upload_id=upload_id,
@@ -167,8 +191,14 @@ def complete_upload(
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
+    # Authentication may have opened a read transaction on this request-bound
+    # session. Finalization owns several atomic transactions, so release that
+    # read scope before it begins its guarded promotion sequence.
+    db.rollback()
     try:
-        finalized = finalize_upload(db, principal, upload_id, storage, title=req.title, artist=req.artist)
+        finalized = finalize_upload(
+            db, principal, upload_id, storage, title=req.title, artist=req.artist
+        )
     except UploadLifecycleError as exc:
         raise _http_error(exc) from exc
     media = finalized.media_asset
@@ -193,10 +223,14 @@ def get_upload_status(
     db: Session = Depends(get_db),
     principal: CurrentPrincipal = Depends(get_current_principal),
 ):
-    upload_session: UploadSession = require_owned_upload_session(db, principal, upload_id)
+    upload_session: UploadSession = require_owned_upload_session(
+        db, principal, upload_id
+    )
     progress = 0.0
     if upload_session.total_size_bytes > 0:
-        progress = round((upload_session.offset / upload_session.total_size_bytes) * 100, 2)
+        progress = round(
+            (upload_session.offset / upload_session.total_size_bytes) * 100, 2
+        )
     return UploadStatusResponse(
         upload_id=upload_session.id,
         filename=upload_session.filename,

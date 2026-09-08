@@ -16,7 +16,6 @@ from ..schemas.auth import CurrentPrincipal
 from ..schemas.job import JobCreateRequest
 from .metrics import record_counter
 
-
 TASK_NAMES = {
     JobType.ANALYSIS: "tasks.run_analysis_pipeline",
     JobType.FINGERPRINT: "tasks.run_analysis_pipeline",
@@ -43,7 +42,9 @@ def utcnow() -> datetime:
 
 def enqueue_job_dispatch(db: Session, job: Job, attempt_number: int) -> OutboxMessage:
     """Append the canonical durable broker command for an existing queued job."""
-    task_id = f"job_{job.id}" if attempt_number == 1 else f"job_{job.id}_att_{attempt_number}"
+    task_id = (
+        f"job_{job.id}" if attempt_number == 1 else f"job_{job.id}_att_{attempt_number}"
+    )
     message = OutboxMessage(
         project_id=job.project_id,
         aggregate_id=job.id,
@@ -61,14 +62,18 @@ def enqueue_job_dispatch(db: Session, job: Job, attempt_number: int) -> OutboxMe
     return message
 
 
-def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: JobCreateRequest) -> Job:
+def enqueue_job(
+    db: Session, principal: CurrentPrincipal, mix: Mix, request: JobCreateRequest
+) -> Job:
     """Create a queued job, initial attempt, and broker command in one DB transaction."""
     if mix.project_id != principal.project_id:
         raise PermissionError("Mix does not belong to the current project")
 
     job_type = JobType(request.job_type)
     if job_type not in TASK_NAMES:
-        raise UnsupportedJobTypeError(f"Job type {job_type.value} is not supported by a registered worker")
+        raise UnsupportedJobTypeError(
+            f"Job type {job_type.value} is not supported by a registered worker"
+        )
     job = Job(
         id=str(uuid.uuid4()),
         mix_id=mix.id,
@@ -92,7 +97,11 @@ def enqueue_job(db: Session, principal: CurrentPrincipal, mix: Mix, request: Job
     db.flush()
     record_counter(
         "job.enqueued",
-        tags={"job_type": job_type.value, "queue": JOB_QUEUES[job_type], "status": "queued"},
+        tags={
+            "job_type": job_type.value,
+            "queue": JOB_QUEUES[job_type],
+            "status": "queued",
+        },
     )
     return job
 
@@ -123,7 +132,14 @@ def enqueue_retry(
     if claimed_job_id is None:
         return None
 
-    attempt_number = (db.scalar(select(func.max(JobAttempt.attempt_number)).where(JobAttempt.job_id == job.id)) or 0) + 1
+    attempt_number = (
+        db.scalar(
+            select(func.max(JobAttempt.attempt_number)).where(
+                JobAttempt.job_id == job.id
+            )
+        )
+        or 0
+    ) + 1
     attempt = JobAttempt(
         id=str(uuid.uuid4()),
         job_id=job.id,
@@ -136,7 +152,11 @@ def enqueue_retry(
     db.flush()
     record_counter(
         "job.enqueued",
-        tags={"job_type": job.job_type.value, "queue": JOB_QUEUES[job.job_type], "status": "queued"},
+        tags={
+            "job_type": job.job_type.value,
+            "queue": JOB_QUEUES[job.job_type],
+            "status": "queued",
+        },
     )
     return attempt
 
@@ -192,7 +212,7 @@ def _start_attempt_lease_keeper(
                         heartbeat_db.rollback()
                         return
                     heartbeat_db.commit()
-                except Exception:
+                except Exception:  # noqa: BLE001 - a transient heartbeat outage is recoverable.
                     heartbeat_db.rollback()
                     # A transient database outage must not kill the keeper. On
                     # recovery, the old token may renew only if no replacement
@@ -218,20 +238,32 @@ def claim_job_attempt(
 ) -> JobAttempt | None:
     """Claim a precise queued attempt or reclaim its expired fenced lease."""
     current_time = now or utcnow()
-    lease_duration = lease_seconds if lease_seconds is not None else settings.job_attempt_lease_seconds
+    lease_duration = (
+        lease_seconds
+        if lease_seconds is not None
+        else settings.job_attempt_lease_seconds
+    )
     if lease_duration <= 0:
         raise ValueError("lease_seconds must be positive")
     token = claim_token or uuid.uuid4().hex
     if len(token) > 64:
         raise ValueError("claim token is too long")
 
-    job = db.scalar(select(Job).where(Job.id == job_id, Job.project_id == project_id).with_for_update())
+    job = db.scalar(
+        select(Job)
+        .where(Job.id == job_id, Job.project_id == project_id)
+        .with_for_update()
+    )
     if job is None:
         return None
 
     is_reclaim = False
     if job.status is JobStatus.QUEUED:
-        attempt = db.scalar(_attempt_query(job.id, attempt_number).where(JobAttempt.status == JobStatus.QUEUED))
+        attempt = db.scalar(
+            _attempt_query(job.id, attempt_number).where(
+                JobAttempt.status == JobStatus.QUEUED
+            )
+        )
         if attempt is None:
             return None
         if job.batch_id is not None:
@@ -241,9 +273,13 @@ def claim_job_attempt(
                 .with_for_update()
             )
             if batch is None:
-                raise RuntimeError(f"Batch {job.batch_id} for job {job_id} is outside project {project_id}")
+                raise RuntimeError(
+                    f"Batch {job.batch_id} for job {job_id} is outside project {project_id}"
+                )
             running_count = db.scalar(
-                select(func.count()).select_from(Job).where(
+                select(func.count())
+                .select_from(Job)
+                .where(
                     Job.batch_id == batch.id,
                     Job.status == JobStatus.RUNNING,
                 )
@@ -254,7 +290,11 @@ def claim_job_attempt(
         job.started_at = current_time
         job.current_stage = "Initializing"
     elif job.status is JobStatus.RUNNING:
-        attempt = db.scalar(_attempt_query(job.id, attempt_number).where(JobAttempt.status == JobStatus.RUNNING))
+        attempt = db.scalar(
+            _attempt_query(job.id, attempt_number).where(
+                JobAttempt.status == JobStatus.RUNNING
+            )
+        )
         if attempt is None:
             return None
         lease_expires_at = _as_utc(attempt.lease_expires_at)
@@ -307,7 +347,11 @@ def heartbeat_job_attempt(
 ) -> bool:
     """Extend only the active worker's exact lease and fencing token."""
     current_time = now or utcnow()
-    lease_duration = lease_seconds if lease_seconds is not None else settings.job_attempt_lease_seconds
+    lease_duration = (
+        lease_seconds
+        if lease_seconds is not None
+        else settings.job_attempt_lease_seconds
+    )
     predicates = [
         JobAttempt.job_id == job_id,
         JobAttempt.attempt_number == attempt_number,
@@ -326,6 +370,9 @@ def heartbeat_job_attempt(
     result = db.execute(
         update(JobAttempt)
         .where(*predicates)
-        .values(last_heartbeat_at=current_time, lease_expires_at=current_time + timedelta(seconds=lease_duration))
+        .values(
+            last_heartbeat_at=current_time,
+            lease_expires_at=current_time + timedelta(seconds=lease_duration),
+        )
     )
     return result.rowcount == 1

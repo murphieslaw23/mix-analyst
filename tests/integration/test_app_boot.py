@@ -1,10 +1,9 @@
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 from sqlalchemy import create_engine, inspect
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -59,7 +58,9 @@ def test_baseline_preserves_server_generated_timestamps(tmp_path):
             ("stem_jobs", StemJob),
         ):
             created_at = next(
-                column for column in inspector.get_columns(table_name) if column["name"] == "created_at"
+                column
+                for column in inspector.get_columns(table_name)
+                if column["name"] == "created_at"
             )
             assert created_at["default"] is not None
             assert created_at["nullable"] is model.__table__.c.created_at.nullable

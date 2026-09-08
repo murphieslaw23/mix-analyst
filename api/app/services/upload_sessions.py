@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -97,7 +97,9 @@ def create_upload_session(
 ) -> UploadSessionOut:
     """Create a bounded, expiring server-owned quarantine object and row."""
     if byte_length > max_upload_size_bytes:
-        raise UploadTooLargeError(f"File exceeds maximum allowed size of {max_upload_size_bytes} bytes")
+        raise UploadTooLargeError(
+            f"File exceeds maximum allowed size of {max_upload_size_bytes} bytes"
+        )
     session_id = str(uuid.uuid4())
     quarantine_key = _quarantine_key(principal.project_id, session_id)
     upload = UploadSession(
@@ -126,10 +128,15 @@ def create_upload_session(
     return _session_out(upload)
 
 
-def _locked_owned_upload(db: Session, principal: CurrentPrincipal, session_id: str) -> UploadSession:
+def _locked_owned_upload(
+    db: Session, principal: CurrentPrincipal, session_id: str
+) -> UploadSession:
     upload = db.scalar(
         select(UploadSession)
-        .where(UploadSession.id == session_id, UploadSession.project_id == principal.project_id)
+        .where(
+            UploadSession.id == session_id,
+            UploadSession.project_id == principal.project_id,
+        )
         .with_for_update()
     )
     if upload is None:
@@ -172,7 +179,9 @@ def append_chunk(
                 )
             object_size = storage.object_size(upload.quarantine_key)
             if object_size < upload.offset:
-                raise UploadLifecycleError("Quarantine object is missing committed upload bytes")
+                raise UploadLifecycleError(
+                    "Quarantine object is missing committed upload bytes"
+                )
             if object_size > upload.offset:
                 # Recover the fsync-before-commit crash window.  The database
                 # offset is authoritative, so discard the uncommitted tail and
@@ -180,7 +189,9 @@ def append_chunk(
                 storage.truncate_object(upload.quarantine_key, upload.offset)
             remaining = upload.total_size_bytes - upload.offset
             if remaining <= 0:
-                raise UploadStateError("Upload already contains its declared byte length")
+                raise UploadStateError(
+                    "Upload already contains its declared byte length"
+                )
             try:
                 written = storage.write_limited_chunk(
                     upload.quarantine_key, chunk, min(max_chunk_size_bytes, remaining)
@@ -200,7 +211,9 @@ def append_chunk(
     return next_offset
 
 
-def _mark_failed(db: Session, principal: CurrentPrincipal, session_id: str) -> str | None:
+def _mark_failed(
+    db: Session, principal: CurrentPrincipal, session_id: str
+) -> str | None:
     with db.begin():
         upload = _locked_owned_upload(db, principal, session_id)
         upload.status = UploadStatus.FAILED
@@ -224,6 +237,10 @@ def finalize_upload(
     safely resumed by another completion request instead of exposing a mix
     whose storage key does not exist.
     """
+    # This service owns its transaction boundaries. Callers may have performed
+    # a read (which starts SQLAlchemy's implicit transaction) while checking a
+    # pending promotion, so release that read scope before the locked sequence.
+    db.rollback()
     probe_result: AudioProbeResult | None = None
     quarantine_key: str | None = None
     cleanup_key: str | None = None
@@ -233,12 +250,21 @@ def finalize_upload(
 
     with db.begin():
         upload = _locked_owned_upload(db, principal, session_id)
-        if upload.promotion_state == "PROMOTED" and upload.media_asset_id and upload.mix_id:
+        if (
+            upload.promotion_state == "PROMOTED"
+            and upload.media_asset_id
+            and upload.mix_id
+        ):
             return FinalizedUpload(
                 media_asset=db.get(MediaAsset, upload.media_asset_id),
                 mix=db.get(Mix, upload.mix_id),
             )
-        if upload.promotion_state == "PENDING" and upload.final_key and upload.media_asset_id and upload.mix_id:
+        if (
+            upload.promotion_state == "PENDING"
+            and upload.final_key
+            and upload.media_asset_id
+            and upload.mix_id
+        ):
             # A prior caller already validated bytes and committed durable
             # references; do not reprobe or create a duplicate mix.
             quarantine_key = upload.quarantine_key
@@ -255,7 +281,9 @@ def finalize_upload(
                     f"Incomplete upload: expected {upload.total_size_bytes} bytes, got {upload.offset} bytes"
                 )
             if storage.object_size(upload.quarantine_key) != upload.offset:
-                raise UploadLifecycleError("Quarantine object does not match its authoritative offset")
+                raise UploadLifecycleError(
+                    "Quarantine object does not match its authoritative offset"
+                )
             quarantine_key = upload.quarantine_key
     if cleanup_key is not None:
         storage.delete_object(cleanup_key)
@@ -273,13 +301,20 @@ def finalize_upload(
             # Probe diagnostics can include absolute paths and ffprobe stderr.
             raise UploadValidationError("Uploaded file is not valid audio") from exc
 
-        final_key = derived_object_key(principal.project_id, sha256_hash, "source", "v1")
+        final_key = derived_object_key(
+            principal.project_id, sha256_hash, "source", "v1"
+        )
         with db.begin():
             upload = _locked_owned_upload(db, principal, session_id)
             _assert_appendable(upload)
-            if upload.offset != upload.total_size_bytes or storage.object_size(upload.quarantine_key) != upload.offset:
+            if (
+                upload.offset != upload.total_size_bytes
+                or storage.object_size(upload.quarantine_key) != upload.offset
+            ):
                 raise UploadLifecycleError("Upload changed during finalization")
-            existing_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
+            existing_asset = db.scalar(
+                select(MediaAsset).where(MediaAsset.storage_path == final_key)
+            )
             if existing_asset is None:
                 try:
                     # A same-project concurrent finalization may win after our
@@ -302,14 +337,20 @@ def finalize_upload(
                         db.add(media_asset)
                         db.flush()
                 except IntegrityError:
-                    media_asset = db.scalar(select(MediaAsset).where(MediaAsset.storage_path == final_key))
+                    media_asset = db.scalar(
+                        select(MediaAsset).where(MediaAsset.storage_path == final_key)
+                    )
                     if media_asset is None:
-                        raise UploadLifecycleError("Final asset conflict could not be resolved") from None
+                        raise UploadLifecycleError(
+                            "Final asset conflict could not be resolved"
+                        ) from None
             else:
                 media_asset = existing_asset
             mix = Mix(
                 project_id=principal.project_id,
-                title=title.strip() if title and title.strip() else Path(upload.filename).stem,
+                title=title.strip()
+                if title and title.strip()
+                else Path(upload.filename).stem,
                 artist=artist.strip() if artist and artist.strip() else None,
                 media_asset_id=media_asset.id,
                 status="finalizing",
@@ -353,7 +394,10 @@ def finalize_upload(
         upload.status = UploadStatus.COMPLETED
         upload.promotion_state = "PROMOTED"
 
-    return FinalizedUpload(media_asset=db.get(MediaAsset, pending_media_asset_id), mix=db.get(Mix, pending_mix_id))
+    return FinalizedUpload(
+        media_asset=db.get(MediaAsset, pending_media_asset_id),
+        mix=db.get(Mix, pending_mix_id),
+    )
 
 
 def cleanup_expired_uploads(
@@ -378,7 +422,10 @@ def cleanup_expired_uploads(
         with db.begin():
             upload = db.scalar(
                 select(UploadSession)
-                .where(UploadSession.id == session_id, UploadSession.project_id == project_id)
+                .where(
+                    UploadSession.id == session_id,
+                    UploadSession.project_id == project_id,
+                )
                 .with_for_update()
             )
             if (
@@ -418,7 +465,11 @@ def cleanup_expired_uploads_global(
     cleanup_keys: list[str] = []
     for session_id in expired_ids:
         with db.begin():
-            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
+            upload = db.scalar(
+                select(UploadSession)
+                .where(UploadSession.id == session_id)
+                .with_for_update()
+            )
             if (
                 upload is not None
                 and upload.promotion_state != "PENDING"
@@ -447,8 +498,16 @@ def reconcile_pending_upload_promotions(db: Session, storage: StorageService) ->
     completed = 0
     for session_id in pending_ids:
         with db.begin():
-            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
-            if upload is None or upload.promotion_state != "PENDING" or not upload.final_key:
+            upload = db.scalar(
+                select(UploadSession)
+                .where(UploadSession.id == session_id)
+                .with_for_update()
+            )
+            if (
+                upload is None
+                or upload.promotion_state != "PENDING"
+                or not upload.final_key
+            ):
                 continue
             quarantine_key, final_key = upload.quarantine_key, upload.final_key
         try:
@@ -459,8 +518,16 @@ def reconcile_pending_upload_promotions(db: Session, storage: StorageService) ->
         except OSError:
             continue
         with db.begin():
-            upload = db.scalar(select(UploadSession).where(UploadSession.id == session_id).with_for_update())
-            if upload is None or upload.promotion_state != "PENDING" or upload.final_key != final_key:
+            upload = db.scalar(
+                select(UploadSession)
+                .where(UploadSession.id == session_id)
+                .with_for_update()
+            )
+            if (
+                upload is None
+                or upload.promotion_state != "PENDING"
+                or upload.final_key != final_key
+            ):
                 continue
             mix = db.get(Mix, upload.mix_id)
             if mix is None or not storage.object_exists(final_key):

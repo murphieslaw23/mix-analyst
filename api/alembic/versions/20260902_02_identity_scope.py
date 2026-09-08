@@ -5,16 +5,15 @@ Revises: 20260902_01
 Create Date: 2026-09-02
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20260902_02"
-down_revision: Union[str, Sequence[str], None] = "20260902_01"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "20260902_01"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 LEGACY_USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -25,14 +24,24 @@ def upgrade() -> None:
     op.create_table(
         "users",
         sa.Column("id", sa.String(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
         "projects",
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("owner_id", sa.String(length=36), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["owner_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -77,7 +86,9 @@ def downgrade() -> None:
     for table_name in ("jobs", "mixes", "media_assets"):
         with op.batch_alter_table(table_name) as batch_op:
             batch_op.drop_index(f"ix_{table_name}_project_id")
-            batch_op.drop_constraint(f"fk_{table_name}_project_id_projects", type_="foreignkey")
+            batch_op.drop_constraint(
+                f"fk_{table_name}_project_id_projects", type_="foreignkey"
+            )
             batch_op.drop_column("project_id")
 
     op.drop_index("ix_projects_owner_id", table_name="projects")

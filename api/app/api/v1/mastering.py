@@ -1,9 +1,10 @@
 """Authenticated durable commands for the mastering worker stage."""
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from api.app.db.session import get_db
 from api.app.api.deps import get_current_principal, require_owned_mix
+from api.app.db.session import get_db
 from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.job import JobCreateRequest, JobOut
 from api.app.schemas.mastering import MasteringTriggerRequest
@@ -12,7 +13,12 @@ from api.app.services.mastering_presets import resolve_mastering_parameters
 
 router = APIRouter()
 
-@router.post("/mixes/{mix_id}/master", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
+
+@router.post(
+    "/mixes/{mix_id}/master",
+    response_model=JobOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def trigger_mix_mastering(
     mix_id: str,
     request: MasteringTriggerRequest,

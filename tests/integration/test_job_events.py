@@ -1,10 +1,11 @@
 """Integration coverage for durable, project-scoped job event streams."""
 
-import base64
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,10 +22,16 @@ from api.app.models.media import MediaAsset, Mix
 
 def _bearer_token(user_id: str, project_id: str) -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=")
-    claims = json.dumps({"sub": user_id, "project_id": project_id}, separators=(",", ":")).encode()
+    claims = json.dumps(
+        {"sub": user_id, "project_id": project_id}, separators=(",", ":")
+    ).encode()
     payload = base64.urlsafe_b64encode(claims).rstrip(b"=")
-    signature = hmac.new(b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256).digest()
-    return b".".join((header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))).decode()
+    signature = hmac.new(
+        b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256
+    ).digest()
+    return b".".join(
+        (header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))
+    ).decode()
 
 
 @pytest.fixture
@@ -34,7 +41,9 @@ def event_client():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
+    session_factory = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
+    )
     Base.metadata.create_all(bind=engine)
 
     db = session_factory()
@@ -59,7 +68,15 @@ def event_client():
                 ),
             ]
         )
-        db.add(Mix(id="mix-a", project_id="project-a", media_asset_id="media-a", title="Owned mix", status="ready"))
+        db.add(
+            Mix(
+                id="mix-a",
+                project_id="project-a",
+                media_asset_id="media-a",
+                title="Owned mix",
+                status="ready",
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -101,7 +118,16 @@ def job(event_client):
             current_stage="Analysis",
         )
         db.add(job)
-        db.add(JobAttempt(id="attempt-a", job_id=job.id, attempt_number=1, status=JobStatus.RUNNING, worker_hostname="worker-a"))
+        db.add(
+            JobAttempt(
+                id="attempt-a",
+                job_id=job.id,
+                attempt_number=1,
+                status=JobStatus.RUNNING,
+                worker_hostname="worker-a",
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+            )
+        )
         db.commit()
         return job
     finally:
@@ -116,8 +142,15 @@ def job_with_succeeded_event(event_client, job):
     db = session_factory()
     try:
         persisted_job = db.get(Job, job.id)
-        record_job_event(db, persisted_job, "update", {"job_id": job.id, "status": "QUEUED"})
-        record_job_event(db, persisted_job, "update", {"job_id": job.id, "status": "RUNNING", "progress_percent": 50.0})
+        record_job_event(
+            db, persisted_job, "update", {"job_id": job.id, "status": "QUEUED"}
+        )
+        record_job_event(
+            db,
+            persisted_job,
+            "update",
+            {"job_id": job.id, "status": "RUNNING", "progress_percent": 50.0},
+        )
         persisted_job.status = JobStatus.SUCCEEDED
         record_job_event(
             db,
@@ -131,7 +164,9 @@ def job_with_succeeded_event(event_client, job):
         db.close()
 
 
-def test_sse_replays_terminal_event_committed_before_subscription(event_client, token, job_with_succeeded_event):
+def test_sse_replays_terminal_event_committed_before_subscription(
+    event_client, token, job_with_succeeded_event
+):
     client, _ = event_client
 
     response = client.get(
@@ -144,7 +179,9 @@ def test_sse_replays_terminal_event_committed_before_subscription(event_client, 
     assert "SUCCEEDED" in response.text
 
 
-def test_sse_last_event_id_replays_only_events_after_the_cursor(event_client, token, job_with_succeeded_event):
+def test_sse_last_event_id_replays_only_events_after_the_cursor(
+    event_client, token, job_with_succeeded_event
+):
     client, _ = event_client
 
     response = client.get(
@@ -158,7 +195,9 @@ def test_sse_last_event_id_replays_only_events_after_the_cursor(event_client, to
     assert "id: 2" not in response.text
 
 
-def test_sse_replays_event_committed_during_redis_subscription(event_client, job, monkeypatch):
+def test_sse_replays_event_committed_during_redis_subscription(
+    event_client, job, monkeypatch
+):
     """The DB read immediately after subscribe closes the replay/tail race."""
     from api.app.services import job_events
     from api.app.services.job_events_store import record_job_event
@@ -167,7 +206,9 @@ def test_sse_replays_event_committed_during_redis_subscription(event_client, job
     seed_db = session_factory()
     try:
         persisted_job = seed_db.get(Job, job.id)
-        record_job_event(seed_db, persisted_job, "update", {"job_id": job.id, "status": "RUNNING"})
+        record_job_event(
+            seed_db, persisted_job, "update", {"job_id": job.id, "status": "RUNNING"}
+        )
         seed_db.commit()
     finally:
         seed_db.close()
@@ -178,7 +219,12 @@ def test_sse_replays_event_committed_during_redis_subscription(event_client, job
             try:
                 persisted_job = writer_db.get(Job, job.id)
                 persisted_job.status = JobStatus.SUCCEEDED
-                record_job_event(writer_db, persisted_job, "update", {"job_id": job.id, "status": "SUCCEEDED"})
+                record_job_event(
+                    writer_db,
+                    persisted_job,
+                    "update",
+                    {"job_id": job.id, "status": "SUCCEEDED"},
+                )
                 writer_db.commit()
             finally:
                 writer_db.close()
@@ -196,7 +242,9 @@ def test_sse_replays_event_committed_during_redis_subscription(event_client, job
         async def aclose(self):
             return None
 
-    monkeypatch.setattr(job_events.aioredis, "from_url", lambda *_args, **_kwargs: FakeRedis())
+    monkeypatch.setattr(
+        job_events.aioredis, "from_url", lambda *_args, **_kwargs: FakeRedis()
+    )
 
     async def collect_until_closed():
         stream_db = session_factory()
@@ -215,7 +263,9 @@ def test_sse_replays_event_committed_during_redis_subscription(event_client, job
     assert "SUCCEEDED" in events[1]
 
 
-def test_sse_does_not_close_on_a_terminal_event_from_an_earlier_attempt(event_client, job, monkeypatch):
+def test_sse_does_not_close_on_a_terminal_event_from_an_earlier_attempt(
+    event_client, job, monkeypatch
+):
     """A retry stream must continue past attempt one's terminal event to attempt two."""
     from api.app.services import job_events
     from api.app.services.job_commands import enqueue_retry
@@ -248,8 +298,9 @@ def test_sse_does_not_close_on_a_terminal_event_from_an_earlier_attempt(event_cl
             try:
                 retried_job = writer_db.get(Job, job.id)
                 retried_attempt = writer_db.scalar(
-                    select(JobAttempt)
-                    .where(JobAttempt.job_id == job.id, JobAttempt.attempt_number == 2)
+                    select(JobAttempt).where(
+                        JobAttempt.job_id == job.id, JobAttempt.attempt_number == 2
+                    )
                 )
                 retried_job.status = JobStatus.SUCCEEDED
                 retried_attempt.status = JobStatus.SUCCEEDED
@@ -276,12 +327,19 @@ def test_sse_does_not_close_on_a_terminal_event_from_an_earlier_attempt(event_cl
         async def aclose(self):
             return None
 
-    monkeypatch.setattr(job_events.aioredis, "from_url", lambda *_args, **_kwargs: FakeRedis())
+    monkeypatch.setattr(
+        job_events.aioredis, "from_url", lambda *_args, **_kwargs: FakeRedis()
+    )
 
     async def collect_until_closed():
         stream_db = session_factory()
         try:
-            return [event async for event in job_events.stream_job_events(stream_db, "project-a", job.id)]
+            return [
+                event
+                async for event in job_events.stream_job_events(
+                    stream_db, "project-a", job.id
+                )
+            ]
         finally:
             stream_db.close()
 
@@ -293,7 +351,9 @@ def test_sse_does_not_close_on_a_terminal_event_from_an_earlier_attempt(event_cl
     assert '"attempt_number": 2' in payload
 
 
-def test_event_stream_requires_ownership_before_replay(event_client, job_with_succeeded_event):
+def test_event_stream_requires_ownership_before_replay(
+    event_client, job_with_succeeded_event
+):
     client, _ = event_client
     foreign_token = _bearer_token("user-b", "project-b")
 
@@ -314,18 +374,30 @@ def test_recorded_events_are_monotonic_per_job(event_client, job):
     try:
         persisted_job = db.get(Job, job.id)
         first = record_job_event(db, persisted_job, "update", {"status": "RUNNING"})
-        second = record_job_event(db, persisted_job, "update", {"status": "RUNNING", "progress_percent": 75.0})
+        second = record_job_event(
+            db, persisted_job, "update", {"status": "RUNNING", "progress_percent": 75.0}
+        )
         db.commit()
 
         assert (first.sequence, second.sequence) == (1, 2)
-        assert [event.sequence for event in db.scalars(select(JobEvent).where(JobEvent.job_id == job.id).order_by(JobEvent.sequence))] == [1, 2]
+        assert [
+            event.sequence
+            for event in db.scalars(
+                select(JobEvent)
+                .where(JobEvent.job_id == job.id)
+                .order_by(JobEvent.sequence)
+            )
+        ] == [1, 2]
     finally:
         db.close()
 
 
 def test_cancelled_job_cannot_be_overwritten_by_late_worker(event_client, job):
     from api.app.models.job_event import JobEvent
-    from api.app.services.job_events_store import complete_job_attempt, request_cancellation
+    from api.app.services.job_events_store import (
+        complete_job_attempt,
+        request_cancellation,
+    )
 
     _, session_factory = event_client
     db = session_factory()
@@ -333,12 +405,18 @@ def test_cancelled_job_cannot_be_overwritten_by_late_worker(event_client, job):
         cancelled_job = request_cancellation(db, db.get(Job, job.id))
         db.commit()
 
-        assert complete_job_attempt(db, cancelled_job.id, "project-a", "worker-a") is False
+        assert (
+            complete_job_attempt(db, cancelled_job.id, "project-a", "worker-a") is False
+        )
         assert db.get(Job, job.id).status is JobStatus.CANCELLED
-        cancelled_attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == job.id))
+        cancelled_attempt = db.scalar(
+            select(JobAttempt).where(JobAttempt.job_id == job.id)
+        )
         assert cancelled_attempt.status is JobStatus.CANCELLED
         assert cancelled_attempt.finished_at is not None
-        cancellation_event = db.scalar(select(JobEvent).where(JobEvent.job_id == job.id))
+        cancellation_event = db.scalar(
+            select(JobEvent).where(JobEvent.job_id == job.id)
+        )
         assert cancellation_event.sequence == 1
         assert cancellation_event.attempt_number == 1
         assert cancellation_event.payload["status"] == "CANCELLED"
@@ -346,7 +424,9 @@ def test_cancelled_job_cannot_be_overwritten_by_late_worker(event_client, job):
         db.close()
 
 
-def test_completion_requires_owned_claimed_attempt_and_records_terminal_event(event_client, job):
+def test_completion_requires_owned_claimed_attempt_and_records_terminal_event(
+    event_client, job
+):
     from api.app.models.job_event import JobEvent
     from api.app.services.job_events_store import complete_job_attempt
 
@@ -362,9 +442,13 @@ def test_completion_requires_owned_claimed_attempt_and_records_terminal_event(ev
         db.commit()
 
         completed_job = db.get(Job, job.id)
-        completed_attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == job.id))
+        completed_attempt = db.scalar(
+            select(JobAttempt).where(JobAttempt.job_id == job.id)
+        )
         completion_event = db.scalar(
-            select(JobEvent).where(JobEvent.job_id == job.id, JobEvent.project_id == "project-a")
+            select(JobEvent).where(
+                JobEvent.job_id == job.id, JobEvent.project_id == "project-a"
+            )
         )
         assert completed_job.status is JobStatus.SUCCEEDED
         assert completed_attempt.status is JobStatus.SUCCEEDED

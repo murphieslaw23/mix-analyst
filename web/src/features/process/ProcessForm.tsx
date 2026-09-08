@@ -76,7 +76,7 @@ export function ProcessForm({ settings, state, onFileSelected, onPresetChange, o
       <div className="process-form__actions">
         {!hasSelectedFile ? null : ready ? <Button type="submit">Start mastering</Button> : null}
         {canRetry ? <Button type="submit">{state.mixId ? "Create mastering job" : state.session ? "Resume upload" : "Try again"}</Button> : null}
-        {busy ? <Button onClick={onCancel} tone="secondary">{state.stage === "queueing" ? "Cancel request" : "Cancel upload"}</Button> : null}
+        {busy ? <Button type="button" onClick={onCancel} tone="secondary">{state.stage === "queueing" ? "Cancel request" : "Cancel upload"}</Button> : null}
         {(state.status === "error" || state.status === "aborted") ? <Button onClick={onReset} tone="quiet">Choose another file</Button> : null}
       </div>
     </form>

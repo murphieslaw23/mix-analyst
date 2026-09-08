@@ -34,7 +34,7 @@ def test_master_stage_writes_immutable_result_artifact(tmp_path):
 
 def test_custom_profile_controls_reach_the_mastering_dsp_stage(tmp_path, monkeypatch):
     """Selected LRA, EQ, and compressor values must affect the worker DSP path."""
-    import worker.dsp.mastering as mastering
+    from worker.dsp import mastering
 
     source = tmp_path / "profile-source.wav"
     source.write_bytes(generate_synthetic_audio(duration_sec=3.0))
@@ -58,7 +58,12 @@ def test_custom_profile_controls_reach_the_mastering_dsp_stage(tmp_path, monkeyp
         true_peak_dbtp=-1.0,
         target_lra=5.5,
         eq_settings={"sub_boost_db": 3.0, "mud_cut_db": -2.0, "high_air_db": 1.5},
-        compressor_settings={"threshold_db": -20.0, "ratio": 3.5, "attack_ms": 12.0, "release_ms": 160.0},
+        compressor_settings={
+            "threshold_db": -20.0,
+            "ratio": 3.5,
+            "attack_ms": 12.0,
+            "release_ms": 160.0,
+        },
         project_id="project-a",
         storage_root=tmp_path,
     )
@@ -68,13 +73,20 @@ def test_custom_profile_controls_reach_the_mastering_dsp_stage(tmp_path, monkeyp
     assert captured == {
         "eq": {"sub_boost_db": 3.0, "mud_cut_db": -2.0, "high_air_db": 1.5},
         "target_lra": 5.5,
-        "compressor": {"threshold_db": -20.0, "ratio": 3.5, "attack_ms": 12.0, "release_ms": 160.0},
+        "compressor": {
+            "threshold_db": -20.0,
+            "ratio": 3.5,
+            "attack_ms": 12.0,
+            "release_ms": 160.0,
+        },
     }
 
 
-def test_long_mastering_uses_streaming_path_instead_of_soundfile_read(tmp_path, monkeypatch):
+def test_long_mastering_uses_streaming_path_instead_of_soundfile_read(
+    tmp_path, monkeypatch
+):
     """A recording beyond the array cap must never be decoded as one NumPy array."""
-    import worker.dsp.mastering as mastering
+    from worker.dsp import mastering
 
     source = tmp_path / "long-source.wav"
     source.write_bytes(generate_synthetic_audio(duration_sec=9.0))

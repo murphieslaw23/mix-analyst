@@ -18,36 +18,69 @@ from api.app.models.identity import Project, User
 from api.app.models.job import Job, JobAttempt, JobStatus
 from api.app.models.media import MediaAsset, Mix
 from api.app.models.outbox import OutboxMessage
-from api.app.services.job_commands import claim_job_attempt, enqueue_retry
 from api.app.services.batches import advance_batch_after_terminal_job
+from api.app.services.job_commands import claim_job_attempt, enqueue_retry
 
 
 def _bearer_token(user_id: str, project_id: str) -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=")
-    claims = json.dumps({"sub": user_id, "project_id": project_id}, separators=(",", ":")).encode()
+    claims = json.dumps(
+        {"sub": user_id, "project_id": project_id}, separators=(",", ":")
+    ).encode()
     payload = base64.urlsafe_b64encode(claims).rstrip(b"=")
-    signature = hmac.new(b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256).digest()
-    return b".".join((header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))).decode()
+    signature = hmac.new(
+        b"development-only-secret-change-me-32", header + b"." + payload, hashlib.sha256
+    ).digest()
+    return b".".join(
+        (header, payload, base64.urlsafe_b64encode(signature).rstrip(b"="))
+    ).decode()
 
 
 @pytest.fixture
 def client():
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    session_factory = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine, expire_on_commit=False
+    )
     Base.metadata.create_all(bind=engine)
     db = session_factory()
     try:
-        db.add_all([
-            User(id="user-a"), User(id="user-b"),
-            Project(id="project-a", owner_id="user-a"), Project(id="project-b", owner_id="user-b"),
-        ])
-        for mix_id, project_id in (("mix-a1", "project-a"), ("mix-a2", "project-a"), ("mix-b", "project-b")):
+        db.add_all(
+            [
+                User(id="user-a"),
+                User(id="user-b"),
+                Project(id="project-a", owner_id="user-a"),
+                Project(id="project-b", owner_id="user-b"),
+            ]
+        )
+        for mix_id, project_id in (
+            ("mix-a1", "project-a"),
+            ("mix-a2", "project-a"),
+            ("mix-b", "project-b"),
+        ):
             media = MediaAsset(
-                id=f"media-{mix_id}", project_id=project_id, original_filename=f"{mix_id}.wav",
-                storage_path=f"projects/{project_id}/artifacts/source/v1/{mix_id}", file_size_bytes=1,
-                sha256_hash=(mix_id[-1] * 64), duration_seconds=1.0, sample_rate=44100, channels=2, codec="pcm_s16le",
+                id=f"media-{mix_id}",
+                project_id=project_id,
+                original_filename=f"{mix_id}.wav",
+                storage_path=f"projects/{project_id}/artifacts/source/v1/{mix_id}",
+                file_size_bytes=1,
+                sha256_hash=(mix_id[-1] * 64),
+                duration_seconds=1.0,
+                sample_rate=44100,
+                channels=2,
+                codec="pcm_s16le",
             )
-            db.add(Mix(id=mix_id, project_id=project_id, title=mix_id, media_asset=media, status="ready"))
+            db.add(
+                Mix(
+                    id=mix_id,
+                    project_id=project_id,
+                    title=mix_id,
+                    media_asset=media,
+                    status="ready",
+                )
+            )
         db.commit()
     finally:
         db.close()
@@ -88,13 +121,19 @@ def _create_batch(client, token, mix_ids, max_parallelism=2):
     response = client.post(
         "/api/v1/batches",
         headers={"Authorization": f"Bearer {token}"},
-        json={"mix_ids": mix_ids, "preset": {"target_lufs": -9.0}, "max_parallelism": max_parallelism},
+        json={
+            "mix_ids": mix_ids,
+            "preset": {"target_lufs": -9.0},
+            "max_parallelism": max_parallelism,
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
 
 
-def test_batch_reports_partial_failure_without_losing_successes(client, token, owned_mix_ids):
+def test_batch_reports_partial_failure_without_losing_successes(
+    client, token, owned_mix_ids
+):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids)
     assert batch["total_count"] == 2
@@ -102,10 +141,18 @@ def test_batch_reports_partial_failure_without_losing_successes(client, token, o
 
     db = session_factory()
     try:
-        jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
-        messages = db.scalars(select(OutboxMessage).where(OutboxMessage.aggregate_id.in_([job.id for job in jobs]))).all()
+        jobs = db.scalars(
+            select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)
+        ).all()
+        messages = db.scalars(
+            select(OutboxMessage).where(
+                OutboxMessage.aggregate_id.in_([job.id for job in jobs])
+            )
+        ).all()
         assert len(messages) == 2
-        assert {message.payload["job_id"] for message in messages} == {job.id for job in jobs}
+        assert {message.payload["job_id"] for message in messages} == {
+            job.id for job in jobs
+        }
         assert all(message.kind == "job.dispatch" for message in messages)
         jobs[0].status = JobStatus.SUCCEEDED
         jobs[1].status = JobStatus.FAILED
@@ -113,7 +160,9 @@ def test_batch_reports_partial_failure_without_losing_successes(client, token, o
     finally:
         db.close()
 
-    response = test_client.get(f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {token}"})
+    response = test_client.get(
+        f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "PARTIAL_FAILED"
@@ -122,12 +171,16 @@ def test_batch_reports_partial_failure_without_losing_successes(client, token, o
     assert {item["status"] for item in body["items"]} == {"SUCCEEDED", "FAILED"}
 
 
-def test_batch_retry_requeues_only_selected_failed_children(client, token, owned_mix_ids):
+def test_batch_retry_requeues_only_selected_failed_children(
+    client, token, owned_mix_ids
+):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids)
     db = session_factory()
     try:
-        jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
+        jobs = db.scalars(
+            select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)
+        ).all()
         successful, failed = jobs
         successful.status = JobStatus.SUCCEEDED
         failed.status = JobStatus.FAILED
@@ -155,28 +208,43 @@ def test_batch_retry_requeues_only_selected_failed_children(client, token, owned
         assert db.get(Job, successful_id).status is JobStatus.SUCCEEDED
         assert db.get(Job, failed_id).status is JobStatus.QUEUED
         assert db.query(JobAttempt).filter(JobAttempt.job_id == failed_id).count() == 2
-        assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == failed_id).count() == 2
+        assert (
+            db.query(OutboxMessage)
+            .filter(OutboxMessage.aggregate_id == failed_id)
+            .count()
+            == 2
+        )
     finally:
         db.close()
 
 
-def test_batch_preset_id_persists_effective_server_parameters(client, token, owned_mix_ids):
-    test_client, session_factory = client
+def test_batch_preset_id_persists_effective_server_parameters(
+    client, token, owned_mix_ids
+):
+    test_client, _ = client
     response = test_client.post(
         "/api/v1/batches",
         headers={"Authorization": f"Bearer {token}"},
-        json={"mix_ids": owned_mix_ids, "preset": {"preset_id": "club_broadcast"}, "max_parallelism": 2},
+        json={
+            "mix_ids": owned_mix_ids,
+            "preset": {"preset_id": "club_broadcast"},
+            "max_parallelism": 2,
+        },
     )
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["preset"]["preset_id"] == "club_broadcast"
     assert body["preset"]["preset_name"] == "Club Broadcast"
     assert body["preset"]["target_lufs"] == -14.0
-    assert all(item["parameters"]["preset_id"] == "club_broadcast" for item in body["items"])
+    assert all(
+        item["parameters"]["preset_id"] == "club_broadcast" for item in body["items"]
+    )
     assert all(item["batch_id"] == body["id"] for item in body["items"])
 
 
-def test_batch_aggregate_is_persisted_and_cross_project_access_is_denied(client, token, other_token, owned_mix_ids):
+def test_batch_aggregate_is_persisted_and_cross_project_access_is_denied(
+    client, token, other_token, owned_mix_ids
+):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids)
     db = session_factory()
@@ -188,7 +256,9 @@ def test_batch_aggregate_is_persisted_and_cross_project_access_is_denied(client,
     finally:
         db.close()
 
-    response = test_client.get(f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {token}"})
+    response = test_client.get(
+        f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.status_code == 200
     assert response.json()["completed_count"] == 1
     assert response.json()["cancelled_count"] == 1
@@ -202,7 +272,10 @@ def test_batch_aggregate_is_persisted_and_cross_project_access_is_denied(client,
     finally:
         db.close()
 
-    response = test_client.get(f"/api/v1/batches/{batch['id']}", headers={"Authorization": f"Bearer {other_token}"})
+    response = test_client.get(
+        f"/api/v1/batches/{batch['id']}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
     assert response.status_code == 404
     response = test_client.post(
         "/api/v1/batches",
@@ -212,12 +285,16 @@ def test_batch_aggregate_is_persisted_and_cross_project_access_is_denied(client,
     assert response.status_code == 404
 
 
-def test_batch_worker_claims_respect_persisted_parallelism(client, token, owned_mix_ids):
+def test_batch_worker_claims_respect_persisted_parallelism(
+    client, token, owned_mix_ids
+):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids, max_parallelism=1)
     db = session_factory()
     try:
-        jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
+        jobs = db.scalars(
+            select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)
+        ).all()
         assert claim_job_attempt(db, jobs[0].id, "worker-a", "project-a") is not None
         db.commit()
         assert db.get(Batch, batch["id"]).status.value == "RUNNING"
@@ -227,12 +304,16 @@ def test_batch_worker_claims_respect_persisted_parallelism(client, token, owned_
         db.close()
 
 
-def test_stale_retry_caller_cannot_append_a_second_attempt_or_outbox_command(client, token, owned_mix_ids):
+def test_stale_retry_caller_cannot_append_a_second_attempt_or_outbox_command(
+    client, token, owned_mix_ids
+):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids)
     seed = session_factory()
     try:
-        failed = seed.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()[0]
+        failed = seed.scalars(
+            select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)
+        ).all()[0]
         failed.status = JobStatus.FAILED
         seed.commit()
         failed_id = failed.id
@@ -244,13 +325,23 @@ def test_stale_retry_caller_cannot_append_a_second_attempt_or_outbox_command(cli
     try:
         stale_job = stale_session.get(Job, failed_id)
         winning_job = winning_session.get(Job, failed_id)
-        assert enqueue_retry(winning_session, winning_job, terminal_statuses=(JobStatus.FAILED,)) is not None
+        assert (
+            enqueue_retry(
+                winning_session, winning_job, terminal_statuses=(JobStatus.FAILED,)
+            )
+            is not None
+        )
         winning_session.commit()
 
         # This models a second retry request that read FAILED before the first
         # request committed. The conditional FAILED -> QUEUED update must win
         # before attempt/outbox creation, so it cannot create a duplicate.
-        assert enqueue_retry(stale_session, stale_job, terminal_statuses=(JobStatus.FAILED,)) is None
+        assert (
+            enqueue_retry(
+                stale_session, stale_job, terminal_statuses=(JobStatus.FAILED,)
+            )
+            is None
+        )
         stale_session.rollback()
     finally:
         stale_session.close()
@@ -258,18 +349,29 @@ def test_stale_retry_caller_cannot_append_a_second_attempt_or_outbox_command(cli
 
     verify = session_factory()
     try:
-        assert verify.query(JobAttempt).filter(JobAttempt.job_id == failed_id).count() == 2
-        assert verify.query(OutboxMessage).filter(OutboxMessage.aggregate_id == failed_id).count() == 2
+        assert (
+            verify.query(JobAttempt).filter(JobAttempt.job_id == failed_id).count() == 2
+        )
+        assert (
+            verify.query(OutboxMessage)
+            .filter(OutboxMessage.aggregate_id == failed_id)
+            .count()
+            == 2
+        )
     finally:
         verify.close()
 
 
-def test_terminal_batch_child_refreshes_parent_and_redelivers_one_waiting_child(client, token, owned_mix_ids):
+def test_terminal_batch_child_refreshes_parent_and_redelivers_one_waiting_child(
+    client, token, owned_mix_ids
+):
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids, max_parallelism=1)
     db = session_factory()
     try:
-        jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
+        jobs = db.scalars(
+            select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)
+        ).all()
         assert claim_job_attempt(db, jobs[0].id, "worker-a", "project-a") is not None
         jobs[0].status = JobStatus.SUCCEEDED
         advance_batch_after_terminal_job(db, jobs[0].id, "project-a")
@@ -278,24 +380,38 @@ def test_terminal_batch_child_refreshes_parent_and_redelivers_one_waiting_child(
         parent = db.get(Batch, batch["id"])
         assert parent.completed_count == 1
         assert parent.total_count == 2
-        assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == jobs[1].id).count() == 2
+        assert (
+            db.query(OutboxMessage)
+            .filter(OutboxMessage.aggregate_id == jobs[1].id)
+            .count()
+            == 2
+        )
     finally:
         db.close()
 
 
-def test_cancelling_running_batch_child_redelivers_one_waiting_child(client, token, owned_mix_ids):
+def test_cancelling_running_batch_child_redelivers_one_waiting_child(
+    client, token, owned_mix_ids
+):
     """Cancellation frees a persisted slot and must advance the waiting queue."""
     test_client, session_factory = client
     batch = _create_batch(test_client, token, owned_mix_ids, max_parallelism=1)
     db = session_factory()
     try:
-        jobs = db.scalars(select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)).all()
+        jobs = db.scalars(
+            select(Job).where(Job.batch_id == batch["id"]).order_by(Job.mix_id)
+        ).all()
         running, waiting = jobs
         assert claim_job_attempt(db, running.id, "worker-a", "project-a") is not None
         db.commit()
         running_id = running.id
         waiting_id = waiting.id
-        assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == waiting_id).count() == 1
+        assert (
+            db.query(OutboxMessage)
+            .filter(OutboxMessage.aggregate_id == waiting_id)
+            .count()
+            == 1
+        )
     finally:
         db.close()
 
@@ -308,6 +424,11 @@ def test_cancelling_running_batch_child_redelivers_one_waiting_child(client, tok
     db = session_factory()
     try:
         assert db.get(Job, running_id).status is JobStatus.CANCELLED
-        assert db.query(OutboxMessage).filter(OutboxMessage.aggregate_id == waiting_id).count() == 2
+        assert (
+            db.query(OutboxMessage)
+            .filter(OutboxMessage.aggregate_id == waiting_id)
+            .count()
+            == 2
+        )
     finally:
         db.close()

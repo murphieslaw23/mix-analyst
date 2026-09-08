@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import struct
 import subprocess
-
+from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SAFE_TEST_SECRET = "test-only-compose-secret-with-at-least-32-bytes"
@@ -57,7 +56,10 @@ def test_manifest_declares_stable_identity_raster_icons_and_safe_shortcuts():
     ):
         icon = icons[asset]
         assert icon["type"] == "image/png"
-        assert _png_size(REPOSITORY_ROOT / "web/public" / asset.removeprefix("/")) == expected_size
+        assert (
+            _png_size(REPOSITORY_ROOT / "web/public" / asset.removeprefix("/"))
+            == expected_size
+        )
 
     assert icons["/icon-maskable-512.png"]["purpose"] == "maskable"
     assert icons["/icon-192.png"]["purpose"] == "any"
@@ -65,7 +67,10 @@ def test_manifest_declares_stable_identity_raster_icons_and_safe_shortcuts():
 
     screenshot = manifest["screenshots"][0]
     assert screenshot["src"] == "/pwa-screenshot-process.png"
-    assert _png_size(REPOSITORY_ROOT / "web/public/pwa-screenshot-process.png") == (1280, 720)
+    assert _png_size(REPOSITORY_ROOT / "web/public/pwa-screenshot-process.png") == (
+        1280,
+        720,
+    )
     assert _png_size(REPOSITORY_ROOT / "web/public/apple-touch-icon.png") == (180, 180)
 
     shortcuts = {shortcut["url"] for shortcut in manifest["shortcuts"]}
@@ -80,7 +85,9 @@ def test_https_ingress_is_the_only_public_application_entrypoint():
     assert "ports" not in services["web"]
     assert {port["published"] for port in services["caddy"]["ports"]} == {"80", "443"}
     assert services["caddy"]["environment"]["PUBLIC_ORIGIN"] == "mix.example.test"
-    assert services["api"]["environment"]["CORS_ORIGINS"] == '["https://mix.example.test"]'
+    assert (
+        services["api"]["environment"]["CORS_ORIGINS"] == '["https://mix.example.test"]'
+    )
 
     caddyfile = (REPOSITORY_ROOT / "infra/caddy/Caddyfile").read_text()
     assert "{$PUBLIC_ORIGIN:localhost}" in caddyfile
