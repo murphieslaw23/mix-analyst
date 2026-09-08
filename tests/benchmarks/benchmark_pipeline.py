@@ -2,15 +2,17 @@
 
 import io
 import os
+import tempfile
 import time
+from pathlib import Path
 
 import psutil
 import soundfile as sf
 
 from tests.fixtures.synthetic_audio import generate_synthetic_audio
 from worker.analysis.bpm_detector import detect_window_tempo
-from worker.analysis.key_detector import detect_key_and_camelot
-from worker.analysis.loudness_analyzer import analyze_loudness
+from worker.analysis.key_detector import detect_window_key
+from worker.analysis.loudness_analyzer import measure_program_loudness
 
 
 def benchmark_analysis_stages():
@@ -22,20 +24,24 @@ def benchmark_analysis_stages():
     process = psutil.Process(os.getpid())
     mem_start = process.memory_info().rss / (1024 * 1024)
 
-    # 1. BPM Detection Benchmark
-    t0 = time.perf_counter()
-    detect_window_tempo(data, sr)
-    t_bpm = time.perf_counter() - t0
+    with tempfile.TemporaryDirectory() as temp_dir:
+        audio_path = Path(temp_dir) / "benchmark.wav"
+        audio_path.write_bytes(wav_bytes)
 
-    # 2. Key Detection Benchmark
-    t0 = time.perf_counter()
-    detect_key_and_camelot(data, sr)
-    t_key = time.perf_counter() - t0
+        # 1. BPM Detection Benchmark
+        t0 = time.perf_counter()
+        detect_window_tempo(data, sr)
+        t_bpm = time.perf_counter() - t0
 
-    # 3. Loudness Benchmark
-    t0 = time.perf_counter()
-    analyze_loudness(data, sr)
-    t_loudness = time.perf_counter() - t0
+        # 2. Key Detection Benchmark
+        t0 = time.perf_counter()
+        detect_window_key(data, sr)
+        t_key = time.perf_counter() - t0
+
+        # 3. Loudness Benchmark
+        t0 = time.perf_counter()
+        measure_program_loudness(audio_path)
+        t_loudness = time.perf_counter() - t0
 
     mem_end = process.memory_info().rss / (1024 * 1024)
 
