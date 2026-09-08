@@ -27,7 +27,9 @@ class Notification(Base):
     project_id: str = Column(
         String(36), ForeignKey("projects.id"), nullable=False, index=True
     )
-    user_id: str = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    user_id: str = Column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
     job_id: str | None = Column(
         String(36), ForeignKey("jobs.id"), nullable=True, index=True
     )

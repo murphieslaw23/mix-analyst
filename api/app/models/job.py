@@ -62,7 +62,9 @@ class Job(Base):
     batch_id: str | None = Column(
         String(36), ForeignKey("batches.id"), nullable=True, index=True
     )
-    job_type: JobType = Column(SQLEnum(JobType), default=JobType.ANALYSIS, nullable=False)
+    job_type: JobType = Column(
+        SQLEnum(JobType), default=JobType.ANALYSIS, nullable=False
+    )
     status: JobStatus = Column(
         SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True
     )
@@ -85,24 +87,33 @@ class Job(Base):
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="StageRun.started_at",
+        uselist=True,
     )
     attempts: list[JobAttempt] = relationship(
         "JobAttempt",
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="JobAttempt.attempt_number",
+        uselist=True,
     )
     outbox_messages: list[OutboxMessage] = relationship(
-        "OutboxMessage", back_populates="job", cascade="all, delete-orphan"
+        "OutboxMessage",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        uselist=True,
     )
     events: list[JobEvent] = relationship(
         "JobEvent",
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="JobEvent.sequence",
+        uselist=True,
     )
     notifications: list[Notification] = relationship(
-        "Notification", back_populates="job", cascade="all, delete-orphan"
+        "Notification",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        uselist=True,
     )
     batch: Batch | None = relationship("Batch", back_populates="jobs")
 

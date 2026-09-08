@@ -13,9 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     String,
 )
-from sqlalchemy import (
-    Enum as SQLEnum,
-)
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 
 from ..db.session import Base
@@ -60,7 +58,10 @@ class MediaAsset(Base):
     )
 
     mixes: list[Mix] = relationship(
-        "Mix", back_populates="media_asset", cascade="all, delete-orphan"
+        "Mix",
+        back_populates="media_asset",
+        cascade="all, delete-orphan",
+        uselist=True,
     )
 
 
@@ -151,11 +152,20 @@ class Mix(Base):
         cascade="all, delete-orphan",
     )
     track_segments: list[TrackSegment] = relationship(
-        "TrackSegment", back_populates="mix", cascade="all, delete-orphan"
+        "TrackSegment",
+        back_populates="mix",
+        cascade="all, delete-orphan",
+        uselist=True,
     )
     transitions: list[TransitionEvent] = relationship(
-        "TransitionEvent", back_populates="mix", cascade="all, delete-orphan"
+        "TransitionEvent",
+        back_populates="mix",
+        cascade="all, delete-orphan",
+        uselist=True,
     )
     artifacts: list[Artifact] = relationship(
-        "Artifact", back_populates="mix", cascade="all, delete-orphan"
+        "Artifact",
+        back_populates="mix",
+        cascade="all, delete-orphan",
+        uselist=True,
     )

@@ -19,7 +19,9 @@ class User(Base):
         nullable=False,
     )
 
-    projects: list[Project] = relationship("Project", back_populates="owner")
+    projects: list[Project] = relationship(
+        "Project", back_populates="owner", uselist=True
+    )
 
 
 class Project(Base):

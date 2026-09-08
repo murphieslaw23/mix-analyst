@@ -57,7 +57,7 @@ class Batch(Base):
     )
 
     jobs: list[Job] = relationship(
-        "Job", back_populates="batch", order_by="Job.created_at"
+        "Job", back_populates="batch", order_by="Job.created_at", uselist=True
     )
 
     @property
