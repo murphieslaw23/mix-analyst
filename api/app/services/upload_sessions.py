@@ -333,13 +333,13 @@ def finalize_upload(
                             file_size_bytes=upload.total_size_bytes,
                             sha256_hash=sha256_hash,
                             mime_type=upload.content_type,
-                            duration_seconds=probe_result.duration_seconds,
                             sample_rate=probe_result.sample_rate,
                             channels=probe_result.channels,
                             codec=probe_result.codec,
                             bit_rate=probe_result.bit_rate,
                             format_name=probe_result.format_name,
                         )
+                        media_asset.duration_seconds = probe_result.duration_seconds
                         db.add(media_asset)
                         db.flush()
                 except IntegrityError:

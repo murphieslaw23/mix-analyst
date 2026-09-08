@@ -80,10 +80,10 @@ def enqueue_job(
         project_id=principal.project_id,
         job_type=job_type,
         status=JobStatus.QUEUED,
-        progress_percent=0.0,
         current_stage="Queued",
         parameters=request.parameters,
     )
+    job.progress_percent = 0.0
     db.add(job)
     db.add(
         JobAttempt(
