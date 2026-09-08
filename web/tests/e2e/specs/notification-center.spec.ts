@@ -53,7 +53,7 @@ test.describe("Notification center", () => {
     });
 
     await page.goto("/more/notifications");
-    await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Notifications", exact: true })).toBeVisible();
     await expect(page.getByText("Unread", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Mark as read" }).click();
     await expect(page.getByText("Read", { exact: true })).toBeVisible();
