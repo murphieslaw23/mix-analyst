@@ -9,24 +9,6 @@ import { ProcessPage } from "../features/process/ProcessPage";
 import { AppShell } from "./AppShell";
 import { BATCHES_ROUTE, JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, NOTIFICATIONS_ROUTE, PROCESS_ROUTE } from "./routes";
 
-interface PlaceholderPageProps {
-  eyebrow: string;
-  title: string;
-  description: string;
-}
-
-function PlaceholderPage({ eyebrow, title, description }: PlaceholderPageProps) {
-  return (
-    <section className="route-page" aria-labelledby="page-heading">
-      <p className="eyebrow">{eyebrow}</p>
-      <h1 id="page-heading" tabIndex={-1}>
-        {title}
-      </h1>
-      <p className="route-page__description">{description}</p>
-    </section>
-  );
-}
-
 function MorePage() {
   return (
     <section className="route-page" aria-labelledby="page-heading">

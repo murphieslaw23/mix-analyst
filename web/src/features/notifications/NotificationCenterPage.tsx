@@ -12,7 +12,7 @@ export function NotificationCenterPage() {
       <h1 id="page-heading" tabIndex={-1}>Notifications</h1>
       <p className="route-page__description">Job results stay here until you dismiss them. Read and dismiss state is stored by the service, not just this browser tab.</p>
 
-      {problem ? <ErrorState actionLabel="Try again" message={problem.detail} onAction={retry} title={problem.title} /> : null}
+      {problem ? <ErrorState onRetry={retry} problem={problem} /> : null}
       {loading && items.length === 0 && !problem ? <section className="resource-state" aria-live="polite"><h2>Loading notifications</h2><p>Checking your durable job results.</p></section> : null}
       {!loading && !problem && items.length === 0 ? <section className="resource-state"><h2>No notifications yet</h2><p>Completed or failed jobs will appear here when there is something you need to review.</p></section> : null}
 
