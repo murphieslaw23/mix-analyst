@@ -8,7 +8,7 @@ import psutil
 import soundfile as sf
 
 from tests.fixtures.synthetic_audio import generate_synthetic_audio
-from worker.analysis.bpm_detector import detect_bpm
+from worker.analysis.bpm_detector import detect_window_tempo
 from worker.analysis.key_detector import detect_key_and_camelot
 from worker.analysis.loudness_analyzer import analyze_loudness
 
@@ -24,7 +24,7 @@ def benchmark_analysis_stages():
 
     # 1. BPM Detection Benchmark
     t0 = time.perf_counter()
-    detect_bpm(data, sr)
+    detect_window_tempo(data, sr)
     t_bpm = time.perf_counter() - t0
 
     # 2. Key Detection Benchmark
