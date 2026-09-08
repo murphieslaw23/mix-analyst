@@ -66,11 +66,15 @@ def recompute_batch_status(db: Session, batch_id: str) -> Batch:
     batch = db.get(Batch, batch_id)
     if batch is None:
         raise LookupError(f"Batch {batch_id} was not found")
-    counts = db.execute(
-        select(Job.status, func.count())
-        .where(Job.batch_id == batch_id)
-        .group_by(Job.status)
-    ).tuples().all()
+    counts = (
+        db.execute(
+            select(Job.status, func.count())
+            .where(Job.batch_id == batch_id)
+            .group_by(Job.status)
+        )
+        .tuples()
+        .all()
+    )
     apply_counts_to_batch(batch, counts)
     db.flush()
     return batch

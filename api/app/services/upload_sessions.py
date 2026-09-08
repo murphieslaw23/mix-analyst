@@ -263,9 +263,7 @@ def finalize_upload(
                 or promoted_asset.project_id != principal.project_id
                 or promoted_mix.project_id != principal.project_id
             ):
-                raise UploadLifecycleError(
-                    "Promoted upload references are unavailable"
-                )
+                raise UploadLifecycleError("Promoted upload references are unavailable")
             return FinalizedUpload(media_asset=promoted_asset, mix=promoted_mix)
         if (
             upload.promotion_state == "PENDING"
