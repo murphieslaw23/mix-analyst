@@ -12,6 +12,7 @@ from api.app.api.v1 import (
     metrics,
     mixes,
     notifications,
+    push,
     uploads,
 )
 from api.app.config import settings
@@ -47,6 +48,7 @@ app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
 app.include_router(
     notifications.router, prefix=settings.api_v1_prefix, tags=["notifications"]
 )
+app.include_router(push.router, prefix=settings.api_v1_prefix, tags=["push"])
 app.include_router(uploads.router, prefix=settings.api_v1_prefix, tags=["uploads"])
 app.include_router(
     mixes.router, prefix=f"{settings.api_v1_prefix}/mixes", tags=["mixes"]
