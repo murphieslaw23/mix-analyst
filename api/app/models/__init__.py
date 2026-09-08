@@ -1,21 +1,23 @@
-from api.app.models.analysis import AnalysisResult
-from api.app.models.artifact import Artifact
-from api.app.models.batch import Batch
-from api.app.models.broadcast import BroadcastSync
-from api.app.models.identity import Project, User
-from api.app.models.job import Job, JobAttempt, StageRun
-from api.app.models.job_event import JobEvent
-from api.app.models.mastering import MasteringJob, MasteringPreset
-from api.app.models.media import MediaAsset, Mix, UploadSession
-from api.app.models.notification import Notification
-from api.app.models.outbox import OutboxMessage
-from api.app.models.stems import StemJob
-from api.app.models.tracklist import TrackMatch, TrackSegment
-from api.app.models.transition import TransitionEvent
+from ..db.session import Base
+from .analysis import AnalysisResult
+from .artifact import Artifact
+from .batch import Batch
+from .broadcast import BroadcastSync
+from .identity import Project, User
+from .job import Job, JobAttempt, StageRun
+from .job_event import JobEvent
+from .mastering import MasteringJob, MasteringPreset
+from .media import MediaAsset, Mix, UploadSession
+from .notification import Notification
+from .outbox import OutboxMessage
+from .stems import StemJob
+from .tracklist import TrackMatch, TrackSegment
+from .transition import TransitionEvent
 
 __all__ = [
     "AnalysisResult",
     "Artifact",
+    "Base",
     "Batch",
     "BroadcastSync",
     "Job",
