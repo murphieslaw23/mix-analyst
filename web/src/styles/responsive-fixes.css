@@ -1,0 +1,29 @@
+/* Tablet is a distinct layout band: keep the mobile navigation until there is
+   enough horizontal room for the mechanical rail and large display type. */
+@media (min-width: 48rem) and (max-width: 63.99rem) {
+  .app-shell {
+    display: block;
+  }
+
+  .app-main {
+    padding: 2rem 2rem calc(var(--nav-height) + var(--space-6));
+  }
+
+  .side-rail,
+  .primary-nav--rail {
+    display: none;
+  }
+
+  .primary-nav--bottom {
+    display: grid;
+  }
+
+  .update-banner {
+    bottom: calc(var(--nav-height) + var(--space-3) + env(safe-area-inset-bottom));
+  }
+
+  h1 {
+    max-width: 100%;
+    font-size: clamp(3rem, 10vw, 5rem);
+  }
+}

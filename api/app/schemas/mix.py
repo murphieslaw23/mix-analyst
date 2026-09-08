@@ -1,7 +1,9 @@
-from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, List
+
+from pydantic import BaseModel
+
 from .analysis import AnalysisResultOut
+from .artifact import ArtifactOut
 
 
 class MediaAssetOut(BaseModel):
@@ -13,8 +15,8 @@ class MediaAssetOut(BaseModel):
     sample_rate: int
     channels: int
     codec: str
-    bit_rate: Optional[int] = None
-    format_name: Optional[str] = None
+    bit_rate: int | None = None
+    format_name: str | None = None
     created_at: datetime
 
     class Config:
@@ -24,22 +26,24 @@ class MediaAssetOut(BaseModel):
 class MixOut(BaseModel):
     id: str
     title: str
-    artist: Optional[str] = None
+    artist: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
     media_asset: MediaAssetOut
-    analysis_result: Optional[AnalysisResultOut] = None
+    analysis_result: AnalysisResultOut | None = None
+    artifacts: list[ArtifactOut] = []
+    suggested_download_name: str | None = None
 
     class Config:
         from_attributes = True
 
 
 class MixListResponse(BaseModel):
-    items: List[MixOut]
+    items: list[MixOut]
     total: int
 
 
 class MixUpdateRequest(BaseModel):
-    title: Optional[str] = None
-    artist: Optional[str] = None
+    title: str | None = None
+    artist: str | None = None

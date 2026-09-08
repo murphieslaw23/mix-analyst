@@ -1,16 +1,21 @@
+import uuid
+
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-import uuid
+
 from api.app.db.session import get_db
 from api.app.models.media import Media
 from api.app.schemas.sidechain import SidechainProcessRequest, SidechainProcessResponse
 from worker.analysis.dynamic_sidechain import DynamicSidechainDSP
-import numpy as np
 
 router = APIRouter()
 
+
 @router.post("/mastering/sidechain", response_model=SidechainProcessResponse)
-def apply_dynamic_sidechain(request: SidechainProcessRequest, db: Session = Depends(get_db)):
+def apply_dynamic_sidechain(
+    request: SidechainProcessRequest, db: Session = Depends(get_db)
+):
     """Apply automated kick/sub-bass sidechain ducking and phase alignment."""
     media = db.query(Media).filter(Media.id == request.media_id).first()
     if not media:
@@ -27,7 +32,7 @@ def apply_dynamic_sidechain(request: SidechainProcessRequest, db: Session = Depe
         bass_audio=synthetic_bass,
         sample_rate=sample_rate,
         threshold_db=request.threshold_db or -12.0,
-        max_ducking_db=request.max_ducking_db or 6.0
+        max_ducking_db=request.max_ducking_db or 6.0,
     )
 
     return SidechainProcessResponse(
@@ -38,5 +43,5 @@ def apply_dynamic_sidechain(request: SidechainProcessRequest, db: Session = Depe
         phase_correlation=result["phase_correlation"],
         max_gain_reduction_db=result["max_gain_reduction_db"],
         processed_bass_rms=result["processed_bass_rms"],
-        low_end_clarity_score=result["low_end_clarity_score"]
+        low_end_clarity_score=result["low_end_clarity_score"],
     )

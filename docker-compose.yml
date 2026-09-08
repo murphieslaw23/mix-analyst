@@ -23,7 +23,9 @@ services:
     image: redis:7-alpine
     container_name: mix-analyst-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # Redis carries Celery's broker state. Eviction can silently discard an
+    # accepted job, so apply backpressure rather than evicting queue entries.
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     healthcheck:
@@ -37,18 +39,98 @@ services:
   api:
     build:
       context: .
-      file: api/Dockerfile
+      dockerfile: api/Dockerfile
     container_name: mix-analyst-api
     restart: unless-stopped
     environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
       STORAGE_DIR: /storage
-      CORS_ORIGINS: '["http://localhost", "http://localhost:3000", "http://localhost:80", "https://syco23.org"]'
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-4294967296}
+      MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
+      MIN_STORAGE_FREE_BYTES: ${MIN_STORAGE_FREE_BYTES:-5368709120}
+      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
+      # Empty by default: metrics stay denied until operators explicitly opt in.
+      OPERATOR_USER_IDS: ${OPERATOR_USER_IDS:-}
+      # Browser traffic is served by the TLS ingress at one canonical origin.
+      # Local development uses Vite's same-origin proxy instead of broad CORS.
+      CORS_ORIGINS: '["https://${PUBLIC_ORIGIN:-localhost}"]'
     volumes:
       - storage_data:/storage
-    ports:
-      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    cpus: "1.0"
+    mem_limit: 1g
+    pids_limit: 256
+    networks:
+      - mix-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: mix-analyst-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-1}", "-Q", "analysis-cpu,dsp-heavy,metadata-network,exports"]
+    environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_DIR: /storage
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-4294967296}
+      MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
+      MIN_STORAGE_FREE_BYTES: ${MIN_STORAGE_FREE_BYTES:-5368709120}
+      UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
+    volumes:
+      - storage_data:/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # DSP is CPU and memory intensive. Scale this service horizontally rather
+    # than increasing concurrency inside a memory-capped container.
+    cpus: "2.0"
+    mem_limit: 6g
+    pids_limit: 256
+    stop_grace_period: 1m
+    networks:
+      - mix-network
+
+  outbox-dispatcher:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: mix-analyst-outbox-dispatcher
+    restart: unless-stopped
+    command: ["python", "-m", "worker.outbox_dispatcher"]
+    environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      STORAGE_DIR: /storage
+      OUTBOX_POLL_SECONDS: ${OUTBOX_POLL_SECONDS:-1}
+    volumes:
+      - storage_data:/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,15 +139,22 @@ services:
     networks:
       - mix-network
 
-  worker:
+  celery-beat:
     build:
       context: .
-      file: worker/Dockerfile
-    container_name: mix-analyst-worker
+      dockerfile: worker/Dockerfile
+    container_name: mix-analyst-celery-beat
     restart: unless-stopped
+    # A single dedicated scheduler dispatches trusted global maintenance. Do
+    # not run beat inside horizontally-scaled DSP workers.
+    command: ["celery", "-A", "worker.celery_app", "beat", "--loglevel=info"]
     environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
       STORAGE_DIR: /storage
     volumes:
       - storage_data:/storage
@@ -80,13 +169,36 @@ services:
   web:
     build:
       context: ./web
-      file: web/Dockerfile
+      dockerfile: web/Dockerfile
     container_name: mix-analyst-web
     restart: unless-stopped
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     depends_on:
       - api
+    networks:
+      - mix-network
+
+  # The only public-facing service. Caddy redirects clear-text HTTP for ACME
+  # and HTTPS upgrade; it never serves the application over HTTP.
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: mix-analyst-caddy
+    restart: unless-stopped
+    environment:
+      # Set this to the public DNS hostname before a production deployment.
+      # The localhost default is for local TLS smoke testing only.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
     networks:
       - mix-network
 
@@ -94,6 +206,8 @@ volumes:
   postgres_data:
   redis_data:
   storage_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   mix-network:

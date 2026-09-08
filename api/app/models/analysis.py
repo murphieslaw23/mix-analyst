@@ -1,44 +1,59 @@
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
 from sqlalchemy import (
     Column,
-    String,
-    Float,
     DateTime,
+    Float,
     ForeignKey,
+    String,
     Text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
+
+if TYPE_CHECKING:
+    from .media import Mix
 
 
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    mix_id = Column(String(36), ForeignKey("mixes.id"), nullable=False, unique=True, index=True)
-    media_asset_id = Column(String(36), ForeignKey("media_assets.id"), nullable=False)
+    id: str = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    mix_id: str = Column(
+        String(36), ForeignKey("mixes.id"), nullable=False, unique=True, index=True
+    )
+    media_asset_id: str = Column(
+        String(36), ForeignKey("media_assets.id"), nullable=False
+    )
 
     # Tempo / BPM
-    primary_bpm = Column(Float, nullable=False)
-    bpm_confidence = Column(Float, nullable=False)
-    bpm_candidates = Column(Text, nullable=True)  # JSON list of candidate hypotheses
+    primary_bpm: Mapped[float] = mapped_column(Float, nullable=False)
+    bpm_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    bpm_candidates: str | None = Column(Text, nullable=True)
 
     # Key / Camelot
-    detected_key = Column(String(50), nullable=False)
-    camelot_code = Column(String(10), nullable=False)
-    key_confidence = Column(Float, nullable=False)
+    detected_key: str = Column(String(50), nullable=False)
+    camelot_code: str = Column(String(10), nullable=False)
+    key_confidence: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Loudness / Dynamics (EBU R128)
-    integrated_lufs = Column(Float, nullable=False)
-    loudness_range_lra = Column(Float, nullable=False)
-    true_peak_db = Column(Float, nullable=False)
+    integrated_lufs: Mapped[float] = mapped_column(Float, nullable=False)
+    loudness_range_lra: Mapped[float] = mapped_column(Float, nullable=False)
+    true_peak_db: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Spectral & Quality Findings
-    spectral_summary = Column(Text, nullable=True)  # JSON map of frequency bands
-    quality_findings = Column(Text, nullable=True)  # JSON list of detected defects
+    spectral_summary: str | None = Column(Text, nullable=True)
+    quality_findings: str | None = Column(Text, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at: datetime = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
-    mix = relationship("Mix", back_populates="analysis_result")
+    mix: Mapped[Mix] = relationship("Mix", back_populates="analysis_result")

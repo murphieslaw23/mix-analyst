@@ -1,0 +1,7 @@
+# Development-only overlay. Do not use this file for a public deployment: it
+# deliberately exposes the API over loopback so Vite can proxy same-origin /api
+# calls while iterating locally.
+services:
+  api:
+    ports:
+      - "127.0.0.1:8000:8000"

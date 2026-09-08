@@ -1,6 +1,6 @@
-from pydantic import BaseModel
 from datetime import datetime
-from typing import List
+
+from pydantic import BaseModel
 
 
 class TransitionEventOut(BaseModel):
@@ -25,4 +25,4 @@ class TransitionEventOut(BaseModel):
 class TransitionListResponse(BaseModel):
     mix_id: str
     total_transitions: int
-    transitions: List[TransitionEventOut]
+    transitions: list[TransitionEventOut]

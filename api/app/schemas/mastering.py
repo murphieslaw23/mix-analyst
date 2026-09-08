@@ -1,35 +1,40 @@
 """Mastering Pydantic schemas."""
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel
+
 
 class MasteringPresetResponse(BaseModel):
     id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     target_lufs: float
     true_peak_ceiling: float
     target_lra: float
-    eq_settings: Dict[str, Any]
-    compressor_settings: Dict[str, Any]
+    eq_settings: dict[str, Any]
+    compressor_settings: dict[str, Any]
     is_builtin: bool
 
     class Config:
         from_attributes = True
 
+
 class MasteringTriggerRequest(BaseModel):
-    preset_id: Optional[str] = "sound_system_heavy"
-    target_lufs: Optional[float] = None
-    true_peak_ceiling: Optional[float] = None
+    preset_id: str | None = "sound_system_heavy"
+    target_lufs: float | None = None
+    true_peak_ceiling: float | None = None
+
 
 class MasteringReportResponse(BaseModel):
     job_id: str
     media_id: str
     status: str
-    preset_name: Optional[str] = None
-    input_measurements: Dict[str, Any]
-    output_measurements: Dict[str, Any]
+    preset_name: str | None = None
+    input_measurements: dict[str, Any]
+    output_measurements: dict[str, Any]
     gain_adjust_db: float
     compliance_passed: bool
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None

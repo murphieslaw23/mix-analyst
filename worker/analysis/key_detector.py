@@ -1,8 +1,9 @@
-import numpy as np
-import librosa
 import math
-from typing import List, Tuple, Dict, Any
 from collections import Counter
+from typing import Any
+
+import librosa
+import numpy as np
 
 # Krumhansl-Kessler Musical Pitch Profiles (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -10,22 +11,34 @@ MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.3
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 CAMELOT_MAP = {
-    "C major": "8B", "A minor": "8A",
-    "G major": "9B", "E minor": "9A",
-    "D major": "10B", "B minor": "10A",
-    "A major": "11B", "F# minor": "11A",
-    "E major": "12B", "C# minor": "12A",
-    "B major": "1B", "G# minor": "1A",
-    "F# major": "2B", "D# minor": "2A",
-    "C# major": "3B", "A# minor": "3A",
-    "G# major": "4B", "F minor": "4A",
-    "D# major": "5B", "C minor": "5A",
-    "A# major": "6B", "G minor": "6A",
-    "F major": "7B", "D minor": "7A",
+    "C major": "8B",
+    "A minor": "8A",
+    "G major": "9B",
+    "E minor": "9A",
+    "D major": "10B",
+    "B minor": "10A",
+    "A major": "11B",
+    "F# minor": "11A",
+    "E major": "12B",
+    "C# minor": "12A",
+    "B major": "1B",
+    "G# minor": "1A",
+    "F# major": "2B",
+    "D# minor": "2A",
+    "C# major": "3B",
+    "A# minor": "3A",
+    "G# major": "4B",
+    "F minor": "4A",
+    "D# major": "5B",
+    "C minor": "5A",
+    "A# major": "6B",
+    "G minor": "6A",
+    "F major": "7B",
+    "D minor": "7A",
 }
 
 
-def pearson_correlation(v1: List[float], v2: List[float]) -> float:
+def pearson_correlation(v1: list[float], v2: list[float]) -> float:
     n = len(v1)
     mean1 = sum(v1) / n
     mean2 = sum(v2) / n
@@ -39,7 +52,7 @@ def pearson_correlation(v1: List[float], v2: List[float]) -> float:
     return num / (den1 * den2)
 
 
-def detect_window_key(y: np.ndarray, sr: int) -> Tuple[str, str, float]:
+def detect_window_key(y: np.ndarray, sr: int) -> tuple[str, str, float]:
     """Detect key, Camelot code, and correlation confidence for an audio window."""
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     chroma_vector = np.mean(chroma, axis=1).tolist()
@@ -68,7 +81,9 @@ def detect_window_key(y: np.ndarray, sr: int) -> Tuple[str, str, float]:
     return best_key, camelot, confidence
 
 
-def aggregate_key_predictions(window_keys: List[Tuple[str, str, float]]) -> Dict[str, Any]:
+def aggregate_key_predictions(
+    window_keys: list[tuple[str, str, float]],
+) -> dict[str, Any]:
     """Aggregate window key detections into a consolidated key & Camelot prediction."""
     if not window_keys:
         return {"detected_key": "C major", "camelot_code": "8B", "key_confidence": 0.0}

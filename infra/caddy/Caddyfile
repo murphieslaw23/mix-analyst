@@ -1,0 +1,23 @@
+# PUBLIC_ORIGIN must be the canonical production hostname, for example
+# mix.example.com. Caddy obtains and renews the TLS certificate and redirects
+# clear-text requests; the application itself is only served over HTTPS.
+{$PUBLIC_ORIGIN:localhost} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	# Keep every browser-facing API, including upload and SSE routes, at the
+	# canonical same-origin /api path. Buffering is disabled for live events.
+	@api path /api/*
+	reverse_proxy @api api:8000 {
+		flush_interval -1
+	}
+
+	# The web container owns SPA fallback and immutable Vite asset headers.
+	reverse_proxy web:80
+}

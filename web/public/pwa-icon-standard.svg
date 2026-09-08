@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SYCO23 Mix Master speaker mark">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#24221f"/>
+      <stop offset=".48" stop-color="#101110"/>
+      <stop offset="1" stop-color="#050605"/>
+    </linearGradient>
+    <radialGradient id="cone"><stop stop-color="#2b2925"/><stop offset=".5" stop-color="#10110f"/><stop offset="1" stop-color="#030403"/></radialGradient>
+    <linearGradient id="rust" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fd8a31"/><stop offset=".5" stop-color="#c84910"/><stop offset="1" stop-color="#7f2308"/></linearGradient>
+  </defs>
+  <rect x="18" y="18" width="476" height="476" rx="76" fill="#080908"/>
+  <rect x="34" y="34" width="444" height="444" rx="61" fill="url(#plate)" stroke="#5c554a" stroke-width="4"/>
+  <path d="M111 84h290v344H111z" fill="#090a09" stroke="#393832" stroke-width="8"/>
+  <path d="M256 92v46M256 374v46" stroke="url(#rust)" stroke-width="8"/>
+  <circle cx="256" cy="255" r="142" fill="#090a09" stroke="#574f44" stroke-width="12"/>
+  <circle cx="256" cy="255" r="119" fill="url(#cone)" stroke="#201f1c" stroke-width="8"/>
+  <circle cx="256" cy="255" r="47" fill="#090a09" stroke="url(#rust)" stroke-width="8"/>
+  <circle cx="256" cy="255" r="18" fill="#c84910"/>
+  <g fill="#c7beb0" stroke="#090a09" stroke-width="5">
+    <circle cx="69" cy="69" r="13"/><circle cx="443" cy="69" r="13"/><circle cx="69" cy="443" r="13"/><circle cx="443" cy="443" r="13"/>
+  </g>
+  <path d="M195 396h122" stroke="#d8d1c5" stroke-width="7"/>
+</svg>

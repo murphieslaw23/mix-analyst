@@ -1,14 +1,20 @@
+from collections.abc import Callable
 from pathlib import Path
-from typing import Dict, Any, Callable, List
+from typing import Any
+
 import numpy as np
 
-from .window_planner import plan_analysis_windows
 from .audio_reader import read_audio_window
-from .bpm_detector import detect_window_tempo, aggregate_bpm_candidates
-from .key_detector import detect_window_key, aggregate_key_predictions
+from .bpm_detector import aggregate_bpm_candidates, detect_window_tempo
+from .fingerprinter import (
+    generate_audio_fingerprint,
+    partition_mix_segments,
+    query_acoustid_metadata,
+)
+from .key_detector import aggregate_key_predictions, detect_window_key
 from .loudness_analyzer import measure_program_loudness
-from .fingerprinter import partition_mix_segments, generate_audio_fingerprint, query_acoustid_metadata
 from .transition_detector import detect_transitions_between_segments
+from .window_planner import plan_analysis_windows
 
 
 class AudioAnalysisOrchestrator:
@@ -20,11 +26,15 @@ class AudioAnalysisOrchestrator:
         self.audio_path = audio_path
         self.duration_seconds = duration_seconds
 
-    def execute_pipeline(self, progress_callback: Callable[[float, str], None] = None) -> Dict[str, Any]:
+    def execute_pipeline(
+        self, progress_callback: Callable[[float, str], None] | None = None
+    ) -> dict[str, Any]:
         # 1. Window Planning
         if progress_callback:
             progress_callback(10.0, "Planning representative analysis matrix")
-        windows = plan_analysis_windows(self.duration_seconds, window_length_sec=30.0, max_windows=8)
+        windows = plan_analysis_windows(
+            self.duration_seconds, window_length_sec=30.0, max_windows=8
+        )
 
         # 2. Windowed Feature Extraction (BPM & Key)
         window_tempos = []
@@ -34,7 +44,9 @@ class AudioAnalysisOrchestrator:
         for idx, (offset, dur) in enumerate(windows):
             pct = 15.0 + (idx / len(windows)) * 30.0
             if progress_callback:
-                progress_callback(round(pct, 1), f"Analyzing audio slice {idx + 1}/{len(windows)}")
+                progress_callback(
+                    round(pct, 1), f"Analyzing audio slice {idx + 1}/{len(windows)}"
+                )
 
             try:
                 y, sr = read_audio_window(self.audio_path, offset, dur, target_sr=22050)
@@ -50,7 +62,7 @@ class AudioAnalysisOrchestrator:
                 # Key & Camelot
                 k_res = detect_window_key(y, sr)
                 window_keys.append(k_res)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a bad window must not abort whole-mix analysis.
                 print(f"Warning: Failed to process window at {offset}s: {e}")
 
         # 3. Aggregate Hypotheses
@@ -66,32 +78,48 @@ class AudioAnalysisOrchestrator:
 
         # 5. Track Segmentation & Fingerprinting Pass (Phase 4)
         if progress_callback:
-            progress_callback(72.0, "Segmenting track boundaries and extracting acoustic fingerprints")
+            progress_callback(
+                72.0, "Segmenting track boundaries and extracting acoustic fingerprints"
+            )
 
-        raw_segments = partition_mix_segments(self.duration_seconds, avg_track_length=240.0)
+        raw_segments = partition_mix_segments(
+            self.duration_seconds, avg_track_length=240.0
+        )
         analyzed_segments = []
 
         for seg in raw_segments:
-            sample_offset = seg["start_time_seconds"] + min(30.0, seg["duration_seconds"] * 0.2)
-            fp_data = generate_audio_fingerprint(self.audio_path, sample_offset, duration_seconds=60.0)
+            sample_offset = seg["start_time_seconds"] + min(
+                30.0, seg["duration_seconds"] * 0.2
+            )
+            fp_data = generate_audio_fingerprint(
+                self.audio_path, sample_offset, duration_seconds=60.0
+            )
             fingerprint_str = fp_data.get("fingerprint", "")
 
             # Attempt AcoustID lookup
-            metadata_match = query_acoustid_metadata(fingerprint_str, fp_data.get("duration", 60.0))
+            metadata_match = query_acoustid_metadata(
+                fingerprint_str, fp_data.get("duration", 60.0)
+            )
 
-            analyzed_segments.append({
-                "segment_index": seg["segment_index"],
-                "start_time_seconds": seg["start_time_seconds"],
-                "end_time_seconds": seg["end_time_seconds"],
-                "duration_seconds": seg["duration_seconds"],
-                "fingerprint": fingerprint_str[:128] if fingerprint_str else None,
-                "confidence": metadata_match.get("match_score", 0.75) if metadata_match else 0.65,
-                "match": metadata_match,
-            })
+            analyzed_segments.append(
+                {
+                    "segment_index": seg["segment_index"],
+                    "start_time_seconds": seg["start_time_seconds"],
+                    "end_time_seconds": seg["end_time_seconds"],
+                    "duration_seconds": seg["duration_seconds"],
+                    "fingerprint": fingerprint_str[:128] if fingerprint_str else None,
+                    "confidence": metadata_match.get("match_score", 0.75)
+                    if metadata_match
+                    else 0.65,
+                    "match": metadata_match,
+                }
+            )
 
         # 6. Transition & Cue Point Detection (Phase 5)
         if progress_callback:
-            progress_callback(85.0, "Detecting mix transitions, beatgrid crossovers, and cue points")
+            progress_callback(
+                85.0, "Detecting mix transitions, beatgrid crossovers, and cue points"
+            )
 
         transitions = detect_transitions_between_segments(
             analyzed_segments,
@@ -105,18 +133,22 @@ class AudioAnalysisOrchestrator:
 
         quality_findings = []
         if clipping_detected > 0:
-            quality_findings.append({
-                "type": "CLIPPING",
-                "severity": "WARNING" if clipping_detected <= 2 else "HIGH",
-                "description": f"Digital clipping/limiting detected in {clipping_detected} analysis window(s).",
-            })
+            quality_findings.append(
+                {
+                    "type": "CLIPPING",
+                    "severity": "WARNING" if clipping_detected <= 2 else "HIGH",
+                    "description": f"Digital clipping/limiting detected in {clipping_detected} analysis window(s).",
+                }
+            )
 
         if loudness_data["true_peak_db"] > -0.1:
-            quality_findings.append({
-                "type": "TRUE_PEAK_EXCEEDED",
-                "severity": "WARNING",
-                "description": f"True Peak ({loudness_data['true_peak_db']} dBTP) exceeds recommended -0.5 dBTP ceiling.",
-            })
+            quality_findings.append(
+                {
+                    "type": "TRUE_PEAK_EXCEEDED",
+                    "severity": "WARNING",
+                    "description": f"True Peak ({loudness_data['true_peak_db']} dBTP) exceeds recommended -0.5 dBTP ceiling.",
+                }
+            )
 
         spectral_summary = {
             "sub_bass_energy": "healthy",
