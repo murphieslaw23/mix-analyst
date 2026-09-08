@@ -1,12 +1,13 @@
-import { Navigate, createBrowserRouter } from "react-router-dom";
-import { LibraryPage } from "../features/library/LibraryPage";
-import { MixDetailPage } from "../features/library/MixDetailPage";
+import { Link, Navigate, createBrowserRouter } from "react-router-dom";
+import { BatchDetailPage } from "../features/batches/BatchDetailPage";
 import { JobDetailPage } from "../features/jobs/JobDetailPage";
 import { JobsPage } from "../features/jobs/JobsPage";
-import { BatchDetailPage } from "../features/batches/BatchDetailPage";
+import { LibraryPage } from "../features/library/LibraryPage";
+import { MixDetailPage } from "../features/library/MixDetailPage";
+import { NotificationCenterPage } from "../features/notifications/NotificationCenterPage";
 import { ProcessPage } from "../features/process/ProcessPage";
 import { AppShell } from "./AppShell";
-import { BATCHES_ROUTE, JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, PROCESS_ROUTE } from "./routes";
+import { BATCHES_ROUTE, JOBS_ROUTE, LIBRARY_ROUTE, MORE_ROUTE, NOTIFICATIONS_ROUTE, PROCESS_ROUTE } from "./routes";
 
 interface PlaceholderPageProps {
   eyebrow: string;
@@ -27,7 +28,18 @@ function PlaceholderPage({ eyebrow, title, description }: PlaceholderPageProps) 
 }
 
 function MorePage() {
-  return <PlaceholderPage description="Install controls, notification preferences, accessibility support, and privacy settings are planned for a future update." eyebrow="Coming next" title="More" />;
+  return (
+    <section className="route-page" aria-labelledby="page-heading">
+      <p className="eyebrow">Operations</p>
+      <h1 id="page-heading" tabIndex={-1}>More</h1>
+      <p className="route-page__description">Review durable job results and operational controls that do not belong in the primary mastering flow.</p>
+      <div className="resource-state">
+        <h2>Notification center</h2>
+        <p>Completed and failed jobs remain reviewable here until you dismiss them.</p>
+        <Link className="button button--secondary" to={NOTIFICATIONS_ROUTE}>Open notifications</Link>
+      </div>
+    </section>
+  );
 }
 
 export const router = createBrowserRouter([
@@ -41,6 +53,7 @@ export const router = createBrowserRouter([
       { path: LIBRARY_ROUTE, element: <LibraryPage /> },
       { path: `${LIBRARY_ROUTE}/:mixId`, element: <MixDetailPage /> },
       { path: MORE_ROUTE, element: <MorePage /> },
+      { path: NOTIFICATIONS_ROUTE, element: <NotificationCenterPage /> },
     ],
   },
   { path: "*", element: <Navigate replace to={PROCESS_ROUTE} /> },
