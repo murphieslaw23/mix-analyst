@@ -10,6 +10,7 @@ from .mastering import MasteringJob, MasteringPreset
 from .media import MediaAsset, Mix, UploadSession
 from .notification import Notification
 from .outbox import OutboxMessage
+from .push_subscription import PushDelivery, PushSubscription
 from .stems import StemJob
 from .tracklist import TrackMatch, TrackSegment
 from .transition import TransitionEvent
@@ -30,6 +31,8 @@ __all__ = [
     "Notification",
     "OutboxMessage",
     "Project",
+    "PushDelivery",
+    "PushSubscription",
     "StageRun",
     "StemJob",
     "TrackMatch",

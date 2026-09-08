@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { ErrorState } from "../../components/ui/ErrorState";
+import { PushSettings } from "./PushSettings";
 import { useNotifications } from "./useNotifications";
 
 export function NotificationCenterPage() {
@@ -11,6 +12,8 @@ export function NotificationCenterPage() {
       <p className="eyebrow">More / Notifications</p>
       <h1 id="page-heading" tabIndex={-1}>Notifications</h1>
       <p className="route-page__description">Job results stay here until you dismiss them. Read and dismiss state is stored by the service, not just this browser tab.</p>
+
+      <PushSettings />
 
       {problem ? <ErrorState onRetry={retry} problem={problem} /> : null}
       {loading && items.length === 0 && !problem ? <section className="resource-state" aria-live="polite"><h2>Loading notifications</h2><p>Checking your durable job results.</p></section> : null}

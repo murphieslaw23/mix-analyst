@@ -23,8 +23,6 @@ services:
     image: redis:7-alpine
     container_name: mix-analyst-redis
     restart: unless-stopped
-    # Redis carries Celery's broker state. Eviction can silently discard an
-    # accepted job, so apply backpressure rather than evicting queue entries.
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
@@ -45,6 +43,8 @@ services:
     environment:
       APP_ENV: production
       AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
+      PUSH_ENCRYPTION_KEY: ${PUSH_ENCRYPTION_KEY:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -54,10 +54,7 @@ services:
       MAX_CHUNK_SIZE_BYTES: ${MAX_CHUNK_SIZE_BYTES:-8388608}
       MIN_STORAGE_FREE_BYTES: ${MIN_STORAGE_FREE_BYTES:-5368709120}
       UPLOAD_SESSION_TTL_SECONDS: ${UPLOAD_SESSION_TTL_SECONDS:-86400}
-      # Empty by default: metrics stay denied until operators explicitly opt in.
       OPERATOR_USER_IDS: ${OPERATOR_USER_IDS:-}
-      # Browser traffic is served by the TLS ingress at one canonical origin.
-      # Local development uses Vite's same-origin proxy instead of broad CORS.
       CORS_ORIGINS: '["https://${PUBLIC_ORIGIN:-localhost}"]'
     volumes:
       - storage_data:/storage
@@ -104,8 +101,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # DSP is CPU and memory intensive. Scale this service horizontally rather
-    # than increasing concurrency inside a memory-capped container.
     cpus: "2.0"
     mem_limit: 6g
     pids_limit: 256
@@ -139,14 +134,34 @@ services:
     networks:
       - mix-network
 
+  push-dispatcher:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: mix-analyst-push-dispatcher
+    restart: unless-stopped
+    command: ["python", "-m", "worker.push_dispatcher"]
+    environment:
+      APP_ENV: production
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set to a non-default 32+ character secret}
+      PUSH_ENCRYPTION_KEY: ${PUSH_ENCRYPTION_KEY:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_CONTACT: ${VAPID_CONTACT:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
+      PUSH_POLL_SECONDS: ${PUSH_POLL_SECONDS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mix-network
+
   celery-beat:
     build:
       context: .
       dockerfile: worker/Dockerfile
     container_name: mix-analyst-celery-beat
     restart: unless-stopped
-    # A single dedicated scheduler dispatches trusted global maintenance. Do
-    # not run beat inside horizontally-scaled DSP workers.
     command: ["celery", "-A", "worker.celery_app", "beat", "--loglevel=info"]
     environment:
       APP_ENV: production
@@ -179,15 +194,11 @@ services:
     networks:
       - mix-network
 
-  # The only public-facing service. Caddy redirects clear-text HTTP for ACME
-  # and HTTPS upgrade; it never serves the application over HTTP.
   caddy:
     image: caddy:2.8-alpine
     container_name: mix-analyst-caddy
     restart: unless-stopped
     environment:
-      # Set this to the public DNS hostname before a production deployment.
-      # The localhost default is for local TLS smoke testing only.
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-localhost}
     ports:
       - "80:80"

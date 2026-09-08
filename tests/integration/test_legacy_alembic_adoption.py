@@ -51,9 +51,11 @@ def test_complete_pre_alembic_schema_is_stamped_then_upgraded(tmp_path):
         "artifacts",
         "job_events",
         "notifications",
+        "push_subscriptions",
+        "push_deliveries",
     }.issubset(set(inspector.get_table_names()))
     with engine.connect() as connection:
         revision = connection.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-    assert revision == "20260905_12_notifications"
+    assert revision == "20260908_13_push"

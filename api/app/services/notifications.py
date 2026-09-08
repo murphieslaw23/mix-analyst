@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..models.identity import Project
 from ..models.job import Job, JobStatus
 from ..models.notification import Notification
+from .push import queue_notification_deliveries
 
 _TERMINAL_KINDS: dict[JobStatus, str] = {
     JobStatus.SUCCEEDED: "job.succeeded",
@@ -44,12 +45,7 @@ def _notification_copy(kind: str, job: Job) -> tuple[str, str]:
 def create_job_notification(
     db: Session, job: Job, kind: str | None = None
 ) -> Notification:
-    """Create exactly one durable item for a terminal job outcome.
-
-    This function only flushes. Its caller owns the surrounding terminal job
-    transaction, so a committed notification always has a committed terminal
-    state/event and a rolled-back job has no stray user-facing item.
-    """
+    """Create one durable item and any derived Push deliveries in one transaction."""
     expected_kind = notification_kind_for_terminal_job(job)
     if kind is not None and kind != expected_kind:
         raise ValueError("Notification kind does not match the terminal job state")
@@ -59,6 +55,7 @@ def create_job_notification(
         select(Notification).where(Notification.dedupe_key == dedupe_key)
     )
     if existing is not None:
+        queue_notification_deliveries(db, existing)
         return existing
 
     owner_id = db.scalar(select(Project.owner_id).where(Project.id == job.project_id))
@@ -76,11 +73,10 @@ def create_job_notification(
         deep_link=f"/jobs/{job.id}",
     )
     try:
-        # The savepoint preserves the terminal transaction if another worker
-        # wins the unique-key race between the lookup and insert.
         with db.begin_nested():
             db.add(notification)
             db.flush()
+        queue_notification_deliveries(db, notification)
         return notification
     except IntegrityError:
         existing = db.scalar(
@@ -88,6 +84,7 @@ def create_job_notification(
         )
         if existing is None:
             raise
+        queue_notification_deliveries(db, existing)
         return existing
 
 
