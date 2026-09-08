@@ -15,9 +15,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy import (
-    Enum as SQLEnum,
-)
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 
 from ..db.session import Base
@@ -115,7 +113,9 @@ class JobAttempt(Base):
     id: str = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     job_id: str = Column(String(36), ForeignKey("jobs.id"), nullable=False, index=True)
     attempt_number: int = Column(Integer, default=1, nullable=False)
-    status: JobStatus = Column(SQLEnum(JobStatus), default=JobStatus.RUNNING, nullable=False)
+    status: JobStatus = Column(
+        SQLEnum(JobStatus), default=JobStatus.RUNNING, nullable=False
+    )
     worker_hostname: str | None = Column(String(255), nullable=True)
     # A worker lease is a fencing token, not merely a host name. A redelivered
     # task may reclaim an abandoned attempt after its lease expires, while an

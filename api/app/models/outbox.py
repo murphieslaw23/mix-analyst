@@ -34,6 +34,8 @@ class OutboxMessage(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    delivered_at: datetime | None = Column(DateTime(timezone=True), nullable=True, index=True)
+    delivered_at: datetime | None = Column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     job: Job = relationship("Job", back_populates="outbox_messages")

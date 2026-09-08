@@ -28,7 +28,9 @@ class Notification(Base):
         String(36), ForeignKey("projects.id"), nullable=False, index=True
     )
     user_id: str = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
-    job_id: str | None = Column(String(36), ForeignKey("jobs.id"), nullable=True, index=True)
+    job_id: str | None = Column(
+        String(36), ForeignKey("jobs.id"), nullable=True, index=True
+    )
     kind: str = Column(String(64), nullable=False)
     dedupe_key: str = Column(String(255), nullable=False)
     title: str = Column(String(255), nullable=False)

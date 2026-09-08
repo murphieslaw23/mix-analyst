@@ -15,6 +15,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+setattr(Base, "__allow_unmapped__", True)
 
 
 def get_db() -> Generator:
