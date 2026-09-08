@@ -27,7 +27,9 @@ class Settings(BaseSettings):
     # Web Push. Subscription secrets are encrypted before persistence. A
     # dedicated key is preferred; the deployment JWT secret is the fallback
     # root key so development fixtures do not require a second secret.
-    push_encryption_key: str | None = Field(None, validation_alias="PUSH_ENCRYPTION_KEY")
+    push_encryption_key: str | None = Field(
+        None, validation_alias="PUSH_ENCRYPTION_KEY"
+    )
     vapid_public_key: str | None = Field(None, validation_alias="VAPID_PUBLIC_KEY")
     vapid_private_key: str | None = Field(None, validation_alias="VAPID_PRIVATE_KEY")
     vapid_contact: str | None = Field(None, validation_alias="VAPID_CONTACT")

@@ -88,14 +88,14 @@ def create_push_subscription(
 ) -> PushSubscription:
     canonical = _canonical_subscription(subscription_json)
     endpoint_hash = hashlib.sha256(canonical["endpoint"].encode()).hexdigest()
-    encrypted_payload = _fernet().encrypt(
-        json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode()
-    ).decode("ascii")
+    encrypted_payload = (
+        _fernet()
+        .encrypt(json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode())
+        .decode("ascii")
+    )
 
     existing = db.scalar(
-        select(PushSubscription).where(
-            PushSubscription.endpoint_hash == endpoint_hash
-        )
+        select(PushSubscription).where(PushSubscription.endpoint_hash == endpoint_hash)
     )
     if existing is not None:
         if existing.user_id != user_id or existing.project_id != project_id:

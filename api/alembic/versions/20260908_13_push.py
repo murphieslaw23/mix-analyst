@@ -31,9 +31,13 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("endpoint_hash", name="uq_push_subscriptions_endpoint_hash"),
+        sa.UniqueConstraint(
+            "endpoint_hash", name="uq_push_subscriptions_endpoint_hash"
+        ),
     )
-    op.create_index("ix_push_subscriptions_project_id", "push_subscriptions", ["project_id"])
+    op.create_index(
+        "ix_push_subscriptions_project_id", "push_subscriptions", ["project_id"]
+    )
     op.create_index("ix_push_subscriptions_user_id", "push_subscriptions", ["user_id"])
     op.create_index("ix_push_subscriptions_active", "push_subscriptions", ["active"])
 
@@ -58,10 +62,16 @@ def upgrade() -> None:
             name="uq_push_deliveries_notification_subscription",
         ),
     )
-    op.create_index("ix_push_deliveries_notification_id", "push_deliveries", ["notification_id"])
-    op.create_index("ix_push_deliveries_subscription_id", "push_deliveries", ["subscription_id"])
+    op.create_index(
+        "ix_push_deliveries_notification_id", "push_deliveries", ["notification_id"]
+    )
+    op.create_index(
+        "ix_push_deliveries_subscription_id", "push_deliveries", ["subscription_id"]
+    )
     op.create_index("ix_push_deliveries_status", "push_deliveries", ["status"])
-    op.create_index("ix_push_deliveries_next_attempt_at", "push_deliveries", ["next_attempt_at"])
+    op.create_index(
+        "ix_push_deliveries_next_attempt_at", "push_deliveries", ["next_attempt_at"]
+    )
 
 
 def downgrade() -> None:
