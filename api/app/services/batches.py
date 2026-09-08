@@ -70,7 +70,7 @@ def recompute_batch_status(db: Session, batch_id: str) -> Batch:
         select(Job.status, func.count())
         .where(Job.batch_id == batch_id)
         .group_by(Job.status)
-    ).all()
+    ).tuples().all()
     apply_counts_to_batch(batch, counts)
     db.flush()
     return batch
@@ -201,13 +201,16 @@ def advance_batch_after_terminal_job(db: Session, job_id: str, project_id: str) 
     if batch is None:
         raise RuntimeError(f"Batch {job.batch_id} is outside project {project_id}")
     recompute_batch_status(db, batch.id)
-    running_count = db.scalar(
-        select(func.count())
-        .select_from(Job)
-        .where(
-            Job.batch_id == batch.id,
-            Job.status == JobStatus.RUNNING,
+    running_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.batch_id == batch.id,
+                Job.status == JobStatus.RUNNING,
+            )
         )
+        or 0
     )
     if running_count >= batch.max_parallelism:
         return

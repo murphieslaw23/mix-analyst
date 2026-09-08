@@ -64,7 +64,7 @@ def request_cancellation(db: Session, job: Job) -> Job:
     that state change, so replay always represents the winning terminal state.
     """
     finish_time = datetime.now(timezone.utc)
-    result = db.execute(
+    cancelled_job_id = db.execute(
         update(Job)
         .where(
             Job.id == job.id,
@@ -76,8 +76,9 @@ def request_cancellation(db: Session, job: Job) -> Job:
             error_message="Cancelled by user request",
             finished_at=finish_time,
         )
-    )
-    if result.rowcount != 1:
+        .returning(Job.id)
+    ).scalar_one_or_none()
+    if cancelled_job_id is None:
         db.refresh(job)
         return job
 

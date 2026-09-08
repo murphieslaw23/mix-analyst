@@ -12,7 +12,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
 
@@ -32,19 +32,19 @@ class AnalysisResult(Base):
     )
 
     # Tempo / BPM
-    primary_bpm: Mapped[float] = Column(Float, nullable=False)
-    bpm_confidence: Mapped[float] = Column(Float, nullable=False)
+    primary_bpm: Mapped[float] = mapped_column(Float, nullable=False)
+    bpm_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     bpm_candidates: str | None = Column(Text, nullable=True)
 
     # Key / Camelot
     detected_key: str = Column(String(50), nullable=False)
     camelot_code: str = Column(String(10), nullable=False)
-    key_confidence: Mapped[float] = Column(Float, nullable=False)
+    key_confidence: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Loudness / Dynamics (EBU R128)
-    integrated_lufs: Mapped[float] = Column(Float, nullable=False)
-    loudness_range_lra: Mapped[float] = Column(Float, nullable=False)
-    true_peak_db: Mapped[float] = Column(Float, nullable=False)
+    integrated_lufs: Mapped[float] = mapped_column(Float, nullable=False)
+    loudness_range_lra: Mapped[float] = mapped_column(Float, nullable=False)
+    true_peak_db: Mapped[float] = mapped_column(Float, nullable=False)
 
     # Spectral & Quality Findings
     spectral_summary: str | None = Column(Text, nullable=True)

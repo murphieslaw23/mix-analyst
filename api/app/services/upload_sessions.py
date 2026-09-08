@@ -255,10 +255,18 @@ def finalize_upload(
             and upload.media_asset_id
             and upload.mix_id
         ):
-            return FinalizedUpload(
-                media_asset=db.get(MediaAsset, upload.media_asset_id),
-                mix=db.get(Mix, upload.mix_id),
-            )
+            promoted_asset = db.get(MediaAsset, upload.media_asset_id)
+            promoted_mix = db.get(Mix, upload.mix_id)
+            if (
+                promoted_asset is None
+                or promoted_mix is None
+                or promoted_asset.project_id != principal.project_id
+                or promoted_mix.project_id != principal.project_id
+            ):
+                raise UploadLifecycleError(
+                    "Promoted upload references are unavailable"
+                )
+            return FinalizedUpload(media_asset=promoted_asset, mix=promoted_mix)
         if (
             upload.promotion_state == "PENDING"
             and upload.final_key
@@ -337,13 +345,14 @@ def finalize_upload(
                         db.add(media_asset)
                         db.flush()
                 except IntegrityError:
-                    media_asset = db.scalar(
+                    winner = db.scalar(
                         select(MediaAsset).where(MediaAsset.storage_path == final_key)
                     )
-                    if media_asset is None:
+                    if winner is None:
                         raise UploadLifecycleError(
                             "Final asset conflict could not be resolved"
                         ) from None
+                    media_asset = winner
             else:
                 media_asset = existing_asset
             mix = Mix(
@@ -386,18 +395,20 @@ def finalize_upload(
             raise UploadLifecycleError("Upload promotion state changed unexpectedly")
         if not storage.object_exists(final_key):
             raise UploadLifecycleError("Promoted upload object is unavailable")
-        mix = db.get(Mix, pending_mix_id)
-        media_asset = db.get(MediaAsset, pending_media_asset_id)
-        if mix is None or media_asset is None or mix.project_id != principal.project_id:
+        promoted_mix = db.get(Mix, pending_mix_id)
+        promoted_asset = db.get(MediaAsset, pending_media_asset_id)
+        if (
+            promoted_mix is None
+            or promoted_asset is None
+            or promoted_mix.project_id != principal.project_id
+            or promoted_asset.project_id != principal.project_id
+        ):
             raise UploadLifecycleError("Upload promotion references are unavailable")
-        mix.status = "ready"
+        promoted_mix.status = "ready"
         upload.status = UploadStatus.COMPLETED
         upload.promotion_state = "PROMOTED"
 
-    return FinalizedUpload(
-        media_asset=db.get(MediaAsset, pending_media_asset_id),
-        mix=db.get(Mix, pending_mix_id),
-    )
+    return FinalizedUpload(media_asset=promoted_asset, mix=promoted_mix)
 
 
 def cleanup_expired_uploads(

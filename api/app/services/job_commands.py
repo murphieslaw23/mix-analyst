@@ -276,13 +276,16 @@ def claim_job_attempt(
                 raise RuntimeError(
                     f"Batch {job.batch_id} for job {job_id} is outside project {project_id}"
                 )
-            running_count = db.scalar(
-                select(func.count())
-                .select_from(Job)
-                .where(
-                    Job.batch_id == batch.id,
-                    Job.status == JobStatus.RUNNING,
+            running_count = (
+                db.scalar(
+                    select(func.count())
+                    .select_from(Job)
+                    .where(
+                        Job.batch_id == batch.id,
+                        Job.status == JobStatus.RUNNING,
+                    )
                 )
+                or 0
             )
             if running_count >= batch.max_parallelism:
                 return None
@@ -367,12 +370,13 @@ def heartbeat_job_attempt(
     ]
     if not allow_expired:
         predicates.append(JobAttempt.lease_expires_at > current_time)
-    result = db.execute(
+    updated_attempt_id = db.execute(
         update(JobAttempt)
         .where(*predicates)
         .values(
             last_heartbeat_at=current_time,
             lease_expires_at=current_time + timedelta(seconds=lease_duration),
         )
-    )
-    return result.rowcount == 1
+        .returning(JobAttempt.id)
+    ).scalar_one_or_none()
+    return updated_attempt_id is not None

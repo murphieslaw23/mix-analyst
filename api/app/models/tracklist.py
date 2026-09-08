@@ -13,7 +13,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.orm import Mapped, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
 
@@ -27,11 +27,11 @@ class TrackSegment(Base):
     id: str = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     mix_id: str = Column(String(36), ForeignKey("mixes.id"), nullable=False, index=True)
     segment_index: int = Column(Integer, nullable=False)
-    start_time_seconds: Mapped[float] = Column(Float, nullable=False)
-    end_time_seconds: Mapped[float] = Column(Float, nullable=False)
-    duration_seconds: Mapped[float] = Column(Float, nullable=False)
+    start_time_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    end_time_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     fingerprint: str | None = Column(Text, nullable=True)
-    confidence: Mapped[float] = Column(Float, default=0.0, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     created_at: datetime = Column(
         DateTime(timezone=True),
@@ -65,7 +65,7 @@ class TrackMatch(Base):
     isrc: str | None = Column(String(50), nullable=True)
     acoustid_id: str | None = Column(String(100), nullable=True)
     musicbrainz_recording_id: str | None = Column(String(100), nullable=True)
-    match_score: Mapped[float] = Column(Float, nullable=False)
+    match_score: Mapped[float] = mapped_column(Float, nullable=False)
     source: str = Column(String(50), default="acoustid", nullable=False)
 
     created_at: datetime = Column(

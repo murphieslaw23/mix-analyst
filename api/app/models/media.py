@@ -14,7 +14,7 @@ from sqlalchemy import (
     String,
 )
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import Mapped, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
 
@@ -45,7 +45,7 @@ class MediaAsset(Base):
     file_size_bytes: int = Column(BigInteger, nullable=False)
     sha256_hash: str = Column(String(64), nullable=False, index=True)
     mime_type: str | None = Column(String(100), nullable=True)
-    duration_seconds: Mapped[float] = Column(Float, nullable=False)
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     sample_rate: int = Column(BigInteger, nullable=False)
     channels: int = Column(BigInteger, nullable=False)
     codec: str = Column(String(50), nullable=False)

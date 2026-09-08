@@ -3,7 +3,9 @@ import binascii
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping
 from datetime import datetime
+from typing import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -24,6 +26,16 @@ from ..deps import get_current_principal, require_owned_job, require_owned_mix
 router = APIRouter()
 
 
+class CursorPayload(TypedDict):
+    v: int
+    project_id: str
+    snapshot_created_at: str
+    snapshot_id: str
+    after_created_at: str
+    after_id: str
+    total: int
+
+
 def _cursor_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -31,7 +43,7 @@ def _cursor_error() -> HTTPException:
     )
 
 
-def _encode_cursor(payload: dict[str, object]) -> str:
+def _encode_cursor(payload: Mapping[str, object]) -> str:
     """Make an opaque, signed cursor that cannot be changed across projects."""
     encoded_payload = json.dumps(
         payload, sort_keys=True, separators=(",", ":")
@@ -42,7 +54,7 @@ def _encode_cursor(payload: dict[str, object]) -> str:
     return f"{base64.urlsafe_b64encode(encoded_payload).rstrip(b'=').decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
 
 
-def _decode_cursor(value: str, project_id: str) -> dict[str, object]:
+def _decode_cursor(value: str, project_id: str) -> CursorPayload:
     try:
         encoded_payload, encoded_signature = value.split(".", 1)
         payload_bytes = base64.urlsafe_b64decode(
@@ -86,9 +98,17 @@ def _decode_cursor(value: str, project_id: str) -> dict[str, object]:
             raise ValueError
         # fromisoformat is only validation here; SQLAlchemy receives the typed
         # timestamp below, never a user supplied raw cursor string.
-        datetime.fromisoformat(str(payload["snapshot_created_at"]))
-        datetime.fromisoformat(str(payload["after_created_at"]))
-        return payload
+        datetime.fromisoformat(payload["snapshot_created_at"])
+        datetime.fromisoformat(payload["after_created_at"])
+        return CursorPayload(
+            v=1,
+            project_id=project_id,
+            snapshot_created_at=payload["snapshot_created_at"],
+            snapshot_id=payload["snapshot_id"],
+            after_created_at=payload["after_created_at"],
+            after_id=payload["after_id"],
+            total=payload["total"],
+        )
     except (
         ValueError,
         TypeError,
@@ -154,15 +174,13 @@ def list_jobs(
         page_query = scoped
     else:
         snapshot_created_at = datetime.fromisoformat(
-            str(cursor_payload["snapshot_created_at"])
+            cursor_payload["snapshot_created_at"]
         )
-        after_created_at = datetime.fromisoformat(
-            str(cursor_payload["after_created_at"])
-        )
-        total = int(cursor_payload["total"])
+        after_created_at = datetime.fromisoformat(cursor_payload["after_created_at"])
+        total = cursor_payload["total"]
         page_query = scoped.where(
-            _before_or_equal(snapshot_created_at, str(cursor_payload["snapshot_id"])),
-            _strictly_before(after_created_at, str(cursor_payload["after_id"])),
+            _before_or_equal(snapshot_created_at, cursor_payload["snapshot_id"]),
+            _strictly_before(after_created_at, cursor_payload["after_id"]),
         )
 
     candidates = list(
@@ -189,19 +207,21 @@ def list_jobs(
     if len(candidates) <= limit or not jobs:
         return JobListResponse(items=jobs, total=total)
 
-    snapshot = jobs[0] if cursor_payload is None else None
+    if cursor_payload is None:
+        cursor_snapshot_created_at = jobs[0].created_at
+        cursor_snapshot_id = jobs[0].id
+    else:
+        cursor_snapshot_created_at = datetime.fromisoformat(
+            cursor_payload["snapshot_created_at"]
+        )
+        cursor_snapshot_id = cursor_payload["snapshot_id"]
+
     next_cursor = _encode_cursor(
         {
             "v": 1,
             "project_id": principal.project_id,
-            "snapshot_created_at": (
-                snapshot.created_at
-                if snapshot
-                else datetime.fromisoformat(str(cursor_payload["snapshot_created_at"]))
-            ).isoformat(),
-            "snapshot_id": snapshot.id
-            if snapshot
-            else str(cursor_payload["snapshot_id"]),
+            "snapshot_created_at": cursor_snapshot_created_at.isoformat(),
+            "snapshot_id": cursor_snapshot_id,
             "after_created_at": jobs[-1].created_at.isoformat(),
             "after_id": jobs[-1].id,
             "total": total,

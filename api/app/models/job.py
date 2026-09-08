@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import Mapped, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
 
@@ -68,7 +68,7 @@ class Job(Base):
     status: JobStatus = Column(
         SQLEnum(JobStatus), default=JobStatus.QUEUED, nullable=False, index=True
     )
-    progress_percent: Mapped[float] = Column(Float, default=0.0, nullable=False)
+    progress_percent: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     current_stage: str | None = Column(String(100), nullable=True)
     parameters: dict[str, Any] = Column(JSON, default=dict, nullable=False)
     celery_task_id: str | None = Column(String(100), nullable=True, index=True)
@@ -149,7 +149,7 @@ class StageRun(Base):
     status: StageStatus = Column(
         SQLEnum(StageStatus), default=StageStatus.PENDING, nullable=False
     )
-    progress_percent: Mapped[float] = Column(Float, default=0.0, nullable=False)
+    progress_percent: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     stage_output: str | None = Column(Text, nullable=True)
     error_message: str | None = Column(Text, nullable=True)
     started_at: datetime = Column(
