@@ -6,6 +6,8 @@ export type PlayerState = "idle" | "starting" | "playing" | "error";
 /**
  * A deliberately small native-audio wrapper. UI state is never optimistic:
  * `playing` is set only after the browser has resolved `audio.play()`.
+ * Protected artifact URLs are not prefetched because their capability is
+ * short-lived and the user gesture that requested playback should own loading.
  */
 export function usePlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -17,7 +19,7 @@ export function usePlayer() {
 
   useEffect(() => {
     const audio = new Audio();
-    audio.preload = "metadata";
+    audio.preload = "none";
     audioRef.current = audio;
     const stop = () => {
       activePlaybackRef.current = null;
@@ -79,9 +81,8 @@ export function usePlayer() {
     }
     if (request !== requestRef.current) return;
 
-    audio.pause();
+    if (!audio.paused) audio.pause();
     audio.src = resolvedUrl;
-    audio.load();
     try {
       await audio.play();
       if (request === requestRef.current) {
