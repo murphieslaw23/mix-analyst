@@ -40,7 +40,7 @@ jobs:
       - name: Install Python Dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff mypy pytest pytest-cov
+          pip install ruff 'mypy==1.10.1' pytest pytest-cov
           pip install -r api/requirements.txt
           pip install -r worker/requirements.txt
 
@@ -52,7 +52,7 @@ jobs:
       - name: Run MyPy Typecheck
         run: |
           cd api
-          mypy app --ignore-missing-imports
+          mypy app
 
       - name: Install Frontend Dependencies & Typecheck
         run: |
