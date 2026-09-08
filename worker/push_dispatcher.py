@@ -44,7 +44,7 @@ def dispatch_due_notifications() -> int:
             db.commit()
             processed += outcome.attempted
         return processed
-    except Exception:  # noqa: BLE001 - durable rows remain retryable after rollback.
+    except Exception:
         db.rollback()
         logger.exception("Push dispatcher pass failed")
         return processed

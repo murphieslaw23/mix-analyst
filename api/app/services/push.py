@@ -54,7 +54,7 @@ def _encryption_secret() -> str:
 
 def _fernet() -> Fernet:
     digest = hashlib.sha256(
-        f"mix-analyst:web-push:{_encryption_secret()}".encode("utf-8")
+        f"mix-analyst:web-push:{_encryption_secret()}".encode()
     ).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 
@@ -65,7 +65,7 @@ def _canonical_subscription(subscription_json: dict[str, Any]) -> dict[str, Any]
     if not isinstance(endpoint, str) or not endpoint.startswith("https://"):
         raise ValueError("Push endpoint must use HTTPS")
     if not isinstance(keys, dict):
-        raise ValueError("Push subscription keys are required")
+        raise TypeError("Push subscription keys are required")
     p256dh = keys.get("p256dh")
     auth = keys.get("auth")
     if not isinstance(p256dh, str) or not p256dh:
@@ -87,13 +87,15 @@ def create_push_subscription(
     subscription_json: dict[str, Any],
 ) -> PushSubscription:
     canonical = _canonical_subscription(subscription_json)
-    endpoint_hash = hashlib.sha256(canonical["endpoint"].encode("utf-8")).hexdigest()
+    endpoint_hash = hashlib.sha256(canonical["endpoint"].encode()).hexdigest()
     encrypted_payload = _fernet().encrypt(
-        json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode()
     ).decode("ascii")
 
     existing = db.scalar(
-        select(PushSubscription).where(PushSubscription.endpoint_hash == endpoint_hash)
+        select(PushSubscription).where(
+            PushSubscription.endpoint_hash == endpoint_hash
+        )
     )
     if existing is not None:
         if existing.user_id != user_id or existing.project_id != project_id:
@@ -120,7 +122,7 @@ def decrypt_push_subscription(subscription: PushSubscription) -> dict[str, Any]:
     payload = _fernet().decrypt(subscription.encrypted_payload.encode("ascii"))
     value = json.loads(payload)
     if not isinstance(value, dict):
-        raise ValueError("Stored Push subscription is invalid")
+        raise TypeError("Stored Push subscription is invalid")
     return value
 
 
