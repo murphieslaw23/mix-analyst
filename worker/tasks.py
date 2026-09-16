@@ -83,6 +83,7 @@ def run_analysis_pipeline(self, job_id: str):
                 {"id": job_id, "stage": stage_name, "pct": pct},
             )
             db.commit()
+            _stage_open(db, job_id, stage_name)
             publish_event(job_id, {
                 "job_id": job_id,
                 "status": "RUNNING",
@@ -246,6 +247,7 @@ def run_analysis_pipeline(self, job_id: str):
             {"id": job_id, "finish": finish_time},
         )
         db.commit()
+        _stage_close_all(db, job_id, True)
 
         publish_event(job_id, {
             "job_id": job_id,
@@ -270,6 +272,7 @@ def run_analysis_pipeline(self, job_id: str):
             {"id": job_id, "err": error_str, "finish": fail_time},
         )
         db.commit()
+        _stage_close_all(db, job_id, False)
 
         publish_event(job_id, {
             "job_id": job_id,
@@ -297,6 +300,34 @@ def _pipeline_mark_running(db, job_id: str, hostname: str, stage: str = "Initial
         {"id": job_id, "host": hostname, "now": now},
     )
     db.commit()
+    _stage_open(db, job_id, stage)
+
+
+def _stage_open(db, job_id: str, stage_name: str, version: str = "1.0.0") -> None:
+    """Close any running stage and open a new one, so stage_runs tells the truth."""
+    now = datetime.now(timezone.utc)
+    db.execute(
+        text("UPDATE stage_runs SET status = 'COMPLETED', finished_at = :now WHERE job_id = :id AND status = 'RUNNING'"),
+        {"id": job_id, "now": now},
+    )
+    db.execute(
+        text("""
+            INSERT INTO stage_runs (id, job_id, stage_name, stage_version, status, progress_percent, started_at)
+            VALUES (:id, :job, :name, :ver, 'RUNNING', 0.0, :now)
+        """),
+        {"id": str(uuid.uuid4()), "job": job_id, "name": stage_name[:100], "ver": version, "now": now},
+    )
+    db.commit()
+
+
+def _stage_close_all(db, job_id: str, ok: bool) -> None:
+    now = datetime.now(timezone.utc)
+    final = "COMPLETED" if ok else "FAILED"
+    db.execute(
+        text("UPDATE stage_runs SET status = :st, finished_at = :now WHERE job_id = :id AND status = 'RUNNING'"),
+        {"id": job_id, "st": final, "now": now},
+    )
+    db.commit()
 
 
 def _pipeline_progress(db, job_id: str, pct: float, stage: str) -> None:
@@ -305,6 +336,7 @@ def _pipeline_progress(db, job_id: str, pct: float, stage: str) -> None:
         {"id": job_id, "stage": stage, "pct": pct},
     )
     db.commit()
+    _stage_open(db, job_id, stage)
     publish_event(job_id, {
         "job_id": job_id,
         "status": "RUNNING",
@@ -326,6 +358,7 @@ def _pipeline_mark_finished(db, job_id: str, ok: bool, error: str | None = None)
         {"id": job_id, "st": final, "err": error, "finish": now},
     )
     db.commit()
+    _stage_close_all(db, job_id, ok)
     publish_event(job_id, {
         "job_id": job_id,
         "status": final,
@@ -649,9 +682,6 @@ def run_broadcast_render(self, job_id: str, mix_id: str, params: dict):
 
         _pipeline_mark_running(db, job_id, hostname, "Rendering 1080p broadcast")
 
-        filter_complex = FFmpegBroadcastCompositor.build_filter_complex(
-            title=title, artist=artist, bpm=bpm, camelot_key=camelot
-        )
         cmd = FFmpegBroadcastCompositor.build_ffmpeg_command(
             input_audio=str(in_abs), output_dest=str(out_abs),
             title=title, artist=artist, bpm=bpm, camelot_key=camelot,

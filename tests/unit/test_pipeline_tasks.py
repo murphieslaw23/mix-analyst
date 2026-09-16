@@ -1,6 +1,5 @@
 """Worker pipeline tasks against SQLite + tmp storage (no Postgres/Redis)."""
 import shutil
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import importlib.util
@@ -14,7 +13,7 @@ from worker.tasks import (
     run_stem_separation,
 )
 from api.app.models.broadcast import BroadcastSync
-from api.app.models.job import Job, JobStatus, JobType
+from api.app.models.job import Job, JobStatus, JobType, StageRun
 from api.app.models.mastering import MasteringJob
 from api.app.models.sidechain import SidechainJob
 from api.app.models.stems import StemJob
@@ -64,6 +63,9 @@ def test_run_mastering_pipeline_renders_real_master(env):
     assert row.input_lufs is not None and row.input_lufs < 0.0
     assert (env.storage / row.output_storage_path).is_file()
     assert env.db.query(Job).filter_by(id="j1").one().status == JobStatus.SUCCEEDED
+    stages = env.db.query(StageRun).filter_by(job_id="j1").all()
+    assert len(stages) >= 3
+    assert {s.status for s in stages} == {"COMPLETED"}
     assert env.events and env.events[-1]["status"] == "SUCCEEDED"
 
 
