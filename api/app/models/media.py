@@ -1,18 +1,23 @@
-import uuid
 import enum
+import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
 from sqlalchemy import (
-    Column,
-    String,
     BigInteger,
-    Float,
     DateTime,
     ForeignKey,
-    Enum as SQLEnum,
+    String,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
+
+if TYPE_CHECKING:
+    from .analysis import AnalysisResult
+    from .tracklist import TrackSegment
+    from .transition import TransitionEvent
 
 
 class UploadStatus(str, enum.Enum):
@@ -26,60 +31,82 @@ class UploadStatus(str, enum.Enum):
 class MediaAsset(Base):
     __tablename__ = "media_assets"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    original_filename = Column(String(255), nullable=False)
-    storage_path = Column(String(512), nullable=False, unique=True)
-    file_size_bytes = Column(BigInteger, nullable=False)
-    sha256_hash = Column(String(64), nullable=False, index=True)
-    mime_type = Column(String(100), nullable=True)
-    duration_seconds = Column(Float, nullable=False)
-    sample_rate = Column(BigInteger, nullable=False)
-    channels = Column(BigInteger, nullable=False)
-    codec = Column(String(50), nullable=False)
-    bit_rate = Column(BigInteger, nullable=True)
-    format_name = Column(String(50), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    original_filename: Mapped[str] = mapped_column(String(255))
+    storage_path: Mapped[str] = mapped_column(String(512), unique=True)
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256_hash: Mapped[str] = mapped_column(String(64), index=True)
+    mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    duration_seconds: Mapped[float] = mapped_column(nullable=False)
+    sample_rate: Mapped[int] = mapped_column(BigInteger)
+    channels: Mapped[int] = mapped_column(BigInteger)
+    codec: Mapped[str] = mapped_column(String(50))
+    bit_rate: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    format_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
-    mixes = relationship("Mix", back_populates="media_asset", cascade="all, delete-orphan")
+    mixes: Mapped[list["Mix"]] = relationship(
+        back_populates="media_asset", cascade="all, delete-orphan"
+    )
 
 
 class UploadSession(Base):
     __tablename__ = "upload_sessions"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    filename = Column(String(255), nullable=False)
-    total_size_bytes = Column(BigInteger, nullable=False)
-    bytes_received = Column(BigInteger, default=0, nullable=False)
-    chunk_size = Column(BigInteger, default=5 * 1024 * 1024, nullable=False)
-    sha256_hash = Column(String(64), nullable=True)
-    temp_path = Column(String(512), nullable=False)
-    status = Column(SQLEnum(UploadStatus), default=UploadStatus.PENDING, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    total_size_bytes: Mapped[int] = mapped_column(BigInteger)
+    bytes_received: Mapped[int] = mapped_column(BigInteger, default=0)
+    chunk_size: Mapped[int] = mapped_column(BigInteger, default=5 * 1024 * 1024)
+    sha256_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    temp_path: Mapped[str] = mapped_column(String(512))
+    status: Mapped[UploadStatus] = mapped_column(
+        SQLEnum(UploadStatus), default=UploadStatus.PENDING
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
     )
 
 
 class Mix(Base):
     __tablename__ = "mixes"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    title = Column(String(255), nullable=False)
-    artist = Column(String(255), nullable=True)
-    media_asset_id = Column(String(36), ForeignKey("media_assets.id"), nullable=False)
-    status = Column(String(50), default="ready", nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    title: Mapped[str] = mapped_column(String(255))
+    artist: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    media_asset_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("media_assets.id")
+    )
+    status: Mapped[str] = mapped_column(String(50), default="ready")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
     )
 
-    media_asset = relationship("MediaAsset", back_populates="mixes")
-    analysis_result = relationship("AnalysisResult", back_populates="mix", uselist=False, cascade="all, delete-orphan")
-    track_segments = relationship("TrackSegment", back_populates="mix", cascade="all, delete-orphan")
-    transitions = relationship("TransitionEvent", back_populates="mix", cascade="all, delete-orphan")
+    media_asset: Mapped["MediaAsset"] = relationship(back_populates="mixes")
+    analysis_result: Mapped["AnalysisResult | None"] = relationship(
+        back_populates="mix", uselist=False, cascade="all, delete-orphan"
+    )
+    track_segments: Mapped[list["TrackSegment"]] = relationship(
+        back_populates="mix", cascade="all, delete-orphan"
+    )
+    transitions: Mapped[list["TransitionEvent"]] = relationship(
+        back_populates="mix", cascade="all, delete-orphan"
+    )

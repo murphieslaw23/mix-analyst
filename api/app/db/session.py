@@ -1,7 +1,7 @@
+from collections.abc import Generator
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from typing import Generator
-import os
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from ..config import settings
 
@@ -14,7 +14,9 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Declarative base (subclass form, required by the mypy plugin)."""
 
 
 def get_db() -> Generator:
@@ -28,6 +30,7 @@ def get_db() -> Generator:
 
 def init_db() -> None:
     """Initialize database tables."""
-    import api.app.models  # noqa: F401 - imports register every model with Base.metadata
+    # Import registers every model on Base.metadata (intentional re-export).
+    from api.app import models as models  # noqa: PLC0414
 
     Base.metadata.create_all(bind=engine)
