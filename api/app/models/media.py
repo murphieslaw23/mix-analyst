@@ -80,3 +80,6 @@ class Mix(Base):
     )
 
     media_asset = relationship("MediaAsset", back_populates="mixes")
+    analysis_result = relationship("AnalysisResult", back_populates="mix", uselist=False, cascade="all, delete-orphan")
+    track_segments = relationship("TrackSegment", back_populates="mix", cascade="all, delete-orphan")
+    transitions = relationship("TransitionEvent", back_populates="mix", cascade="all, delete-orphan")

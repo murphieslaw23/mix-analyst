@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -37,14 +35,14 @@ services:
   api:
     build:
       context: .
-      file: api/Dockerfile
+      dockerfile: api/Dockerfile
     container_name: mix-analyst-api
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
-      STORAGE_DIR: /storage
-      CORS_ORIGINS: '["http://localhost", "http://localhost:3000", "http://localhost:80", "https://syco23.org"]'
+      STORAGE_ROOT: /storage
+      ALLOWED_ORIGINS: '["http://localhost", "http://localhost:3000", "http://localhost:80", "https://syco23.org"]'
     volumes:
       - storage_data:/storage
     ports:
@@ -60,13 +58,13 @@ services:
   worker:
     build:
       context: .
-      file: worker/Dockerfile
+      dockerfile: worker/Dockerfile
     container_name: mix-analyst-worker
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mixuser}:${POSTGRES_PASSWORD:-mixpassword}@postgres:5432/${POSTGRES_DB:-mixanalyst}
       REDIS_URL: redis://redis:6379/0
-      STORAGE_DIR: /storage
+      STORAGE_ROOT: /storage
     volumes:
       - storage_data:/storage
     depends_on:
@@ -80,7 +78,7 @@ services:
   web:
     build:
       context: ./web
-      file: web/Dockerfile
+      dockerfile: Dockerfile
     container_name: mix-analyst-web
     restart: unless-stopped
     ports:

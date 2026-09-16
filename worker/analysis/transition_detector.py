@@ -29,6 +29,50 @@ def evaluate_camelot_compatibility(key1: str, key2: str) -> str:
     return "HARMONIC_MODULATION"
 
 
+def classify_energy_shift(energy_delta: float) -> str:
+    """Classify a normalized energy change for the legacy transition API."""
+    if energy_delta >= 0.2:
+        return "build_up"
+    if energy_delta <= -0.2:
+        return "drop"
+    return "stable"
+
+
+def detect_transitions(
+    timestamps: np.ndarray,
+    energy_levels: List[float],
+    detected_tracks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Adapt legacy track/energy inputs to stable transition records."""
+    if len(detected_tracks) < 2:
+        return []
+
+    transitions = []
+    for index, (previous, following) in enumerate(zip(detected_tracks, detected_tracks[1:]), start=1):
+        boundary = float(following.get("start_time", previous.get("end_time", 0.0)))
+        start = max(0.0, boundary - 15.0)
+        end = boundary + 15.0
+        from_key = previous.get("camelot_key", "")
+        to_key = following.get("camelot_key", "")
+        relation = evaluate_camelot_compatibility(from_key, to_key)
+        compatibility = {
+            "PERFECT_MATCH": "exact",
+            "RELATIVE_KEY": "adjacent_minor",
+            "ENERGY_BOOST": "adjacent_major",
+            "ENERGY_DROP": "adjacent_major",
+        }.get(relation, "compatible")
+        transitions.append({
+            "transition_index": index,
+            "start_time": start,
+            "end_time": end,
+            "from_key": from_key,
+            "to_key": to_key,
+            "harmonic_compatibility": compatibility,
+            "energy_classification": classify_energy_shift(float(energy_levels[min(index, len(energy_levels) - 1)] - energy_levels[max(0, index - 1)])) if energy_levels else "stable",
+        })
+    return transitions
+
+
 def detect_transitions_between_segments(
     segments: List[Dict[str, Any]],
     primary_bpm: float = 120.0,

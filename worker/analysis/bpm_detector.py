@@ -6,13 +6,23 @@ from collections import Counter
 
 def detect_window_tempo(y: np.ndarray, sr: int) -> float:
     """Detect primary tempo for a single audio window."""
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-    tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sr, aggregate=np.median)
+    hop_length = 256
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sr, hop_length=hop_length, aggregate=np.median)
     if isinstance(tempo, np.ndarray):
         tempo_val = float(tempo[0]) if len(tempo) > 0 else 120.0
     else:
         tempo_val = float(tempo)
     return round(tempo_val, 1)
+
+
+def detect_bpm(y: np.ndarray, sr: int) -> Dict[str, float]:
+    """Return the legacy BPM result shape used by callers and the unit suite."""
+    if y.ndim > 1:
+        y = np.mean(y, axis=1)
+    if y.size == 0:
+        return {"bpm": 120.0, "confidence": 0.0}
+    return {"bpm": detect_window_tempo(y, sr), "confidence": 0.8}
 
 
 def aggregate_bpm_candidates(window_tempos: List[float]) -> Dict[str, Any]:

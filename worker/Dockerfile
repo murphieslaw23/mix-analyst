@@ -31,7 +31,7 @@ COPY tests/ /app/tests/
 ENV PATH=/home/appuser/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    STORAGE_DIR=/storage
+    STORAGE_ROOT=/storage
 
 RUN mkdir -p /storage && chown -R appuser:appuser /app /storage
 
