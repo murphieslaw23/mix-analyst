@@ -98,3 +98,12 @@ docker compose up --build -d
 - **FastAPI Backend**: `http://localhost:8000/docs`
 - **PostgreSQL**: `localhost:5432`
 - **Redis Queue**: `localhost:6379`
+
+---
+
+## 🔧 Pipeline Operations (PWA "Pipeline & Broadcast" Tab)
+
+- **Ingestion**: chunked upload with ffprobe validation; stale unfinished sessions auto-purge after `UPLOAD_EXPIRY_HOURS`.
+- **Jobs**: dispatch analysis, watch live SSE progress, cancel/retry. Queues: `analysis`, `mastering`, `stems`, `exports`.
+- **DSP**: two-pass loudness mastering (preset targets, downloadable master WAV), Demucs 4-stem separation **(optional worker extra: `torch` + `demucs`, excluded by default)**, kick/sub sidechain ducking (requires completed stems), 1080p FFmpeg broadcast render, AzuraCast sync.
+- **Auth**: reads are open; uploads, dispatches, triggers, sync and mix edits require `X-API-Key` when `API_KEYS` is set (empty = open single-user mode).

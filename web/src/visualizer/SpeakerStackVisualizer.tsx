@@ -86,11 +86,15 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
   const [rotation, setRotation] = useState<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0.15 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [hudTelemetry, setHudTelemetry] = useState({ subDb: -60, midDb: -60, highDb: -60, excursionMm: 0 });
-  
+  const [hudTelemetry, setHudTelemetry] = useState({ subDb: -60, midDb: -60, highDb: -60, excursionMm: 0, fps: 0, eco: false });
+
   const autoOrbitYawRef = useRef<number>(0);
   const lastHudUpdateRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(performance.now());
+  const fpsEmaRef = useRef<number>(0);
+  const lowFpsTimeRef = useRef<number>(0);
+  const recoverTimeRef = useRef<number>(0);
+  const degradedRef = useRef<boolean>(false);
 
   // Generate Stack geometry based on selected architecture
   const boxes = useMemo<SpeakerBox[]>(() => {
@@ -193,6 +197,26 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
       const delta = (now - lastTimeRef.current) / 1000;
       lastTimeRef.current = now;
 
+      // Frame-rate meter with exponential smoothing + auto-degrade for weak GPUs.
+      const instantFps = 1 / Math.max(delta, 1e-3);
+      fpsEmaRef.current = fpsEmaRef.current === 0 ? instantFps : fpsEmaRef.current * 0.9 + instantFps * 0.1;
+      const ema = fpsEmaRef.current;
+      if (!degradedRef.current && ema > 0 && ema < 28) {
+        lowFpsTimeRef.current += delta;
+        if (lowFpsTimeRef.current > 2) degradedRef.current = true;
+      } else if (degradedRef.current && ema > 50) {
+        recoverTimeRef.current += delta;
+        if (recoverTimeRef.current > 5) {
+          degradedRef.current = false;
+          lowFpsTimeRef.current = 0;
+          recoverTimeRef.current = 0;
+        }
+      } else {
+        lowFpsTimeRef.current = 0;
+        recoverTimeRef.current = 0;
+      }
+      const degraded = degradedRef.current;
+
       // Resize handling
       const width = (canvas.width = canvas.parentElement?.clientWidth || 800);
       const height = (canvas.height = canvas.parentElement?.clientHeight || 480);
@@ -236,6 +260,8 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
           midDb: Math.round(midEnergy * 60 - 60),
           highDb: Math.round(highEnergy * 60 - 60),
           excursionMm: parseFloat(excursion.toFixed(1)),
+          fps: Math.round(fpsEmaRef.current),
+          eco: degradedRef.current,
         });
       }
 
@@ -243,20 +269,23 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
       ctx.fillStyle = '#0a0a0c';
       ctx.fillRect(0, 0, width, height);
 
-      // Radial stage glow reacting to sub hits
       const palette = THEME_PALETTES[settings.theme];
-      const stageGlow = ctx.createRadialGradient(
-        width / 2,
-        height * 0.65,
-        10,
-        width / 2,
-        height * 0.65,
-        width * 0.6
-      );
-      stageGlow.addColorStop(0, palette.glow);
-      stageGlow.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = stageGlow;
-      ctx.fillRect(0, 0, width, height);
+
+      // Radial stage glow reacting to sub hits (skipped in ECO mode)
+      if (!degraded) {
+        const stageGlow = ctx.createRadialGradient(
+          width / 2,
+          height * 0.65,
+          10,
+          width / 2,
+          height * 0.65,
+          width * 0.6
+        );
+        stageGlow.addColorStop(0, palette.glow);
+        stageGlow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = stageGlow;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       // Grid Floor Projection
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
@@ -377,8 +406,21 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
         }
       });
 
-      // Strobe Trigger Flash
-      if (subEnergy > settings.strobeSensitivity && isPlaying) {
+      // Atmospheric haze band reacting to high-frequency energy
+      if (settings.atmosphericHaze && !degraded && highEnergy > 0.02) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(0.35, highEnergy * 0.5);
+        const haze = ctx.createLinearGradient(0, 0, 0, height);
+        haze.addColorStop(0.25, 'rgba(0,0,0,0)');
+        haze.addColorStop(0.55, palette.primary);
+        haze.addColorStop(0.8, 'rgba(0,0,0,0)');
+        ctx.fillStyle = haze;
+        ctx.fillRect(0, height * 0.25, width, height * 0.55);
+        ctx.restore();
+      }
+
+      // Strobe Trigger Flash (skipped in ECO mode)
+      if (!degraded && subEnergy > settings.strobeSensitivity && isPlaying) {
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.35, (subEnergy - settings.strobeSensitivity) * 0.9)})`;
         ctx.fillRect(0, 0, width, height);
       }
@@ -428,6 +470,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
           <span>SUB: {hudTelemetry.subDb} dB</span>
           <span>MID: {hudTelemetry.midDb} dB</span>
           <span>EXCURSION: {hudTelemetry.excursionMm} mm</span>
+          <span data-testid="stack-fps">{hudTelemetry.fps} FPS{hudTelemetry.eco ? ' · ECO' : ''}</span>
         </div>
       </div>
 

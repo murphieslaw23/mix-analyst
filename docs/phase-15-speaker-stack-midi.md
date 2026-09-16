@@ -88,9 +88,9 @@ Still open before calling Phase 15 done:
 ## Operational notes
 
 - Do not treat the HUD dB figures as calibrated measurements; they are display values derived from normalized FFT magnitudes.
-- The renderer currently updates React telemetry state in its animation loop. Throttle HUD state updates or render telemetry directly to the canvas if frame-time profiling shows UI churn on mobile devices.
-- The `atmosphericHaze` setting is declared but not consumed by the renderer; either implement it or remove it from the public settings contract.
-- The `masterVolume`, `filterCutoff`, and note-action parameters are emitted by the MIDI hook but have no integration target in the committed application yet.
+- The HUD frame counter shows smoothed rAF FPS. Sustained operation below ~28 FPS engages ECO mode (badge in the HUD): the stage-glow gradient and strobe flash are skipped until FPS recovers above ~50 for 5 s. If ECO engages on target hardware, reduce canvas pixel ratio or rig complexity before a show.
+- `atmosphericHaze` is implemented as a high-energy-reactive haze band (single gradient fill per frame, skipped in ECO mode).
+- `masterVolume` drives the player element volume; `filterCutoff` is emitted by the MIDI hook but has no DSP target in the player yet.
 - Prefer WebGL/Three.js or a carefully profiled custom WebGL renderer if the visualizer must scale to richer meshes, textures, post-processing, or low-power mobile hardware.
 
 ## Acceptance checklist
@@ -101,5 +101,36 @@ Still open before calling Phase 15 done:
 - [ ] At least one physical controller is verified via MIDI Learn
 - [ ] MIDI CC values produce the intended visual or playback changes
 - [x] Note triggers are debounced and do not fire on note-off
+- [x] HUD shows live FPS with ECO auto-degrade; atmospheric haze implemented
+- [x] MIDI Learn arm/cancel covered by E2E (hardware mapping stays manual)
 - [x] Typecheck, production build, and Phase 15 Playwright test pass
 - [ ] Chromium desktop and mobile/responsive behavior are manually checked
+
+## Hardware verification procedure (physical controller)
+
+Automated tests cannot touch real MIDI hardware, so verify by hand once per
+controller family before relying on it during a broadcast:
+
+1. Serve the PWA over `https://` or `http://localhost` (Web MIDI is blocked on
+   insecure origins) in Chrome/Edge/Opera. Open `Pipeline & Broadcast` → play
+   any mix so the visualizer runs.
+2. Open MIDI Hardware Settings from the header badge. Confirm the controller
+   appears under DETECTED MIDI HARDWARE; select it (or keep "Listen on All").
+3. Apply the matching preset (Pioneer DDJ / Traktor Kontrol / Akai APC /
+   Generic 8-Knob). Twist each mapped knob and confirm the LIVE MIDI SIGNAL
+   MONITOR shows `TYPE: CC` with the expected `NUM`.
+4. For any control that does nothing, use MIDI LEARN on that row, actuate the
+   control, and confirm the row shows the new `CC #n`. Mappings persist per
+   browser origin under `syco23_midi_mapping`.
+5. Confirm end-to-end effect: sub knob moves SUB EXCURSION SCALE, orbit knob
+   changes Orbit Speed, volume knob changes player volume.
+6. Press the mapped Play pad/note: playback toggles exactly once (250 ms
+   debounce). Press cue pads: position jumps to the adjacent cue.
+7. Soak-test 10 minutes: no stuck notes, no runaway orbit, no ECO badge on
+   the show machine (if ECO appears, lower canvas load before the show).
+
+Troubleshooting: no devices listed → check OS-level MIDI permissions and that
+no DAW holds the port exclusively; notes double-fire → re-learn (some pads
+send on multiple channels); Safari/Firefox → unsupported by design, use a
+Chromium browser; values jump → confirm the preset matches the controller
+mode/firmware, then MIDI Learn the real CC numbers.

@@ -29,6 +29,9 @@ test.describe('Phase 15: 3D Speaker-Stack Visualizer & Web MIDI Hardware Integra
 
     const hudHeader = page.locator('text=SYCO23 // 3D STACK RIG');
     await expect(hudHeader).toBeVisible();
+
+    // Frame-rate meter runs in the HUD (ECO badge appears only under sustained load).
+    await expect(page.getByTestId('stack-fps')).toContainText(/\d+ FPS/);
   });
 
   test('renders an audio element for the selected mix', async ({ page }) => {
@@ -104,5 +107,21 @@ test.describe('Phase 15: 3D Speaker-Stack Visualizer & Web MIDI Hardware Integra
     const closeBtn = page.locator('button:has-text("DONE / SAVE")');
     await closeBtn.click();
     await expect(modalOverlay).not.toBeVisible();
+  });
+
+  test('MIDI Learn arms and cancels without hardware attached', async ({ page }) => {
+    await page.getByTestId('open-midi-modal-btn').click();
+    const overlay = page.getByTestId('midi-modal-overlay');
+    await expect(overlay).toBeVisible();
+
+    await page.locator('button:has-text("MIDI LEARN")').first().click();
+    const arming = page.locator('button:has-text("PRESS KNOB/PAD...")');
+    await expect(arming).toBeVisible();
+
+    await arming.click();
+    await expect(page.locator('button:has-text("MIDI LEARN")').first()).toBeVisible();
+
+    await page.locator('button:has-text("DONE / SAVE")').click();
+    await expect(overlay).not.toBeVisible();
   });
 });
