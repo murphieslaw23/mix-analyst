@@ -51,6 +51,42 @@ interface MixData {
   }>;
 }
 
+// Backend contracts: GET /mixes returns {total, items[]} with nested
+// media_asset/analysis_result, GET /mixes/{id} returns the same field names
+// flattened (see api/app/schemas/mix.py MixDetailOut). E2E fixtures and
+// older payloads may already be flat arrays — accept every known shape.
+const normalizeMixListItem = (raw: any): MixData => ({
+  id: raw.id,
+  original_filename: raw.original_filename ?? raw.media_asset?.original_filename ?? 'unknown-mix',
+  title: raw.title,
+  duration_seconds: raw.duration_seconds ?? raw.media_asset?.duration_seconds,
+  bpm: raw.bpm ?? raw.analysis_result?.primary_bpm,
+  audio_url: raw.audio_url,
+});
+
+const normalizeMixDetail = (raw: any): MixData => ({
+  ...normalizeMixListItem(raw),
+  audio_url: raw.audio_url ?? raw.audio,
+  tracks: (raw.tracks ?? []).map((t: any) => ({
+    id: t.id,
+    title: t.title ?? t.name,
+    artist: t.artist,
+    start_time: t.start_time ?? t.start_time_seconds ?? 0,
+    end_time: t.end_time ?? t.end_time_seconds,
+    bpm: t.bpm,
+    camelot_key: t.camelot_key,
+  })),
+  transitions: (raw.transitions ?? []).map((tr: any) => ({
+    id: tr.id,
+    start_time: tr.start_time ?? tr.start_time_seconds ?? 0,
+    end_time: tr.end_time ?? tr.end_time_seconds,
+    transition_type: tr.transition_type,
+    from_key: tr.from_key,
+    to_key: tr.to_key,
+    harmonic_compatibility: tr.harmonic_compatibility ?? tr.camelot_compatibility,
+  })),
+});
+
 export const App: React.FC = () => {
   const [mixes, setMixes] = useState<MixData[]>([]);
   const [selectedMix, setSelectedMix] = useState<MixData | null>(null);
@@ -221,9 +257,12 @@ export const App: React.FC = () => {
   const fetchMixes = async () => {
     try {
       const res = await axios.get(`${API_BASE}/mixes`);
-      setMixes(res.data || []);
-      if (res.data && res.data.length > 0 && !selectedMix) {
-        handleMixSelect(res.data[0].id);
+      const payload = res.data;
+      const rawItems = Array.isArray(payload) ? payload : payload?.items ?? [];
+      const items = rawItems.map(normalizeMixListItem);
+      setMixes(items);
+      if (items.length > 0 && !selectedMix) {
+        handleMixSelect(items[0].id);
       }
     } catch {
       setMixes([
@@ -256,7 +295,7 @@ export const App: React.FC = () => {
   const handleMixSelect = async (mixId: string) => {
     try {
       const res = await axios.get(`${API_BASE}/mixes/${mixId}`);
-      setSelectedMix(res.data);
+      setSelectedMix(normalizeMixDetail(res.data));
       setCurrentTime(0);
       setIsPlaying(false);
       if (audioRef.current) {
@@ -670,6 +709,7 @@ export const App: React.FC = () => {
                         <div className="flex items-center gap-3">
                           <button
                             onClick={togglePlayback}
+                            data-testid="play-pause-btn"
                             className={`px-4 py-1.5 rounded font-bold transition ${
                               isDark ? 'bg-[#252834] hover:bg-[#323646] text-white' : 'bg-[#e5e7eb] hover:bg-[#d1d5db] text-black'
                             }`}
