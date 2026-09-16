@@ -1,11 +1,10 @@
 """FastAPI router for audio mastering and loudness reports."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-import uuid
 from typing import List
 from api.app.db.session import get_db
-from api.app.models.media import Media
-from api.app.models.mastering import MasteringPreset, MasteringJob
+from api.app.models.media import Mix
+from api.app.models.mastering import MasteringJob
 from api.app.schemas.mastering import MasteringPresetResponse, MasteringTriggerRequest, MasteringReportResponse
 from worker.analysis.mastering_engine import DEFAULT_PRESETS
 
@@ -32,44 +31,20 @@ def get_mastering_presets():
 @router.post("/mixes/{mix_id}/master", response_model=MasteringReportResponse)
 def trigger_mix_mastering(mix_id: str, request: MasteringTriggerRequest, db: Session = Depends(get_db)):
     """Trigger two-pass mastering on mix."""
-    media = db.query(Media).filter(Media.id == mix_id).first()
+    media = db.query(Mix).filter(Mix.id == mix_id).first()
     if not media:
         raise HTTPException(status_code=404, detail="Mix not found")
 
-    preset_key = request.preset_id or "sound_system_heavy"
-    preset = DEFAULT_PRESETS.get(preset_key, DEFAULT_PRESETS["sound_system_heavy"])
-
-    # Register mastering job
-    job = MasteringJob(
-        id=str(uuid.uuid4()),
-        media_id=mix_id,
-        preset_id=preset_key,
-        status="completed",
-        input_lufs=-18.5,
-        input_true_peak=-0.5,
-        output_lufs=preset["target_lufs"],
-        output_true_peak=preset["true_peak_ceiling"],
-        output_storage_path=f"/storage/mastered/{mix_id}_master.wav",
-        metrics={
-            "gain_adjust_db": round(preset["target_lufs"] - (-18.5), 2),
-            "compliance_passed": True
-        }
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-
-    return MasteringReportResponse(
-        job_id=job.id,
-        media_id=mix_id,
-        status=job.status,
-        preset_name=preset["name"],
-        input_measurements={"integrated_lufs": -18.5, "true_peak_db": -0.5},
-        output_measurements={"integrated_lufs": preset["target_lufs"], "true_peak_db": preset["true_peak_ceiling"]},
-        gain_adjust_db=round(preset["target_lufs"] - (-18.5), 2),
-        compliance_passed=True,
-        created_at=job.created_at,
-        completed_at=job.created_at
+    # The offline TwoPassMasteringEngine exists in the worker, but no Celery
+    # task consumes it yet. Returning a fabricated "completed" report here
+    # would lie to operators, so fail loudly until the pipeline is wired.
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Mastering pipeline not implemented: no worker task consumes "
+            "TwoPassMasteringEngine yet. Track real MasteringJob rows via "
+            "GET /mixes/{mix_id}/mastering-report once the pipeline lands."
+        ),
     )
 
 @router.get("/mixes/{mix_id}/mastering-report", response_model=MasteringReportResponse)

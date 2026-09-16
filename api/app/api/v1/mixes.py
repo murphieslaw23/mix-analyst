@@ -1,19 +1,41 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 import json
 
 from ...db.session import get_db
+from ...config import settings
 from ...models.media import Mix
 from ...models.analysis import AnalysisResult
 from ...models.tracklist import TrackSegment, TrackMatch
 from ...models.transition import TransitionEvent
-from ...schemas.mix import MixOut, MixListResponse, MixUpdateRequest
+from ...schemas.mix import (
+    MixOut,
+    MixDetailOut,
+    MixListResponse,
+    MixUpdateRequest,
+    MixTrackOut,
+    MixTransitionOut,
+)
 from ...schemas.analysis import AnalysisResultOut
 from ...schemas.tracklist import TracklistResponse
 from ...schemas.transition import TransitionListResponse, TransitionEventOut
+from ...services.storage import StorageService
 
 router = APIRouter()
+
+AUDIO_MEDIA_TYPES = {
+    ".wav": "audio/wav",
+    ".wave": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".opus": "audio/ogg",
+}
 
 
 @router.get("", response_model=MixListResponse)
@@ -23,13 +45,96 @@ def list_mixes(db: Session = Depends(get_db)):
     return MixListResponse(total=len(mixes), items=mixes)
 
 
-@router.get("/{mix_id}", response_model=MixOut)
+def _build_mix_detail(mix: Mix, db: Session) -> MixDetailOut:
+    """Assemble the full PWA payload: metadata, audio URL, cues, transitions."""
+    asset = mix.media_asset
+    analysis = db.query(AnalysisResult).filter(AnalysisResult.mix_id == mix.id).first()
+
+    segments = (
+        db.query(TrackSegment)
+        .filter(TrackSegment.mix_id == mix.id)
+        .order_by(TrackSegment.segment_index.asc())
+        .all()
+    )
+    tracks = [
+        MixTrackOut(
+            id=seg.id,
+            title=seg.match.title if seg.match else "Unknown Track",
+            artist=seg.match.artist if seg.match else "Unknown Artist",
+            start_time=seg.start_time_seconds,
+            end_time=seg.end_time_seconds,
+            bpm=analysis.primary_bpm if analysis else None,
+            camelot_key=analysis.camelot_code if analysis else None,
+        )
+        for seg in segments
+    ]
+
+    events = (
+        db.query(TransitionEvent)
+        .filter(TransitionEvent.mix_id == mix.id)
+        .order_by(TransitionEvent.transition_index.asc())
+        .all()
+    )
+    transitions = [
+        MixTransitionOut(
+            id=ev.id,
+            start_time=ev.start_time_seconds,
+            end_time=ev.end_time_seconds,
+            transition_type=ev.transition_type,
+            from_key=None,
+            to_key=None,
+            harmonic_compatibility=ev.camelot_compatibility,
+        )
+        for ev in events
+    ]
+
+    return MixDetailOut(
+        id=mix.id,
+        title=mix.title,
+        artist=mix.artist,
+        status=mix.status,
+        created_at=mix.created_at,
+        updated_at=mix.updated_at,
+        original_filename=asset.original_filename,
+        duration_seconds=asset.duration_seconds,
+        bpm=analysis.primary_bpm if analysis else None,
+        camelot_key=analysis.camelot_code if analysis else None,
+        audio_url=f"{settings.api_v1_prefix}/mixes/{mix.id}/audio",
+        tracks=tracks,
+        transitions=transitions,
+    )
+
+
+@router.get("/{mix_id}", response_model=MixDetailOut)
 def get_mix(mix_id: str, db: Session = Depends(get_db)):
-    """Get metadata for a specific mix."""
+    """Get full metadata, audio URL, track cues and transitions for a mix."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
-    return mix
+    return _build_mix_detail(mix, db)
+
+
+@router.get("/{mix_id}/audio")
+def stream_mix_audio(mix_id: str, db: Session = Depends(get_db)):
+    """Stream the original mix audio file (supports HTTP Range seeks)."""
+    mix = db.query(Mix).filter(Mix.id == mix_id).first()
+    if not mix:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+
+    storage = StorageService(settings.storage_root)
+    try:
+        abs_path = storage.safe_resolve(mix.media_asset.storage_path)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stored audio path is invalid")
+    if not abs_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found on storage")
+
+    suffix = abs_path.suffix.lower()
+    return FileResponse(
+        path=str(abs_path),
+        media_type=AUDIO_MEDIA_TYPES.get(suffix, "application/octet-stream"),
+        filename=mix.media_asset.original_filename,
+    )
 
 
 @router.get("/{mix_id}/analysis", response_model=AnalysisResultOut)
