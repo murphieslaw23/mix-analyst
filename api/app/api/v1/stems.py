@@ -12,6 +12,7 @@ from api.app.models.job import JobType
 from api.app.models.media import Mix
 from api.app.models.stems import StemJob
 from api.app.schemas.stems import StemSeparationRequest, StemSeparationResponse
+from api.app.services.jsonfields import parse_json_field
 from api.app.services.pipeline_jobs import enqueue_pipeline_job
 
 router = APIRouter()
@@ -87,7 +88,7 @@ def get_mix_stems(mix_id: str, db: Annotated[Session, Depends(get_db)]):
             "low_end_clarity": "optimal"
             if (job.kick_sub_collision_score or 0.3) < 0.4
             else "moderate_clash",
-            "resonance_peaks": job.resonance_peaks or [],
+            "resonance_peaks": parse_json_field(job.resonance_peaks, []),
         }
     else:
         bassline = {}

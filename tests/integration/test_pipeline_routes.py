@@ -186,26 +186,35 @@ def test_auth_locked_mode(client, monkeypatch):
 
 def test_upload_init_chunk_abort_flow(client):
     init = client.client.post(
-        "/api/v1",
+        "/api/v1/uploads",
         json={"filename": "set.wav", "total_size_bytes": 8, "chunk_size": 8},
     )
     assert init.status_code == 201, init.text
     upload_id = init.json()["upload_id"]
 
     chunk = client.client.patch(
-        f"/api/v1/{upload_id}",
+        f"/api/v1/uploads/{upload_id}",
         files={"file": ("chunk.bin", b"12345678")},
         data={"offset": "0"},
     )
     assert chunk.status_code == 200
     assert chunk.json()["bytes_received"] == 8
 
-    abort = client.client.delete(f"/api/v1/{upload_id}")
+    abort = client.client.delete(f"/api/v1/uploads/{upload_id}")
     assert abort.status_code == 204
 
-    status = client.client.get(f"/api/v1/{upload_id}")
+    status = client.client.get(f"/api/v1/uploads/{upload_id}")
     assert status.status_code == 200
     assert status.json()["status"] == "ABORTED"
+
+
+def test_mixes_list_not_shadowed_by_upload_routes(client):
+    """Regression: GET /mixes must not match the upload session route."""
+    res = client.client.get("/api/v1/mixes")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["total"] >= 1
+    assert body["items"][0]["id"] == "m1"
 
 
 def test_peaks_endpoint_computes_caches_and_validates(client):
@@ -245,3 +254,38 @@ def test_rate_limit_429_then_reads_stay_open(client, monkeypatch):
     # Reads are never throttled.
     assert client.client.get("/api/v1/mixes/m1").status_code == 200
     assert client.client.get("/api/v1/mixes/m1/peaks?buckets=100").status_code == 200
+
+
+def test_mixes_list_with_analysis_results_does_not_500(client):
+    """Regression: JSON-text analysis columns must serialize in list/detail."""
+    from api.app.models.analysis import AnalysisResult
+
+    client.db.add(
+        AnalysisResult(
+            id="an1",
+            mix_id="m1",
+            media_asset_id="a1",
+            primary_bpm=152.0,
+            bpm_confidence=0.9,
+            bpm_candidates='[{"bpm": 152.0, "confidence": 0.9, "support_count": 8}]',
+            detected_key="E minor",
+            camelot_code="9A",
+            key_confidence=0.8,
+            integrated_lufs=-11.0,
+            loudness_range_lra=6.0,
+            true_peak_db=-0.8,
+            spectral_summary='{"sub_bass_energy": "healthy"}',
+            quality_findings='[{"type": "CLIPPING", "severity": "WARNING", "description": "x"}]',
+        )
+    )
+    client.db.commit()
+
+    listing = client.client.get("/api/v1/mixes")
+    assert listing.status_code == 200, listing.text
+    items = listing.json()["items"]
+    assert items[0]["analysis_result"]["camelot_code"] == "9A"
+    assert items[0]["analysis_result"]["bpm_candidates"][0]["bpm"] == 152.0
+
+    analysis = client.client.get("/api/v1/mixes/m1/analysis")
+    assert analysis.status_code == 200, analysis.text
+    assert analysis.json()["quality_findings"][0]["type"] == "CLIPPING"

@@ -215,7 +215,7 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
       const CHUNK = 5 * 1024 * 1024;
       const total = uploadFile.size;
       const init = await api.post(
-        '',
+        '/uploads',
         { filename: uploadFile.name, total_size_bytes: total, chunk_size: CHUNK },
         { headers: authHeaders() },
       );
@@ -226,12 +226,12 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
         const form = new FormData();
         form.append('file', slice, uploadFile.name);
         form.append('offset', String(offset));
-        const res = await api.patch(`/${uploadId}`, form, { headers: authHeaders() });
+        const res = await api.patch(`/uploads/${uploadId}`, form, { headers: authHeaders() });
         offset = res.data.bytes_received;
         setUploadProgress(Math.min(99, Math.round((offset / total) * 100)));
       }
       const title = uploadTitle.trim() || uploadFile.name.replace(/\.[^.]+$/, '');
-      const done = await api.post(`/${uploadId}/complete`, { title, artist: uploadArtist.trim() || null }, { headers: authHeaders() });
+      const done = await api.post(`/uploads/${uploadId}/complete`, { title, artist: uploadArtist.trim() || null }, { headers: authHeaders() });
       setUploadProgress(100);
       setUploadDoneName(uploadFile.name);
       setPanelNotice(`Upload complete — mix "${done.data.title}" registered.`);

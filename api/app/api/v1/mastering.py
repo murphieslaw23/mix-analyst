@@ -18,6 +18,7 @@ from api.app.schemas.mastering import (
     MasteringReportResponse,
     MasteringTriggerRequest,
 )
+from api.app.services.jsonfields import parse_json_field
 from api.app.services.pipeline_jobs import enqueue_pipeline_job
 from api.app.services.storage import StorageService
 from worker.analysis.mastering_engine import DEFAULT_PRESETS
@@ -162,7 +163,7 @@ def get_mastering_report(mix_id: str, db: Annotated[Session, Depends(get_db)]):
             "integrated_lufs": job.output_lufs or preset["target_lufs"],
             "true_peak_db": job.output_true_peak or preset["true_peak_ceiling"],
         },
-        gain_adjust_db=job.metrics.get("gain_adjust_db", 0.0) if job.metrics else 0.0,
+        gain_adjust_db=parse_json_field(job.metrics, {}).get("gain_adjust_db", 0.0),
         compliance_passed=True,
         created_at=job.created_at,
         completed_at=job.completed_at or job.created_at,

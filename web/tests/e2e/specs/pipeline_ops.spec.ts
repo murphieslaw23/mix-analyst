@@ -158,7 +158,7 @@ async function mockPipelineApi(page: any) {
         });
       }
 
-      if ((path === '/' || path === '') && method === 'POST') {
+      if (path === '/uploads' && method === 'POST') {
         const body = req.postDataJSON() ?? {};
         return json(201, {
           upload_id: 'up-1',
@@ -168,7 +168,7 @@ async function mockPipelineApi(page: any) {
           status: 'PENDING',
         });
       }
-      if (path === '/up-1' && method === 'PATCH') {
+      if (path === '/uploads/up-1' && method === 'PATCH') {
         return json(200, {
           upload_id: 'up-1',
           bytes_received: 2048,
@@ -177,7 +177,7 @@ async function mockPipelineApi(page: any) {
           status: 'UPLOADING',
         });
       }
-      if (path === '/up-1/complete' && method === 'POST') {
+      if (path === '/uploads/up-1/complete' && method === 'POST') {
         const body = req.postDataJSON() ?? {};
         return json(200, {
           mix_id: 'mix-new',

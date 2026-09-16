@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Json
 
 
 class BpmCandidate(BaseModel):
@@ -23,15 +23,17 @@ class AnalysisResultOut(BaseModel):
     media_asset_id: str
     primary_bpm: float
     bpm_confidence: float
-    bpm_candidates: list[BpmCandidate] = []
+    # Stored as JSON text columns (raw strings from the ORM) but passed
+    # pre-parsed by some endpoints: accept either form, always emit objects.
+    bpm_candidates: list[BpmCandidate] | Json[list[BpmCandidate]] = []
     detected_key: str
     camelot_code: str
     key_confidence: float
     integrated_lufs: float
     loudness_range_lra: float
     true_peak_db: float
-    spectral_summary: dict[str, Any] = {}
-    quality_findings: list[QualityFinding] = []
+    spectral_summary: dict[str, Any] | Json[dict[str, Any]] = {}
+    quality_findings: list[QualityFinding] | Json[list[QualityFinding]] = []
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
