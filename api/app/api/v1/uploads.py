@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Header, status
 from sqlalchemy.orm import Session
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 import uuid
 
 from ...db.session import get_db
 from ...config import settings
 from ...models.media import UploadSession, UploadStatus, MediaAsset, Mix
 from ...services.storage import StorageService
+from ..deps import require_api_key
 from ...services.audio_probe import probe_audio, AudioProbeError
 from ...schemas.upload import (
     UploadInitRequest,
@@ -21,9 +23,61 @@ router = APIRouter()
 storage = StorageService(settings.storage_root)
 
 
+def purge_stale_uploads(
+    db: Session, max_age_hours: int | None = None, storage_root: str | None = None
+) -> int:
+    """Delete expired upload sessions, their temp files, and orphan quarantine files.
+
+    Runs lazily on every init_upload so no scheduler process is required.
+    Returns the number of sessions removed.
+    """
+    limit_hours = max_age_hours if max_age_hours is not None else settings.upload_expiry_hours
+    store = StorageService(storage_root) if storage_root else storage
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=limit_hours)
+
+    stale = (
+        db.query(UploadSession)
+        .filter(
+            UploadSession.status.in_([UploadStatus.PENDING, UploadStatus.UPLOADING, UploadStatus.FAILED]),
+            UploadSession.updated_at < cutoff,
+        )
+        .all()
+    )
+    for session in stale:
+        try:
+            store.delete_file(Path(session.temp_path))
+        except OSError:
+            pass
+        db.delete(session)
+
+    try:
+        quarantine = store.quarantine_dir
+        if quarantine.is_dir():
+            for orphan in quarantine.glob("upload_*.tmp"):
+                try:
+                    if orphan.stat().st_mtime < cutoff.timestamp():
+                        orphan.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+    db.commit()
+    return len(stale)
+
+
 @router.post("", response_model=UploadInitResponse, status_code=status.HTTP_201_CREATED)
-def init_upload(req: UploadInitRequest, db: Session = Depends(get_db)):
+def init_upload(
+    req: UploadInitRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
     """Initialize a new resumable upload session."""
+    try:
+        purge_stale_uploads(db)
+    except Exception:
+        pass  # hygiene must never break new uploads
+
     if req.total_size_bytes > settings.max_upload_size_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -61,6 +115,7 @@ async def upload_chunk(
     file: UploadFile = File(...),
     offset: int = Form(...),
     db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
 ):
     """Append a chunk to the active upload session."""
     upload_session = db.query(UploadSession).filter(UploadSession.id == upload_id).first()
@@ -106,6 +161,7 @@ def complete_upload(
     upload_id: str,
     req: UploadCompleteRequest,
     db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
 ):
     """Finalize the upload, probe audio validity with ffprobe, and create the MediaAsset and Mix."""
     upload_session = db.query(UploadSession).filter(UploadSession.id == upload_id).first()
@@ -207,3 +263,24 @@ def get_upload_status(upload_id: str, db: Session = Depends(get_db)):
         created_at=upload_session.created_at,
         updated_at=upload_session.updated_at,
     )
+
+
+@router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
+def abort_upload(
+    upload_id: str,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
+    """Abort an upload session and remove its quarantined temp file."""
+    upload_session = db.query(UploadSession).filter(UploadSession.id == upload_id).first()
+    if not upload_session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found")
+
+    if upload_session.status not in [UploadStatus.COMPLETED]:
+        try:
+            storage.delete_file(Path(upload_session.temp_path))
+        except OSError:
+            pass
+        upload_session.status = UploadStatus.ABORTED
+        db.commit()
+    return None

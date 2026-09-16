@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     max_upload_size_bytes: int = 4 * 1024 * 1024 * 1024  # 4 GB max per mix
     default_chunk_size_bytes: int = 5 * 1024 * 1024      # 5 MB per chunk
 
+    # Upload hygiene
+    upload_expiry_hours: int = 24  # stale PENDING sessions older than this are purged
+
+    # Auth: comma-separated API keys guarding mutation endpoints.
+    # Empty (default) = single-user open mode, reads always stay open.
+    api_keys: Annotated[Set[str], NoDecode] = set()
+
     @field_validator("allowed_origins", mode="before")
     @classmethod
     def parse_allowed_origins(cls, value: object) -> object:
@@ -37,6 +44,13 @@ class Settings(BaseSettings):
         if value.startswith("["):
             return set(json.loads(value))
         return {origin.strip() for origin in value.split(",") if origin.strip()}
+
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def parse_api_keys(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return {key.strip() for key in value.split(",") if key.strip()}
 
     class Config:
         env_file = ".env"

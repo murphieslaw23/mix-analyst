@@ -6,7 +6,8 @@ def test_build_filter_complex():
         title="Acid Tribal Ritual",
         artist="Curley Korrupt",
         bpm=154.0,
-        camelot_key="10A"
+        camelot_key="10A",
+        include_text=True,
     )
 
     assert "showfreqs" in graph
@@ -14,6 +15,14 @@ def test_build_filter_complex():
     assert "Curley Korrupt" in graph
     assert "10A" in graph
     assert "154.0 BPM" in graph
+
+def test_build_filter_complex_text_fallback():
+    """Minimal FFmpeg builds (no drawtext) still get a renderable graph."""
+    graph = FFmpegBroadcastCompositor.build_filter_complex(include_text=False)
+
+    assert "showfreqs" in graph
+    assert "drawtext" not in graph
+    assert graph.rstrip().endswith("[vout]")
 
 def test_build_ffmpeg_command():
     """Verify FFmpeg arguments for MP4 export and RTMP streaming."""
