@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional, List
 from .analysis import AnalysisResultOut
@@ -17,8 +17,7 @@ class MediaAssetOut(BaseModel):
     format_name: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MixOut(BaseModel):
@@ -31,8 +30,7 @@ class MixOut(BaseModel):
     media_asset: MediaAssetOut
     analysis_result: Optional[AnalysisResultOut] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MixListResponse(BaseModel):
@@ -85,3 +83,12 @@ class MixDetailOut(BaseModel):
     audio_url: str
     tracks: List[MixTrackOut] = []
     transitions: List[MixTransitionOut] = []
+
+
+class PeaksResponse(BaseModel):
+    """Downsampled waveform peaks for the PWA timeline (values 0..1)."""
+
+    mix_id: str
+    buckets: int
+    duration_seconds: float
+    peaks: List[float]

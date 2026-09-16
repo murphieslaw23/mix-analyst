@@ -3,16 +3,19 @@ from functools import lru_cache
 from typing import Annotated, Set
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, NoDecode
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
     app_name: str = "Mix Analyst"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
 
     # CORS
-    web_origin: str = "http://localhost:3000"
     allowed_origins: Annotated[Set[str], NoDecode] = {"http://localhost:3000", "http://localhost:5173"}
 
     # Database
@@ -35,6 +38,9 @@ class Settings(BaseSettings):
     # Empty (default) = single-user open mode, reads always stay open.
     api_keys: Annotated[Set[str], NoDecode] = set()
 
+    # Rate limiting for write methods (POST/PUT/DELETE). 0 disables.
+    rate_limit_per_minute: int = 60
+
     @field_validator("allowed_origins", mode="before")
     @classmethod
     def parse_allowed_origins(cls, value: object) -> object:
@@ -51,11 +57,6 @@ class Settings(BaseSettings):
         if not isinstance(value, str):
             return value
         return {key.strip() for key in value.split(",") if key.strip()}
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
 
 @lru_cache()

@@ -1,6 +1,6 @@
 """Mastering Pydantic schemas."""
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 class MasteringPresetResponse(BaseModel):
@@ -14,8 +14,7 @@ class MasteringPresetResponse(BaseModel):
     compressor_settings: Dict[str, Any]
     is_builtin: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class MasteringTriggerRequest(BaseModel):
     preset_id: Optional[str] = "sound_system_heavy"
