@@ -4,11 +4,14 @@ Every pipeline trigger creates a generic Job row (visible via GET /jobs/{id}
 and the SSE event stream) plus its domain row, then dispatches the Celery
 task to the queue the worker actually consumes.
 """
+
 import uuid
 from collections.abc import Callable
 
 from celery import Celery
 from fastapi import HTTPException, status
+from kombu.exceptions import KombuError
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -61,7 +64,7 @@ def enqueue_pipeline_job(
         )
         job.celery_task_id = async_result.id
         db.commit()
-    except Exception as e:
+    except (KombuError, RedisError, OSError) as e:
         job.status = JobStatus.FAILED
         job.error_message = f"Failed to dispatch to Celery: {e}"
         db.commit()

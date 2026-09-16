@@ -1,10 +1,15 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import text
 from pathlib import Path
+from typing import Annotated
 
-from ...db.session import get_db
+import redis
+from fastapi import APIRouter, Depends
+from redis.exceptions import RedisError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
 from ...config import settings
+from ...db.session import get_db
 
 router = APIRouter()
 
@@ -18,22 +23,22 @@ def health_live():
 def _check_redis() -> bool:
     """Ping the broker/result backend instead of assuming it is up."""
     try:
-        import redis
-
-        client = redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+        client = redis.from_url(
+            settings.redis_url, socket_connect_timeout=2, socket_timeout=2
+        )
         return client.ping() is True
-    except Exception:
+    except (RedisError, OSError):
         return False
 
 
 @router.get("/ready")
-def health_ready(db: Session = Depends(get_db)):
+def health_ready(db: Annotated[Session, Depends(get_db)]):
     """Readiness probe: validates database connection and storage availability."""
     db_ok = False
     try:
         db.execute(text("SELECT 1"))
         db_ok = True
-    except Exception:
+    except SQLAlchemyError:
         db_ok = False
 
     storage_ok = False
@@ -44,7 +49,7 @@ def health_ready(db: Session = Depends(get_db)):
         test_file.touch()
         test_file.unlink()
         storage_ok = True
-    except Exception:
+    except OSError:
         storage_ok = False
 
     all_ready = db_ok and storage_ok

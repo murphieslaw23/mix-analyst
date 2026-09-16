@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
 
 
 class StageRunOut(BaseModel):
@@ -9,10 +10,10 @@ class StageRunOut(BaseModel):
     stage_version: str
     status: str
     progress_percent: float
-    stage_output: Optional[str] = None
-    error_message: Optional[str] = None
+    stage_output: str | None = None
+    error_message: str | None = None
     started_at: datetime
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -21,9 +22,9 @@ class JobAttemptOut(BaseModel):
     id: str
     attempt_number: int
     status: str
-    worker_hostname: Optional[str] = None
+    worker_hostname: str | None = None
     started_at: datetime
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -34,17 +35,17 @@ class JobOut(BaseModel):
     job_type: str
     status: str
     progress_percent: float
-    current_stage: Optional[str] = None
-    celery_task_id: Optional[str] = None
-    error_message: Optional[str] = None
+    current_stage: str | None = None
+    celery_task_id: str | None = None
+    error_message: str | None = None
     created_at: datetime
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    stage_runs: List[StageRunOut] = []
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    stage_runs: list[StageRunOut] = []
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class JobCreateRequest(BaseModel):
     job_type: str = "ANALYSIS"
-    parameters: Dict[str, Any] = {}
+    parameters: dict[str, Any] = {}

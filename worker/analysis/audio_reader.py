@@ -1,9 +1,9 @@
-import subprocess
-import numpy as np
 import io
-import soundfile as sf
+import subprocess
 from pathlib import Path
-from typing import Tuple
+
+import numpy as np
+import soundfile as sf
 
 
 def read_audio_window(
@@ -11,7 +11,7 @@ def read_audio_window(
     offset_seconds: float,
     duration_seconds: float,
     target_sr: int = 22050,
-) -> Tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int]:
     """
     Safely decode a bounded slice of audio directly from disk using FFmpeg stream piping.
     Consumes memory proportional ONLY to the window slice (e.g. 30 seconds), never the full mix.
@@ -22,12 +22,18 @@ def read_audio_window(
     cmd = [
         "ffmpeg",
         "-nostats",
-        "-ss", str(offset_seconds),
-        "-t", str(duration_seconds),
-        "-i", str(audio_path),
-        "-f", "wav",
-        "-ac", "1",               # Downmix to mono for analysis
-        "-ar", str(target_sr),    # Standard analysis sample rate
+        "-ss",
+        str(offset_seconds),
+        "-t",
+        str(duration_seconds),
+        "-i",
+        str(audio_path),
+        "-f",
+        "wav",
+        "-ac",
+        "1",  # Downmix to mono for analysis
+        "-ar",
+        str(target_sr),  # Standard analysis sample rate
         "-vn",
         "pipe:1",
     ]

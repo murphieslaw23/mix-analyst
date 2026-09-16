@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class UploadInitRequest(BaseModel):
@@ -26,15 +26,15 @@ class UploadChunkResponse(BaseModel):
 
 
 class UploadCompleteRequest(BaseModel):
-    title: Optional[str] = None
-    artist: Optional[str] = None
+    title: str | None = None
+    artist: str | None = None
 
 
 class UploadCompleteResponse(BaseModel):
     mix_id: str
     media_asset_id: str
     title: str
-    artist: Optional[str] = None
+    artist: str | None = None
     duration_seconds: float
     sample_rate: int
     channels: int

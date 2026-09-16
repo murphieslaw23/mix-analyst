@@ -1,5 +1,7 @@
+import itertools
+from typing import Any
+
 import numpy as np
-from typing import List, Dict, Any
 
 
 def evaluate_camelot_compatibility(key1: str, key2: str) -> str:
@@ -20,11 +22,15 @@ def evaluate_camelot_compatibility(key1: str, key2: str) -> str:
         if letter1 == letter2:
             diff = abs(num1 - num2)
             if diff == 1 or diff == 11:
-                return "ENERGY_BOOST" if (num2 - num1 == 1 or num1 - num2 == 11) else "ENERGY_DROP"
+                return (
+                    "ENERGY_BOOST"
+                    if (num2 - num1 == 1 or num1 - num2 == 11)
+                    else "ENERGY_DROP"
+                )
         elif num1 == num2:
             return "RELATIVE_KEY"
-    except Exception:
-        pass
+    except (ValueError, IndexError):
+        return "HARMONIC_MODULATION"
 
     return "HARMONIC_MODULATION"
 
@@ -40,15 +46,17 @@ def classify_energy_shift(energy_delta: float) -> str:
 
 def detect_transitions(
     timestamps: np.ndarray,
-    energy_levels: List[float],
-    detected_tracks: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    energy_levels: list[float],
+    detected_tracks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Adapt legacy track/energy inputs to stable transition records."""
     if len(detected_tracks) < 2:
         return []
 
     transitions = []
-    for index, (previous, following) in enumerate(zip(detected_tracks, detected_tracks[1:]), start=1):
+    for index, (previous, following) in enumerate(
+        itertools.pairwise(detected_tracks), start=1
+    ):
         boundary = float(following.get("start_time", previous.get("end_time", 0.0)))
         start = max(0.0, boundary - 15.0)
         end = boundary + 15.0
@@ -61,23 +69,32 @@ def detect_transitions(
             "ENERGY_BOOST": "adjacent_major",
             "ENERGY_DROP": "adjacent_major",
         }.get(relation, "compatible")
-        transitions.append({
-            "transition_index": index,
-            "start_time": start,
-            "end_time": end,
-            "from_key": from_key,
-            "to_key": to_key,
-            "harmonic_compatibility": compatibility,
-            "energy_classification": classify_energy_shift(float(energy_levels[min(index, len(energy_levels) - 1)] - energy_levels[max(0, index - 1)])) if energy_levels else "stable",
-        })
+        transitions.append(
+            {
+                "transition_index": index,
+                "start_time": start,
+                "end_time": end,
+                "from_key": from_key,
+                "to_key": to_key,
+                "harmonic_compatibility": compatibility,
+                "energy_classification": classify_energy_shift(
+                    float(
+                        energy_levels[min(index, len(energy_levels) - 1)]
+                        - energy_levels[max(0, index - 1)]
+                    )
+                )
+                if energy_levels
+                else "stable",
+            }
+        )
     return transitions
 
 
 def detect_transitions_between_segments(
-    segments: List[Dict[str, Any]],
+    segments: list[dict[str, Any]],
     primary_bpm: float = 120.0,
     camelot_code: str = "8B",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Identify transition zones, cue-in / cue-out crossover points, energy deltas, and transition types.
     """
@@ -89,7 +106,6 @@ def detect_transitions_between_segments(
 
     for i in range(len(segments) - 1):
         prev_seg = segments[i]
-        next_seg = segments[i + 1]
 
         boundary_time = prev_seg["end_time_seconds"]
         start_blend = max(0.0, boundary_time - (blend_window_sec / 2))
@@ -107,17 +123,19 @@ def detect_transitions_between_segments(
 
         camelot_rel = evaluate_camelot_compatibility(camelot_code, camelot_code)
 
-        transitions.append({
-            "transition_index": i + 1,
-            "start_time_seconds": round(start_blend, 2),
-            "end_time_seconds": round(end_blend, 2),
-            "cue_in_time": cue_in,
-            "cue_out_time": cue_out,
-            "transition_type": t_type,
-            "energy_delta": round(float(np.random.uniform(-1.5, 1.8)), 2),
-            "tempo_shift_bpm": 0.0,
-            "camelot_compatibility": camelot_rel,
-            "confidence": 0.88,
-        })
+        transitions.append(
+            {
+                "transition_index": i + 1,
+                "start_time_seconds": round(start_blend, 2),
+                "end_time_seconds": round(end_blend, 2),
+                "cue_in_time": cue_in,
+                "cue_out_time": cue_out,
+                "transition_type": t_type,
+                "energy_delta": round(float(np.random.uniform(-1.5, 1.8)), 2),
+                "tempo_shift_bpm": 0.0,
+                "camelot_compatibility": camelot_rel,
+                "confidence": 0.88,
+            }
+        )
 
     return transitions

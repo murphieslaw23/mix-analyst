@@ -1,10 +1,11 @@
-import subprocess
 import re
+import subprocess
 from pathlib import Path
-from typing import Dict, Any
 
 
-def measure_program_loudness(audio_path: Path, timeout_seconds: int = 180) -> Dict[str, float]:
+def measure_program_loudness(
+    audio_path: Path, timeout_seconds: int = 180
+) -> dict[str, float]:
     """
     Run an EBU R128 loudness measurement pass across the full audio file using FFmpeg.
     Extracts Integrated LUFS, Loudness Range (LRA), and True Peak (dBTP).
@@ -15,9 +16,12 @@ def measure_program_loudness(audio_path: Path, timeout_seconds: int = 180) -> Di
     cmd = [
         "ffmpeg",
         "-nostats",
-        "-i", str(audio_path),
-        "-filter_complex", "ebur128=peak=true",
-        "-f", "null",
+        "-i",
+        str(audio_path),
+        "-filter_complex",
+        "ebur128=peak=true",
+        "-f",
+        "null",
         "-",
     ]
 
@@ -32,7 +36,11 @@ def measure_program_loudness(audio_path: Path, timeout_seconds: int = 180) -> Di
         output = process.stderr
     except subprocess.TimeoutExpired:
         # Fallback to standard broadcast safe default
-        return {"integrated_lufs": -14.0, "loudness_range_lra": 6.0, "true_peak_db": -0.5}
+        return {
+            "integrated_lufs": -14.0,
+            "loudness_range_lra": 6.0,
+            "true_peak_db": -0.5,
+        }
 
     i_match = re.search(r"Integrated loudness:\s+I:\s+([-\d\.]+)\s+LUFS", output)
     lra_match = re.search(r"Loudness range:\s+LRA:\s+([-\d\.]+)\s+LU", output)

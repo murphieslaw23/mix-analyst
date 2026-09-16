@@ -1,17 +1,11 @@
 """Worker pipeline tasks against SQLite + tmp storage (no Postgres/Redis)."""
+
+import importlib.util
 import shutil
 from types import SimpleNamespace
 
-import importlib.util
 import pytest
 
-import worker.tasks as tasks
-from worker.tasks import (
-    run_broadcast_render,
-    run_mastering_pipeline,
-    run_sidechain,
-    run_stem_separation,
-)
 from api.app.models.broadcast import BroadcastSync
 from api.app.models.job import Job, JobStatus, JobType, StageRun
 from api.app.models.mastering import MasteringJob
@@ -24,6 +18,13 @@ from tests.helpers.pipeline_seed import (
     seed_job,
     seed_mix,
 )
+from worker import tasks
+from worker.tasks import (
+    run_broadcast_render,
+    run_mastering_pipeline,
+    run_sidechain,
+    run_stem_separation,
+)
 
 
 @pytest.fixture
@@ -35,7 +36,9 @@ def env(tmp_path, monkeypatch):
     db = make_session(tmp_path)
     events = []
     monkeypatch.setattr(tasks, "STORAGE_ROOT", str(storage))
-    monkeypatch.setattr(tasks, "publish_event", lambda job_id, payload: events.append(payload))
+    monkeypatch.setattr(
+        tasks, "publish_event", lambda job_id, payload: events.append(payload)
+    )
     monkeypatch.setattr(tasks, "SessionLocal", sessionmaker(bind=db.get_bind()))
     return SimpleNamespace(db=db, storage=storage, events=events)
 
@@ -48,7 +51,11 @@ def _fresh(db, *models):
 def test_run_mastering_pipeline_renders_real_master(env):
     wav = generate_synthetic_audio(duration_sec=10.0, bpm=120.0)
     seed_mix(env.db, env.storage, wav)
-    env.db.add(MasteringJob(id="mj1", media_id="m1", preset_id="club_broadcast", status="queued"))
+    env.db.add(
+        MasteringJob(
+            id="mj1", media_id="m1", preset_id="club_broadcast", status="queued"
+        )
+    )
     seed_job(env.db, "j1", "m1", JobType.MASTERING)
     env.db.commit()
 
@@ -72,7 +79,11 @@ def test_run_mastering_pipeline_renders_real_master(env):
 def test_run_mastering_pipeline_missing_audio_fails_job(env):
     seed_mix(env.db, env.storage, generate_synthetic_audio(duration_sec=5.0))
     (env.storage / "assets" / "audio" / "a1.wav").unlink()  # simulate lost file
-    env.db.add(MasteringJob(id="mj9", media_id="m1", preset_id="club_broadcast", status="queued"))
+    env.db.add(
+        MasteringJob(
+            id="mj9", media_id="m1", preset_id="club_broadcast", status="queued"
+        )
+    )
     seed_job(env.db, "j9", "m1", JobType.MASTERING)
     env.db.commit()
 
@@ -90,7 +101,15 @@ def test_run_sidechain_on_real_stems(env):
     bass = generate_synthetic_audio(duration_sec=10.0, bpm=120.0, freq_hz=110.0)
     seed_mix(env.db, env.storage, kick)
     seed_completed_stems(env.db, env.storage, "m1", kick, bass)
-    env.db.add(SidechainJob(id="sc1", media_id="m1", status="queued", threshold_db=-12.0, max_ducking_db=6.0))
+    env.db.add(
+        SidechainJob(
+            id="sc1",
+            media_id="m1",
+            status="queued",
+            threshold_db=-12.0,
+            max_ducking_db=6.0,
+        )
+    )
     seed_job(env.db, "j2", "m1", JobType.SIDECHAIN)
     env.db.commit()
 
@@ -119,7 +138,10 @@ def test_run_sidechain_without_stems_fails_clearly(env):
 
 
 def test_run_stem_separation_without_demucs_fails_actionably(env):
-    if importlib.util.find_spec("demucs") is not None or shutil.which("demucs") is not None:
+    if (
+        importlib.util.find_spec("demucs") is not None
+        or shutil.which("demucs") is not None
+    ):
         pytest.skip("demucs is installed; nothing to prove here")
     seed_mix(env.db, env.storage, generate_synthetic_audio(duration_sec=5.0))
     env.db.add(StemJob(id="sj9", media_id="m1", model_name="htdemucs", status="queued"))
@@ -141,8 +163,14 @@ def test_run_broadcast_render_produces_mp4(env):
     env.db.commit()
 
     result = run_broadcast_render(
-        "j4", "m1",
-        {"stream_title": "Test", "artist_name": "Tester", "bpm": 130.0, "camelot_key": "8A"},
+        "j4",
+        "m1",
+        {
+            "stream_title": "Test",
+            "artist_name": "Tester",
+            "bpm": 130.0,
+            "camelot_key": "8A",
+        },
     )
 
     assert result["status"] == "ok"

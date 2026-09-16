@@ -1,11 +1,8 @@
-from typing import List, Tuple
-
-
 def plan_analysis_windows(
     duration_seconds: float,
     window_length_sec: float = 30.0,
     max_windows: int = 8,
-) -> List[Tuple[float, float]]:
+) -> list[tuple[float, float]]:
     """
     Plan representative sampling windows across a long continuous mix.
     Bounds memory consumption by avoiding full-file decoding.

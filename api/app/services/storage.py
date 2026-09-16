@@ -1,12 +1,27 @@
+import hashlib
 import os
 import shutil
-import hashlib
+import sys
 from pathlib import Path
+from typing import BinaryIO
 
-try:
+
+def _lock_exclusive(f: BinaryIO) -> None:
+    """Advisory exclusive lock; no-op where fcntl is unavailable."""
+    if sys.platform == "win32":  # pragma: no cover
+        return
     import fcntl
-except ImportError:  # pragma: no cover - non-POSIX platforms
-    fcntl = None
+
+    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_shared(f: BinaryIO) -> None:
+    """Release the advisory lock; no-op where fcntl is unavailable."""
+    if sys.platform == "win32":  # pragma: no cover
+        return
+    import fcntl
+
+    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 class StorageService:
@@ -26,7 +41,9 @@ class StorageService:
         """Resolve a path safely, preventing directory traversal attacks."""
         target = (self.root / relative_path).resolve()
         if not str(target).startswith(str(self.root)):
-            raise ValueError(f"Security error: path traversal attempt detected for '{relative_path}'")
+            raise ValueError(
+                f"Security error: path traversal attempt detected for '{relative_path}'"
+            )
         return target
 
     def create_upload_session_file(self, session_id: str) -> Path:
@@ -49,19 +66,19 @@ class StorageService:
             raise FileNotFoundError(f"Upload file {temp_path} not found")
 
         with open(temp_path, "ab") as f:
-            if fcntl is not None:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            _lock_exclusive(f)
             try:
                 f.seek(0, os.SEEK_END)
                 current_size = f.tell()
                 if current_size != offset:
-                    raise ValueError(f"Offset mismatch: expected offset {current_size}, got {offset}")
+                    raise ValueError(
+                        f"Offset mismatch: expected offset {current_size}, got {offset}"
+                    )
                 f.write(chunk_bytes)
                 f.flush()
                 return f.tell()
             finally:
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                _unlock_shared(f)
 
     def compute_sha256(self, file_path: Path) -> str:
         """Compute the SHA-256 hash of a file using streaming reads."""
@@ -71,7 +88,9 @@ class StorageService:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    def finalize_asset(self, temp_path: Path, asset_id: str, original_filename: str) -> tuple[str, Path]:
+    def finalize_asset(
+        self, temp_path: Path, asset_id: str, original_filename: str
+    ) -> tuple[str, Path]:
         """Atomically move a validated audio file from quarantine to permanent raw audio storage."""
         ext = Path(original_filename).suffix.lower() or ".audio"
         final_filename = f"{asset_id}{ext}"

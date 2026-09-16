@@ -1,10 +1,9 @@
 """Regression tests for settings parsing."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
-
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -19,8 +18,10 @@ def test_comma_separated_allowed_origins_are_accepted():
         [
             sys.executable,
             "-c",
-            "from api.app.config import settings; "
-            "assert settings.allowed_origins == {'http://localhost:3000', 'http://localhost:5173'}",
+            (
+                "from api.app.config import settings; "
+                "assert settings.allowed_origins == {'http://localhost:3000', 'http://localhost:5173'}"
+            ),
         ],
         cwd=PROJECT_ROOT,
         capture_output=True,

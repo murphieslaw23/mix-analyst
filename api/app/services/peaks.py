@@ -5,6 +5,7 @@ streaming the audio file in blocks (bounded memory even for multi-hour
 sets) and cached as JSON next to the derived assets. Requests for fewer
 buckets downsample peak-preservingly with max() grouping.
 """
+
 import json
 import os
 from pathlib import Path
@@ -44,10 +45,12 @@ def downsample_peaks(peaks: list[float], buckets: int) -> list[float]:
     if len(peaks) <= buckets:
         return list(peaks)
     size = len(peaks) / buckets
-    return [max(peaks[int(i * size): int((i + 1) * size)]) for i in range(buckets)]
+    return [max(peaks[int(i * size) : int((i + 1) * size)]) for i in range(buckets)]
 
 
-def load_or_compute_peaks(storage_root: str, rel_path: str, asset_id: str, buckets: int) -> tuple[list[float], float]:
+def load_or_compute_peaks(
+    storage_root: str, rel_path: str, asset_id: str, buckets: int
+) -> tuple[list[float], float]:
     """Return (peaks, duration_seconds), using the JSON cache when fresh."""
     root = Path(storage_root).resolve()
     audio_abs = (root / rel_path).resolve()
@@ -66,7 +69,10 @@ def load_or_compute_peaks(storage_root: str, rel_path: str, asset_id: str, bucke
         except (OSError, ValueError):
             cached = {}
 
-    if cached.get("mtime") == audio_mtime and len(cached.get("peaks", [])) == CACHE_BUCKETS:
+    if (
+        cached.get("mtime") == audio_mtime
+        and len(cached.get("peaks", [])) == CACHE_BUCKETS
+    ):
         full = [float(v) for v in cached["peaks"]]
         duration = float(cached.get("duration_seconds", 0.0))
     else:
@@ -75,7 +81,11 @@ def load_or_compute_peaks(storage_root: str, rel_path: str, asset_id: str, bucke
         full = compute_peaks(audio_abs, CACHE_BUCKETS)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = cache_path.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps({"mtime": audio_mtime, "duration_seconds": duration, "peaks": full}))
+        tmp_path.write_text(
+            json.dumps(
+                {"mtime": audio_mtime, "duration_seconds": duration, "peaks": full}
+            )
+        )
         os.replace(tmp_path, cache_path)
 
     return downsample_peaks(full, buckets), duration

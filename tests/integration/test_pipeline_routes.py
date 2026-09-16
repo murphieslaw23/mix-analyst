@@ -1,19 +1,20 @@
 """HTTP-level tests for pipeline triggers, auth, audio and upload hygiene."""
+
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-import api.app.api.deps as deps
 import api.app.api.rate_limit as rate_limit_mod
+import api.app.api.v1.mastering as mastering_mod
 import api.app.api.v1.mixes as mixes_mod
 import api.app.api.v1.sidechain as sidechain_mod
-import api.app.api.v1.mastering as mastering_mod
 import api.app.api.v1.uploads as uploads_mod
 import api.app.main as main_mod
-import api.app.services.pipeline_jobs as pipeline_jobs
+from api.app.api import deps
 from api.app.db.session import get_db
 from api.app.main import app
+from api.app.services import pipeline_jobs
 from tests.fixtures.synthetic_audio import generate_synthetic_audio
 from tests.helpers.pipeline_seed import make_session, seed_completed_stems, seed_mix
 
@@ -39,7 +40,9 @@ def client(tmp_path, monkeypatch):
         sent.append((args, kwargs))
         return FakeCeleryResult()
 
-    monkeypatch.setattr(pipeline_jobs, "celery_client", SimpleNamespace(send_task=fake_send_task))
+    monkeypatch.setattr(
+        pipeline_jobs, "celery_client", SimpleNamespace(send_task=fake_send_task)
+    )
 
     # Point file-serving routes at tmp storage; auth open by default.
     storage_settings = SimpleNamespace(
@@ -67,7 +70,9 @@ def client(tmp_path, monkeypatch):
 
 
 def test_mastering_trigger_enqueues_202(client):
-    res = client.client.post("/api/v1/mixes/m1/master", json={"preset_id": "club_broadcast"})
+    res = client.client.post(
+        "/api/v1/mixes/m1/master", json={"preset_id": "club_broadcast"}
+    )
     assert res.status_code == 202, res.text
     body = res.json()
     assert body["status"] == "queued"
@@ -116,7 +121,13 @@ def test_sidechain_trigger_202_with_stems(client):
 def test_compositor_trigger_enqueues_render(client):
     res = client.client.post(
         "/api/v1/broadcast/render-stream",
-        json={"media_id": "m1", "stream_title": "T", "artist_name": "A", "bpm": 130.0, "camelot_key": "8A"},
+        json={
+            "media_id": "m1",
+            "stream_title": "T",
+            "artist_name": "A",
+            "bpm": 130.0,
+            "camelot_key": "8A",
+        },
     )
     assert res.status_code == 202, res.text
     body = res.json()
@@ -158,10 +169,14 @@ def test_auth_locked_mode(client, monkeypatch):
     no_header = client.client.post("/api/v1/mixes/m1/stems", json={})
     assert no_header.status_code == 401
 
-    wrong = client.client.post("/api/v1/mixes/m1/stems", json={}, headers={"X-API-Key": "wrong"})
+    wrong = client.client.post(
+        "/api/v1/mixes/m1/stems", json={}, headers={"X-API-Key": "wrong"}
+    )
     assert wrong.status_code == 401
 
-    ok = client.client.post("/api/v1/mixes/m1/stems", json={}, headers={"X-API-Key": "s3cret"})
+    ok = client.client.post(
+        "/api/v1/mixes/m1/stems", json={}, headers={"X-API-Key": "s3cret"}
+    )
     assert ok.status_code == 202
 
     # Reads stay open.

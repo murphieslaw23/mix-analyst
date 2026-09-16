@@ -1,4 +1,5 @@
 """Waveform peak computation, caching and downsampling."""
+
 import json
 
 import pytest
@@ -49,7 +50,9 @@ def test_load_or_compute_peaks_caches_and_downsamples(tmp_path):
     audio_dir.mkdir(parents=True)
     _write_wav(audio_dir / "a1.wav", duration_sec=5.0, bpm=120.0)
 
-    peaks, duration = load_or_compute_peaks(str(storage), "assets/audio/a1.wav", "a1", 500)
+    peaks, duration = load_or_compute_peaks(
+        str(storage), "assets/audio/a1.wav", "a1", 500
+    )
 
     assert len(peaks) == 500
     assert duration == pytest.approx(5.0, abs=0.05)

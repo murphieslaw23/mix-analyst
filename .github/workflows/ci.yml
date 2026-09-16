@@ -34,18 +34,18 @@ jobs:
       - name: Install Python Dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff mypy pytest pytest-cov
+          pip install "ruff==0.16.8" "mypy==2.3.1" pytest pytest-cov
           pip install -r api/requirements.txt
           pip install -r worker/requirements.txt
 
       - name: Run Ruff Lint & Format Verification
         run: |
-          ruff check . --ignore-missing-imports || true
-          ruff format --check . || true
+          ruff check api worker tests
+          ruff format --check api worker tests
 
       - name: Run MyPy Typecheck
         run: |
-          mypy api/app --ignore-missing-imports || true
+          mypy api/app
 
       - name: Install Frontend Dependencies & Typecheck
         run: |

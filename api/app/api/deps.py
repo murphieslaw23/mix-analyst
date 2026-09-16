@@ -4,6 +4,7 @@ Reads stay open (radio metadata + PWA use-case). When `API_KEYS` is
 configured, every write path requires a valid `X-API-Key` header.
 When empty (default single-user mode), all requests pass through.
 """
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
 

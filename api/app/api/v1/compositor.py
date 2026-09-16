@@ -1,22 +1,28 @@
+from pathlib import Path
+from typing import Annotated, Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pathlib import Path
-from api.app.db.session import get_db
-from api.app.config import settings
-from api.app.models.media import Mix
-from api.app.models.job import JobType
-from api.app.schemas.compositor import BroadcastStreamRequest, BroadcastStreamResponse
+
 from api.app.api.deps import require_api_key
+from api.app.config import settings
+from api.app.db.session import get_db
+from api.app.models.job import JobType
+from api.app.models.media import Mix
+from api.app.schemas.compositor import BroadcastStreamRequest, BroadcastStreamResponse
 from api.app.services.pipeline_jobs import enqueue_pipeline_job
 from worker.broadcast.ffmpeg_compositor import FFmpegBroadcastCompositor
 
 router = APIRouter()
 
-@router.post("/broadcast/render-stream", response_model=BroadcastStreamResponse, status_code=202)
+
+@router.post(
+    "/broadcast/render-stream", response_model=BroadcastStreamResponse, status_code=202
+)
 def render_broadcast_stream(
     request: BroadcastStreamRequest,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(require_api_key),
+    db: Annotated[Session, Depends(get_db)],
+    _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Enqueue a real 16:9 1080p FFmpeg render; track via the job id (SSE).
 
@@ -28,7 +34,7 @@ def render_broadcast_stream(
     if not media:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    params = {
+    params: dict[str, Any] = {
         "stream_title": request.stream_title or "Live Set",
         "artist_name": request.artist_name or "SYSTEM CORRUPT",
         "bpm": request.bpm or 150.0,
@@ -47,7 +53,11 @@ def render_broadcast_stream(
 
     input_audio = str(Path(settings.storage_root) / media.media_asset.storage_path)
     output_dest = str(
-        Path(settings.storage_root) / "assets" / "derived" / "broadcast" / f"{request.media_id}_1080p.mp4"
+        Path(settings.storage_root)
+        / "assets"
+        / "derived"
+        / "broadcast"
+        / f"{request.media_id}_1080p.mp4"
     )
 
     filter_complex = FFmpegBroadcastCompositor.build_filter_complex(
@@ -71,5 +81,5 @@ def render_broadcast_stream(
         status="rendering",
         preview_url=None,
         filter_complex=filter_complex,
-        command_args=cmd
+        command_args=cmd,
     )

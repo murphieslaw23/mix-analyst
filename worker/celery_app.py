@@ -1,6 +1,7 @@
+import os
+
 from celery import Celery
 from kombu import Queue
-import os
 
 celery_app = Celery(
     "mix_analyst_worker",

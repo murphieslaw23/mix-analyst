@@ -1,4 +1,5 @@
 """End-to-end audio mix analysis pipeline tests."""
+
 import re
 from pathlib import Path
 
@@ -27,7 +28,10 @@ def test_e2e_mix_pipeline_execution(tmp_path):
     # Tempo: synthetic kicks at 128/130 BPM (allow half/double-time resolution)
     assert 60.0 <= result["primary_bpm"] <= 200.0
     assert 0.0 <= result["bpm_confidence"] <= 1.0
-    assert isinstance(result["bpm_candidates"], list) and len(result["bpm_candidates"]) >= 1
+    assert (
+        isinstance(result["bpm_candidates"], list)
+        and len(result["bpm_candidates"]) >= 1
+    )
     # Key / Camelot
     assert re.match(r"^\d{1,2}[AB]$", result["camelot_code"])
     assert result["detected_key"]

@@ -1,8 +1,9 @@
-import subprocess
 import json
+import subprocess
 from pathlib import Path
+from typing import Any
+
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
 
 
 class AudioProbeResult(BaseModel):
@@ -10,10 +11,10 @@ class AudioProbeResult(BaseModel):
     sample_rate: int
     channels: int
     codec: str
-    bit_rate: Optional[int] = None
-    format_name: Optional[str] = None
-    bits_per_sample: Optional[int] = None
-    raw_metadata: Dict[str, Any] = {}
+    bit_rate: int | None = None
+    format_name: str | None = None
+    bits_per_sample: int | None = None
+    raw_metadata: dict[str, Any] = {}
 
 
 class AudioProbeError(Exception):
@@ -27,9 +28,12 @@ def probe_audio(file_path: Path, timeout_seconds: int = 30) -> AudioProbeResult:
 
     cmd = [
         "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration,size,bit_rate,format_name,tags:stream=codec_name,sample_rate,channels,bits_per_sample",
-        "-of", "json",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration,size,bit_rate,format_name,tags:stream=codec_name,sample_rate,channels,bits_per_sample",
+        "-of",
+        "json",
         str(file_path),
     ]
 
@@ -44,9 +48,13 @@ def probe_audio(file_path: Path, timeout_seconds: int = 30) -> AudioProbeResult:
     except subprocess.TimeoutExpired:
         raise AudioProbeError(f"ffprobe timed out after {timeout_seconds} seconds")
     except subprocess.CalledProcessError as e:
-        raise AudioProbeError(f"ffprobe failed: {e.stderr.strip() or 'Invalid or corrupted audio file'}")
+        raise AudioProbeError(
+            f"ffprobe failed: {e.stderr.strip() or 'Invalid or corrupted audio file'}"
+        )
     except FileNotFoundError:
-        raise AudioProbeError("ffprobe binary is not installed in the system environment")
+        raise AudioProbeError(
+            "ffprobe binary is not installed in the system environment"
+        )
 
     try:
         data = json.loads(process.stdout)
@@ -71,7 +79,9 @@ def probe_audio(file_path: Path, timeout_seconds: int = 30) -> AudioProbeResult:
     codec = stream.get("codec_name", "unknown")
     bit_rate = int(fmt.get("bit_rate")) if fmt.get("bit_rate") else None
     format_name = fmt.get("format_name")
-    bits_per_sample = int(stream.get("bits_per_sample")) if stream.get("bits_per_sample") else None
+    bits_per_sample = (
+        int(stream.get("bits_per_sample")) if stream.get("bits_per_sample") else None
+    )
 
     return AudioProbeResult(
         duration_seconds=duration,

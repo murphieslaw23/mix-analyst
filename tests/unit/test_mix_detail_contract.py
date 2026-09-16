@@ -1,4 +1,5 @@
 """Contract tests for the PWA mix payloads (frontend/backend shape agreement)."""
+
 from datetime import datetime, timezone
 
 from api.app.schemas.mix import MixDetailOut
@@ -60,7 +61,9 @@ def test_mix_detail_out_carries_everything_the_pwa_needs():
 
 def test_mix_detail_out_tolerates_missing_analysis():
     """Mixes without analysis results must still validate (nullable fields)."""
-    detail = MixDetailOut(**_detail_payload(bpm=None, camelot_key=None, tracks=[], transitions=[]))
+    detail = MixDetailOut(
+        **_detail_payload(bpm=None, camelot_key=None, tracks=[], transitions=[])
+    )
 
     assert detail.bpm is None
     assert detail.tracks == []

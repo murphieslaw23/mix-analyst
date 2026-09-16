@@ -1,10 +1,11 @@
 """Stale upload-session purge behavior."""
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
-from api.app.models.media import UploadSession, UploadStatus
 from api.app.api.v1.uploads import purge_stale_uploads
+from api.app.models.media import UploadSession, UploadStatus
 from api.app.services.storage import StorageService
 from tests.helpers.pipeline_seed import make_session
 
@@ -40,7 +41,9 @@ def test_purge_removes_only_expired_unfinished_sessions(tmp_path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir()
 
-    old_pending = _add_session(db, "old-pending", UploadStatus.PENDING, 30, storage_root)
+    old_pending = _add_session(
+        db, "old-pending", UploadStatus.PENDING, 30, storage_root
+    )
     old_failed = _add_session(db, "old-failed", UploadStatus.FAILED, 30, storage_root)
     fresh = _add_session(db, "fresh", UploadStatus.UPLOADING, 1, storage_root)
     done = _add_session(db, "done", UploadStatus.COMPLETED, 72, storage_root)

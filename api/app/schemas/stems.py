@@ -1,18 +1,22 @@
 """Pydantic schemas for stem separation and bassline analysis."""
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel
+
 
 class StemSeparationRequest(BaseModel):
-    model_name: Optional[str] = "htdemucs"
+    model_name: str | None = "htdemucs"
     analyze_bassline: bool = True
+
 
 class StemSeparationResponse(BaseModel):
     job_id: str
     media_id: str
     status: str
     model_name: str
-    stems: Dict[str, Optional[str]]
-    bassline_analysis: Dict[str, Any]
+    stems: dict[str, str | None]
+    bassline_analysis: dict[str, Any]
     created_at: datetime
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None

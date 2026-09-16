@@ -5,7 +5,9 @@ import os
 
 def test_application_imports_and_registers_health_routes():
     """A deployment must be able to import the ASGI application."""
-    os.environ["DATABASE_URL"] = "postgresql+psycopg2://mixuser:mixpassword@postgres:5432/mixanalyst"
+    os.environ["DATABASE_URL"] = (
+        "postgresql+psycopg2://mixuser:mixpassword@postgres:5432/mixanalyst"
+    )
     os.environ["STORAGE_ROOT"] = "/tmp/mix-analyst-test-storage"
     os.environ["ALLOWED_ORIGINS"] = '["http://localhost"]'
 

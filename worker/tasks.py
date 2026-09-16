@@ -1,25 +1,29 @@
-import os
+import importlib.util
 import json
-import socket
+import os
 import shutil
+import socket
 import subprocess
 import sys
-import importlib.util
-import redis
 import uuid
-import numpy as np
-import soundfile as sf
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+import redis
+import soundfile as sf
+from redis.exceptions import RedisError
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+from .analysis.dynamic_sidechain import DynamicSidechainDSP
+from .analysis.loudness_analyzer import measure_program_loudness
+from .analysis.mastering_engine import DEFAULT_PRESETS
+from .analysis.orchestrator import AudioAnalysisOrchestrator
+from .analysis.stem_separator import StemSeparatorEngine
+from .broadcast.ffmpeg_compositor import FFmpegBroadcastCompositor
 from .celery_app import celery_app
 from .db import SessionLocal
-from .analysis.orchestrator import AudioAnalysisOrchestrator
-from .analysis.mastering_engine import DEFAULT_PRESETS
-from .analysis.dynamic_sidechain import DynamicSidechainDSP
-from .analysis.stem_separator import StemSeparatorEngine
-from .analysis.loudness_analyzer import measure_program_loudness
-from .broadcast.ffmpeg_compositor import FFmpegBroadcastCompositor
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
@@ -31,7 +35,7 @@ def publish_event(job_id: str, payload: dict) -> None:
     try:
         channel = f"job:{job_id}:events"
         redis_client.publish(channel, json.dumps(payload))
-    except Exception as e:
+    except (RedisError, OSError) as e:
         print(f"Failed to publish Redis event: {e}")
 
 
@@ -68,32 +72,43 @@ def run_analysis_pipeline(self, job_id: str):
 
         # Transition Job to RUNNING
         db.execute(
-            text("UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = 'Initializing' WHERE id = :id"),
+            text(
+                "UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = 'Initializing' WHERE id = :id"
+            ),
             {"id": job_id, "now": start_time},
         )
         db.execute(
-            text("UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"),
+            text(
+                "UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"
+            ),
             {"id": job_id, "host": hostname, "now": start_time},
         )
         db.commit()
 
         def progress_tracker(pct: float, stage_name: str):
             db.execute(
-                text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id"),
+                text(
+                    "UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id"
+                ),
                 {"id": job_id, "stage": stage_name, "pct": pct},
             )
             db.commit()
             _stage_open(db, job_id, stage_name)
-            publish_event(job_id, {
-                "job_id": job_id,
-                "status": "RUNNING",
-                "progress_percent": pct,
-                "current_stage": stage_name,
-            })
+            publish_event(
+                job_id,
+                {
+                    "job_id": job_id,
+                    "status": "RUNNING",
+                    "progress_percent": pct,
+                    "current_stage": stage_name,
+                },
+            )
 
         # Run real orchestrator
         orchestrator = AudioAnalysisOrchestrator(audio_abs_path, duration_seconds)
-        analysis_data = orchestrator.execute_pipeline(progress_callback=progress_tracker)
+        analysis_data = orchestrator.execute_pipeline(
+            progress_callback=progress_tracker
+        )
 
         # Persist AnalysisResult in DB
         analysis_id = f"analysis_{mix_id}"
@@ -143,7 +158,10 @@ def run_analysis_pipeline(self, job_id: str):
         )
 
         # Clear and persist TrackSegments & TrackMatches (Phase 4)
-        db.execute(text("DELETE FROM track_segments WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.execute(
+            text("DELETE FROM track_segments WHERE mix_id = :mix_id"),
+            {"mix_id": mix_id},
+        )
         db.commit()
 
         for seg in analysis_data.get("track_segments", []):
@@ -200,7 +218,10 @@ def run_analysis_pipeline(self, job_id: str):
                 )
 
         # Clear and persist TransitionEvents (Phase 5)
-        db.execute(text("DELETE FROM transition_events WHERE mix_id = :mix_id"), {"mix_id": mix_id})
+        db.execute(
+            text("DELETE FROM transition_events WHERE mix_id = :mix_id"),
+            {"mix_id": mix_id},
+        )
         db.commit()
 
         for trans in analysis_data.get("transitions", []):
@@ -239,22 +260,29 @@ def run_analysis_pipeline(self, job_id: str):
         # Finalize Job
         finish_time = datetime.now(timezone.utc)
         db.execute(
-            text("UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id"),
+            text(
+                "UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id"
+            ),
             {"id": job_id, "finish": finish_time},
         )
         db.execute(
-            text("UPDATE job_attempts SET status = 'SUCCEEDED', finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
+            text(
+                "UPDATE job_attempts SET status = 'SUCCEEDED', finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"
+            ),
             {"id": job_id, "finish": finish_time},
         )
         db.commit()
         _stage_close_all(db, job_id, True)
 
-        publish_event(job_id, {
-            "job_id": job_id,
-            "status": "SUCCEEDED",
-            "progress_percent": 100.0,
-            "current_stage": "Complete",
-        })
+        publish_event(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "SUCCEEDED",
+                "progress_percent": 100.0,
+                "current_stage": "Complete",
+            },
+        )
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
@@ -264,23 +292,30 @@ def run_analysis_pipeline(self, job_id: str):
         error_str = str(e)
 
         db.execute(
-            text("UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"),
+            text(
+                "UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"
+            ),
             {"id": job_id, "err": error_str, "finish": fail_time},
         )
         db.execute(
-            text("UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"),
+            text(
+                "UPDATE job_attempts SET status = 'FAILED', error_details = :err, finished_at = :finish WHERE job_id = :id AND status = 'RUNNING'"
+            ),
             {"id": job_id, "err": error_str, "finish": fail_time},
         )
         db.commit()
         _stage_close_all(db, job_id, False)
 
-        publish_event(job_id, {
-            "job_id": job_id,
-            "status": "FAILED",
-            "progress_percent": 0.0,
-            "error_message": error_str,
-        })
-        raise e
+        publish_event(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "FAILED",
+                "progress_percent": 0.0,
+                "error_message": error_str,
+            },
+        )
+        raise
     finally:
         db.close()
 
@@ -289,14 +324,21 @@ def run_analysis_pipeline(self, job_id: str):
 # Shared bookkeeping for the mastering / stems / sidechain / render pipelines
 # ---------------------------------------------------------------------------
 
-def _pipeline_mark_running(db, job_id: str, hostname: str, stage: str = "Initializing") -> None:
+
+def _pipeline_mark_running(
+    db, job_id: str, hostname: str, stage: str = "Initializing"
+) -> None:
     now = datetime.now(timezone.utc)
     db.execute(
-        text("UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = :stage WHERE id = :id"),
+        text(
+            "UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = :stage WHERE id = :id"
+        ),
         {"id": job_id, "now": now, "stage": stage},
     )
     db.execute(
-        text("UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"),
+        text(
+            "UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"
+        ),
         {"id": job_id, "host": hostname, "now": now},
     )
     db.commit()
@@ -307,7 +349,9 @@ def _stage_open(db, job_id: str, stage_name: str, version: str = "1.0.0") -> Non
     """Close any running stage and open a new one, so stage_runs tells the truth."""
     now = datetime.now(timezone.utc)
     db.execute(
-        text("UPDATE stage_runs SET status = 'COMPLETED', finished_at = :now WHERE job_id = :id AND status = 'RUNNING'"),
+        text(
+            "UPDATE stage_runs SET status = 'COMPLETED', finished_at = :now WHERE job_id = :id AND status = 'RUNNING'"
+        ),
         {"id": job_id, "now": now},
     )
     db.execute(
@@ -315,7 +359,13 @@ def _stage_open(db, job_id: str, stage_name: str, version: str = "1.0.0") -> Non
             INSERT INTO stage_runs (id, job_id, stage_name, stage_version, status, progress_percent, started_at)
             VALUES (:id, :job, :name, :ver, 'RUNNING', 0.0, :now)
         """),
-        {"id": str(uuid.uuid4()), "job": job_id, "name": stage_name[:100], "ver": version, "now": now},
+        {
+            "id": str(uuid.uuid4()),
+            "job": job_id,
+            "name": stage_name[:100],
+            "ver": version,
+            "now": now,
+        },
     )
     db.commit()
 
@@ -324,7 +374,9 @@ def _stage_close_all(db, job_id: str, ok: bool) -> None:
     now = datetime.now(timezone.utc)
     final = "COMPLETED" if ok else "FAILED"
     db.execute(
-        text("UPDATE stage_runs SET status = :st, finished_at = :now WHERE job_id = :id AND status = 'RUNNING'"),
+        text(
+            "UPDATE stage_runs SET status = :st, finished_at = :now WHERE job_id = :id AND status = 'RUNNING'"
+        ),
         {"id": job_id, "st": final, "now": now},
     )
     db.commit()
@@ -332,40 +384,60 @@ def _stage_close_all(db, job_id: str, ok: bool) -> None:
 
 def _pipeline_progress(db, job_id: str, pct: float, stage: str) -> None:
     db.execute(
-        text("UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id"),
+        text(
+            "UPDATE jobs SET current_stage = :stage, progress_percent = :pct WHERE id = :id"
+        ),
         {"id": job_id, "stage": stage, "pct": pct},
     )
     db.commit()
     _stage_open(db, job_id, stage)
-    publish_event(job_id, {
-        "job_id": job_id,
-        "status": "RUNNING",
-        "progress_percent": pct,
-        "current_stage": stage,
-    })
+    publish_event(
+        job_id,
+        {
+            "job_id": job_id,
+            "status": "RUNNING",
+            "progress_percent": pct,
+            "current_stage": stage,
+        },
+    )
 
 
-def _pipeline_mark_finished(db, job_id: str, ok: bool, error: str | None = None) -> None:
+def _pipeline_mark_finished(
+    db, job_id: str, ok: bool, error: str | None = None
+) -> None:
     now = datetime.now(timezone.utc)
     final = "SUCCEEDED" if ok else "FAILED"
     db.execute(
-        text("UPDATE jobs SET status = :st, progress_percent = :pct, current_stage = :stage, error_message = :err, finished_at = :finish WHERE id = :id"),
-        {"id": job_id, "st": final, "pct": 100.0 if ok else 0.0,
-         "stage": "Complete" if ok else "Failed", "err": error, "finish": now},
+        text(
+            "UPDATE jobs SET status = :st, progress_percent = :pct, current_stage = :stage, error_message = :err, finished_at = :finish WHERE id = :id"
+        ),
+        {
+            "id": job_id,
+            "st": final,
+            "pct": 100.0 if ok else 0.0,
+            "stage": "Complete" if ok else "Failed",
+            "err": error,
+            "finish": now,
+        },
     )
     db.execute(
-        text("UPDATE job_attempts SET status = :st, error_details = :err, finished_at = :finish WHERE job_id = :id AND status IN ('RUNNING', 'QUEUED')"),
+        text(
+            "UPDATE job_attempts SET status = :st, error_details = :err, finished_at = :finish WHERE job_id = :id AND status IN ('RUNNING', 'QUEUED')"
+        ),
         {"id": job_id, "st": final, "err": error, "finish": now},
     )
     db.commit()
     _stage_close_all(db, job_id, ok)
-    publish_event(job_id, {
-        "job_id": job_id,
-        "status": final,
-        "progress_percent": 100.0 if ok else 0.0,
-        "current_stage": "Complete" if ok else "Failed",
-        **({"error_message": error} if error else {}),
-    })
+    publish_event(
+        job_id,
+        {
+            "job_id": job_id,
+            "status": final,
+            "progress_percent": 100.0 if ok else 0.0,
+            "current_stage": "Complete" if ok else "Failed",
+            **({"error_message": error} if error else {}),
+        },
+    )
 
 
 def _resolve_mix_audio(db, mix_id: str) -> tuple[str, Path]:
@@ -408,8 +480,14 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
         tp_ceiling = float(preset["true_peak_ceiling"])
         input_metrics = measure_program_loudness(in_abs)
         db.execute(
-            text("UPDATE mastering_jobs SET status = 'processing', input_lufs = :lufs, input_true_peak = :tp WHERE id = :id"),
-            {"id": mastering_job_id, "lufs": input_metrics["integrated_lufs"], "tp": input_metrics["true_peak_db"]},
+            text(
+                "UPDATE mastering_jobs SET status = 'processing', input_lufs = :lufs, input_true_peak = :tp WHERE id = :id"
+            ),
+            {
+                "id": mastering_job_id,
+                "lufs": input_metrics["integrated_lufs"],
+                "tp": input_metrics["true_peak_db"],
+            },
         )
         db.commit()
         _pipeline_progress(db, job_id, 30.0, "Applying gain and true-peak ceiling")
@@ -421,13 +499,18 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
         out_abs = Path(STORAGE_ROOT) / out_rel
         out_abs.parent.mkdir(parents=True, exist_ok=True)
 
-        with sf.SoundFile(str(in_abs), "r") as fin:
-            with sf.SoundFile(
-                str(out_abs), "w",
-                samplerate=fin.samplerate, channels=fin.channels, subtype="PCM_16",
-            ) as fout:
-                for block in fin.blocks(blocksize=65536, dtype="float32", always_2d=True):
-                    fout.write(np.clip(block * gain_lin, -ceil_lin, ceil_lin))
+        with (
+            sf.SoundFile(str(in_abs), "r") as fin,
+            sf.SoundFile(
+                str(out_abs),
+                "w",
+                samplerate=fin.samplerate,
+                channels=fin.channels,
+                subtype="PCM_16",
+            ) as fout,
+        ):
+            for block in fin.blocks(blocksize=65536, dtype="float32", always_2d=True):
+                fout.write(np.clip(block * gain_lin, -ceil_lin, ceil_lin))
 
         _pipeline_progress(db, job_id, 80.0, "Verifying output compliance")
         out_metrics = measure_program_loudness(out_abs)
@@ -442,14 +525,26 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
             """),
             {
                 "id": mastering_job_id,
-                "lufs": out_metrics["integrated_lufs"], "tp": out_metrics["true_peak_db"],
-                "path": out_rel, "now": now,
-                "metrics": json.dumps({"gain_adjust_db": round(gain_db, 2), "compliance_passed": compliance}),
+                "lufs": out_metrics["integrated_lufs"],
+                "tp": out_metrics["true_peak_db"],
+                "path": out_rel,
+                "now": now,
+                "metrics": json.dumps(
+                    {
+                        "gain_adjust_db": round(gain_db, 2),
+                        "compliance_passed": compliance,
+                    }
+                ),
             },
         )
         db.commit()
         _pipeline_mark_finished(db, job_id, True)
-        return {"status": "ok", "job_id": job_id, "output_path": out_rel, "compliance_passed": compliance}
+        return {
+            "status": "ok",
+            "job_id": job_id,
+            "output_path": out_rel,
+            "compliance_passed": compliance,
+        }
     except Exception as e:
         db.rollback()
         error_str = str(e)
@@ -459,16 +554,19 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
                 {"id": mastering_job_id},
             )
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
         _pipeline_mark_finished(db, job_id, False, error_str)
-        raise e
+        raise
     finally:
         db.close()
 
 
 def _demucs_available() -> bool:
-    return importlib.util.find_spec("demucs") is not None or shutil.which("demucs") is not None
+    return (
+        importlib.util.find_spec("demucs") is not None
+        or shutil.which("demucs") is not None
+    )
 
 
 @celery_app.task(bind=True, name="tasks.run_stem_separation")
@@ -498,7 +596,16 @@ def run_stem_separation(self, job_id: str, stem_job_id: str):
         out_dir.mkdir(parents=True, exist_ok=True)
         _pipeline_progress(db, job_id, 15.0, f"Separating stems with {model}")
 
-        cmd = [sys.executable, "-m", "demucs", "-n", model, "--out", str(out_dir), str(in_abs)]
+        cmd = [
+            sys.executable,
+            "-m",
+            "demucs",
+            "-n",
+            model,
+            "--out",
+            str(out_dir),
+            str(in_abs),
+        ]
         subprocess.run(cmd, check=True, timeout=3500, capture_output=True, text=True)
 
         _pipeline_progress(db, job_id, 75.0, "Analyzing kick/sub collision")
@@ -518,6 +625,7 @@ def run_stem_separation(self, job_id: str, stem_job_id: str):
         collision: float | None = None
         peaks: list = []
         if paths["drums"] and paths["bass"]:
+
             def _load_mono(rel: str, seconds: int = 30):
                 with sf.SoundFile(str(Path(STORAGE_ROOT) / rel), "r") as f:
                     frames = min(len(f), seconds * f.samplerate)
@@ -526,7 +634,9 @@ def run_stem_separation(self, job_id: str, stem_job_id: str):
 
             drums, sr = _load_mono(paths["drums"])
             bass, _ = _load_mono(paths["bass"])
-            analysis = StemSeparatorEngine.analyze_bassline_and_collision(bass, drums, sr)
+            analysis = StemSeparatorEngine.analyze_bassline_and_collision(
+                bass, drums, sr
+            )
             bass_fundamental = analysis.get("bass_fundamental_hz")
             collision = analysis.get("kick_sub_collision_score")
             peaks = analysis.get("resonance_peaks", [])
@@ -543,10 +653,15 @@ def run_stem_separation(self, job_id: str, stem_job_id: str):
                 WHERE id = :id
             """),
             {
-                "id": stem_job_id, "drums": paths["drums"], "bass": paths["bass"],
-                "other": paths["other"], "vocals": paths["vocals"],
-                "fund": bass_fundamental, "coll": collision,
-                "peaks": json.dumps(peaks), "now": now,
+                "id": stem_job_id,
+                "drums": paths["drums"],
+                "bass": paths["bass"],
+                "other": paths["other"],
+                "vocals": paths["vocals"],
+                "fund": bass_fundamental,
+                "coll": collision,
+                "peaks": json.dumps(peaks),
+                "now": now,
             },
         )
         db.commit()
@@ -556,12 +671,15 @@ def run_stem_separation(self, job_id: str, stem_job_id: str):
         db.rollback()
         error_str = str(e)
         try:
-            db.execute(text("UPDATE stem_jobs SET status = 'failed' WHERE id = :id"), {"id": stem_job_id})
+            db.execute(
+                text("UPDATE stem_jobs SET status = 'failed' WHERE id = :id"),
+                {"id": stem_job_id},
+            )
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
         _pipeline_mark_finished(db, job_id, False, error_str)
-        raise e
+        raise
     finally:
         db.close()
 
@@ -573,7 +691,9 @@ def run_sidechain(self, job_id: str, sidechain_job_id: str):
     hostname = socket.gethostname()
     try:
         scj = db.execute(
-            text("SELECT id, media_id, threshold_db, max_ducking_db FROM sidechain_jobs WHERE id = :id"),
+            text(
+                "SELECT id, media_id, threshold_db, max_ducking_db FROM sidechain_jobs WHERE id = :id"
+            ),
             {"id": sidechain_job_id},
         ).fetchone()
         if not scj:
@@ -587,9 +707,19 @@ def run_sidechain(self, job_id: str, sidechain_job_id: str):
             """),
             {"mix": scj.media_id},
         ).fetchone()
-        drums_abs = Path(STORAGE_ROOT) / stem.drums_path if stem and stem.drums_path else None
-        bass_abs = Path(STORAGE_ROOT) / stem.bass_path if stem and stem.bass_path else None
-        if not stem or not drums_abs or not bass_abs or not drums_abs.is_file() or not bass_abs.is_file():
+        drums_abs = (
+            Path(STORAGE_ROOT) / stem.drums_path if stem and stem.drums_path else None
+        )
+        bass_abs = (
+            Path(STORAGE_ROOT) / stem.bass_path if stem and stem.bass_path else None
+        )
+        if (
+            not stem
+            or not drums_abs
+            or not bass_abs
+            or not drums_abs.is_file()
+            or not bass_abs.is_file()
+        ):
             raise RuntimeError(
                 "Sidechain requires a completed stem separation with drums/bass "
                 "files on storage. Run stem separation for this mix first."
@@ -609,8 +739,12 @@ def run_sidechain(self, job_id: str, sidechain_job_id: str):
             kick_audio=kick,
             bass_audio=bass,
             sample_rate=sr,
-            threshold_db=float(scj.threshold_db if scj.threshold_db is not None else -12.0),
-            max_ducking_db=float(scj.max_ducking_db if scj.max_ducking_db is not None else 6.0),
+            threshold_db=float(
+                scj.threshold_db if scj.threshold_db is not None else -12.0
+            ),
+            max_ducking_db=float(
+                scj.max_ducking_db if scj.max_ducking_db is not None else 6.0
+            ),
         )
 
         now = datetime.now(timezone.utc)
@@ -623,9 +757,12 @@ def run_sidechain(self, job_id: str, sidechain_job_id: str):
                 WHERE id = :id
             """),
             {
-                "id": sidechain_job_id, "inv": result["phase_inverted"],
-                "corr": result["phase_correlation"], "gr": result["max_gain_reduction_db"],
-                "rms": result["processed_bass_rms"], "clarity": result["low_end_clarity_score"],
+                "id": sidechain_job_id,
+                "inv": result["phase_inverted"],
+                "corr": result["phase_correlation"],
+                "gr": result["max_gain_reduction_db"],
+                "rms": result["processed_bass_rms"],
+                "clarity": result["low_end_clarity_score"],
                 "now": now,
             },
         )
@@ -637,14 +774,16 @@ def run_sidechain(self, job_id: str, sidechain_job_id: str):
         error_str = str(e)
         try:
             db.execute(
-                text("UPDATE sidechain_jobs SET status = 'failed', error_message = :err WHERE id = :id"),
+                text(
+                    "UPDATE sidechain_jobs SET status = 'failed', error_message = :err WHERE id = :id"
+                ),
                 {"id": sidechain_job_id, "err": error_str},
             )
             db.commit()
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
         _pipeline_mark_finished(db, job_id, False, error_str)
-        raise e
+        raise
     finally:
         db.close()
 
@@ -683,8 +822,12 @@ def run_broadcast_render(self, job_id: str, mix_id: str, params: dict):
         _pipeline_mark_running(db, job_id, hostname, "Rendering 1080p broadcast")
 
         cmd = FFmpegBroadcastCompositor.build_ffmpeg_command(
-            input_audio=str(in_abs), output_dest=str(out_abs),
-            title=title, artist=artist, bpm=bpm, camelot_key=camelot,
+            input_audio=str(in_abs),
+            output_dest=str(out_abs),
+            title=title,
+            artist=artist,
+            bpm=bpm,
+            camelot_key=camelot,
         )
         subprocess.run(cmd, check=True, timeout=3500, capture_output=True, text=True)
         _pipeline_progress(db, job_id, 90.0, "Registering broadcast output")
@@ -700,10 +843,13 @@ def run_broadcast_render(self, job_id: str, mix_id: str, params: dict):
                 )
             """),
             {
-                "id": str(uuid.uuid4()), "mix": mix_id,
+                "id": str(uuid.uuid4()),
+                "mix": mix_id,
                 "station": params.get("station_id") or "syco23_live",
                 "playlist": params.get("playlist_name") or "Underground Freetekno Sets",
-                "details": json.dumps({"output_path": out_rel, "title": title, "artist": artist}),
+                "details": json.dumps(
+                    {"output_path": out_rel, "title": title, "artist": artist}
+                ),
                 "now": now,
             },
         )
@@ -714,6 +860,6 @@ def run_broadcast_render(self, job_id: str, mix_id: str, params: dict):
         db.rollback()
         error_str = str(e)
         _pipeline_mark_finished(db, job_id, False, error_str)
-        raise e
+        raise
     finally:
         db.close()

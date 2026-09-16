@@ -1,11 +1,12 @@
-import subprocess
 import re
-from typing import Dict, List, Optional
+import subprocess
+from typing import ClassVar
+
 
 class FFmpegBroadcastCompositor:
     """Renders 16:9 1080p live streams with audio-reactive spectrums and totem branding."""
 
-    _filter_cache: Dict[str, bool] = {}
+    _filter_cache: ClassVar[dict[str, bool]] = {}
 
     @staticmethod
     def filter_available(name: str) -> bool:
@@ -14,10 +15,13 @@ class FFmpegBroadcastCompositor:
             try:
                 res = subprocess.run(
                     ["ffmpeg", "-hide_banner", "-filters"],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
                 )
                 haystack = res.stdout if res.returncode == 0 else ""
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 haystack = ""
             FFmpegBroadcastCompositor._filter_cache[name] = bool(
                 re.search(rf"(?m)^\s*\S+\s+{re.escape(name)}\s", haystack)
@@ -33,7 +37,7 @@ class FFmpegBroadcastCompositor:
         width: int = 1920,
         height: int = 1080,
         fps: int = 30,
-        include_text: Optional[bool] = None,
+        include_text: bool | None = None,
     ) -> str:
         """Construct multi-layer FFmpeg filter graph for live video rendering.
 
@@ -67,36 +71,47 @@ class FFmpegBroadcastCompositor:
         artist: str = "SYCO23",
         bpm: float = 150.0,
         camelot_key: str = "8A",
-        is_rtmp: bool = False
-    ) -> List[str]:
+        is_rtmp: bool = False,
+    ) -> list[str]:
         """Generate CLI arguments for standalone execution or live RTMP piping."""
         filter_str = FFmpegBroadcastCompositor.build_filter_complex(
-            title=title,
-            artist=artist,
-            bpm=bpm,
-            camelot_key=camelot_key
+            title=title, artist=artist, bpm=bpm, camelot_key=camelot_key
         )
 
         cmd = [
             "ffmpeg",
             "-y",
-            "-i", input_audio,
-            "-filter_complex", filter_str,
-            "-map", "[vout]",
-            "-map", "0:a",
+            "-i",
+            input_audio,
+            "-filter_complex",
+            filter_str,
+            "-map",
+            "[vout]",
+            "-map",
+            "0:a",
             # The color source generates infinite frames; without -shortest
             # the render never terminates (output runs past the audio).
             "-shortest",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-b:v", "4500k",
-            "-maxrate", "5000k",
-            "-bufsize", "10000k",
-            "-pix_fmt", "yuv420p",
-            "-g", "60",
-            "-c:a", "aac",
-            "-b:a", "320k",
-            "-ar", "48000"
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-b:v",
+            "4500k",
+            "-maxrate",
+            "5000k",
+            "-bufsize",
+            "10000k",
+            "-pix_fmt",
+            "yuv420p",
+            "-g",
+            "60",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "320k",
+            "-ar",
+            "48000",
         ]
 
         if is_rtmp:

@@ -1,4 +1,5 @@
 """Shared SQLite seeding helpers for pipeline tests (no Postgres/Redis needed)."""
+
 import io
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +8,8 @@ import soundfile as sf
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-import api.app.models  # noqa: F401 - register every model on Base.metadata
+# Import registers every model on Base.metadata (intentional re-export).
+from api.app import models as models  # noqa: PLC0414
 from api.app.db.session import Base
 from api.app.models.job import Job, JobAttempt, JobStatus, JobType
 from api.app.models.media import MediaAsset, Mix
@@ -50,7 +52,15 @@ def seed_mix(
             codec="pcm",
         )
     )
-    db.add(Mix(id=mix_id, title="Test Set", artist="Tester", media_asset_id=asset_id, status="ready"))
+    db.add(
+        Mix(
+            id=mix_id,
+            title="Test Set",
+            artist="Tester",
+            media_asset_id=asset_id,
+            status="ready",
+        )
+    )
     db.commit()
     return mix_id
 
@@ -79,7 +89,9 @@ def seed_job(db, job_id: str, mix_id: str, job_type: JobType = JobType.ANALYSIS)
     return job_id
 
 
-def seed_completed_stems(db, storage_root: Path, mix_id: str, kick_wav: bytes, bass_wav: bytes) -> str:
+def seed_completed_stems(
+    db, storage_root: Path, mix_id: str, kick_wav: bytes, bass_wav: bytes
+) -> str:
     """Write drums/bass stem files and register a completed StemJob row."""
     stem_dir = storage_root / "assets" / "derived" / "stems" / mix_id
     stem_dir.mkdir(parents=True, exist_ok=True)

@@ -1,13 +1,17 @@
 """Broadcast and AzuraCast synchronization schemas."""
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel
+
 
 class BroadcastSyncRequest(BaseModel):
-    station_id: Optional[str] = "syco23_live"
-    playlist_name: Optional[str] = "Underground Freetekno Sets"
-    scheduled_start: Optional[datetime] = None
+    station_id: str | None = "syco23_live"
+    playlist_name: str | None = "Underground Freetekno Sets"
+    scheduled_start: datetime | None = None
     inject_cue_markers: bool = True
+
 
 class BroadcastSyncResponse(BaseModel):
     sync_id: str
@@ -16,12 +20,13 @@ class BroadcastSyncResponse(BaseModel):
     status: str
     playlist_name: str
     cue_markers_synced: int
-    scheduled_start: Optional[datetime] = None
+    scheduled_start: datetime | None = None
     created_at: datetime
-    synced_at: Optional[datetime] = None
+    synced_at: datetime | None = None
+
 
 class AzuraCastWebhookPayload(BaseModel):
     event: str
-    station: Dict[str, Any]
-    now_playing: Dict[str, Any]
-    listeners: Optional[Dict[str, Any]] = None
+    station: dict[str, Any]
+    now_playing: dict[str, Any]
+    listeners: dict[str, Any] | None = None

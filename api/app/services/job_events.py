@@ -1,6 +1,8 @@
 import json
+from collections.abc import AsyncGenerator
+
 import redis.asyncio as aioredis
-from typing import AsyncGenerator
+
 from ..config import settings
 
 
@@ -21,12 +23,12 @@ async def stream_job_events(job_id: str) -> AsyncGenerator[str, None]:
                 raw_data = msg["data"]
                 yield f"event: update\ndata: {raw_data}\n\n"
                 try:
-                    parsed = json.loads(raw_data)
-                    if parsed.get("status") in ["SUCCEEDED", "FAILED", "CANCELLED"]:
-                        yield f"event: close\ndata: {json.dumps({'job_id': job_id, 'status': parsed.get('status')})}\n\n"
-                        break
-                except Exception:
-                    pass
+                    terminal_status = json.loads(raw_data).get("status")
+                except (ValueError, AttributeError):
+                    terminal_status = None
+                if terminal_status in ["SUCCEEDED", "FAILED", "CANCELLED"]:
+                    yield f"event: close\ndata: {json.dumps({'job_id': job_id, 'status': terminal_status})}\n\n"
+                    break
             else:
                 # Periodic keepalive comment
                 yield ": keepalive\n\n"

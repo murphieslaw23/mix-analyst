@@ -1,11 +1,12 @@
 """Tests for API-key parsing and the mutation guard."""
+
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
-import api.app.api.deps as deps
+from api.app.api import deps
 from api.app.api.deps import key_is_valid, require_api_key
 from api.app.config import Settings
 

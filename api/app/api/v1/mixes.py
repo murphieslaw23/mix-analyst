@@ -1,28 +1,30 @@
+import json
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-import json
 
-from ...db.session import get_db
 from ...config import settings
-from ...models.media import Mix
+from ...db.session import get_db
 from ...models.analysis import AnalysisResult
+from ...models.media import Mix
 from ...models.tracklist import TrackSegment
 from ...models.transition import TransitionEvent
+from ...schemas.analysis import AnalysisResultOut
 from ...schemas.mix import (
-    MixOut,
     MixDetailOut,
     MixListResponse,
-    MixUpdateRequest,
+    MixOut,
     MixTrackOut,
     MixTransitionOut,
+    MixUpdateRequest,
     PeaksResponse,
 )
-from ...schemas.analysis import AnalysisResultOut
-from ...schemas.tracklist import TracklistResponse
-from ...schemas.transition import TransitionListResponse
-from ...services.storage import StorageService
+from ...schemas.tracklist import TracklistResponse, TrackSegmentOut
+from ...schemas.transition import TransitionEventOut, TransitionListResponse
 from ...services.peaks import load_or_compute_peaks
+from ...services.storage import StorageService
 from ..deps import require_api_key
 
 router = APIRouter()
@@ -41,10 +43,12 @@ AUDIO_MEDIA_TYPES = {
 
 
 @router.get("", response_model=MixListResponse)
-def list_mixes(db: Session = Depends(get_db)):
+def list_mixes(db: Annotated[Session, Depends(get_db)]):
     """List all analyzed and registered DJ mixes."""
     mixes = db.query(Mix).order_by(Mix.created_at.desc()).all()
-    return MixListResponse(total=len(mixes), items=mixes)
+    return MixListResponse(
+        total=len(mixes), items=[MixOut.model_validate(m) for m in mixes]
+    )
 
 
 def _build_mix_detail(mix: Mix, db: Session) -> MixDetailOut:
@@ -108,28 +112,38 @@ def _build_mix_detail(mix: Mix, db: Session) -> MixDetailOut:
 
 
 @router.get("/{mix_id}", response_model=MixDetailOut)
-def get_mix(mix_id: str, db: Session = Depends(get_db)):
+def get_mix(mix_id: str, db: Annotated[Session, Depends(get_db)]):
     """Get full metadata, audio URL, track cues and transitions for a mix."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
     return _build_mix_detail(mix, db)
 
 
 @router.get("/{mix_id}/audio")
-def stream_mix_audio(mix_id: str, db: Session = Depends(get_db)):
+def stream_mix_audio(mix_id: str, db: Annotated[Session, Depends(get_db)]):
     """Stream the original mix audio file (supports HTTP Range seeks)."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
 
     storage = StorageService(settings.storage_root)
     try:
         abs_path = storage.safe_resolve(mix.media_asset.storage_path)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stored audio path is invalid")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored audio path is invalid",
+        )
     if not abs_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found on storage")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio file not found on storage",
+        )
 
     suffix = abs_path.suffix.lower()
     return FileResponse(
@@ -140,7 +154,9 @@ def stream_mix_audio(mix_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{mix_id}/peaks", response_model=PeaksResponse)
-def get_mix_peaks(mix_id: str, buckets: int = 1000, db: Session = Depends(get_db)):
+def get_mix_peaks(
+    mix_id: str, db: Annotated[Session, Depends(get_db)], buckets: int = 1000
+):
     """Downsampled waveform peaks for the timeline (computed once, then cached)."""
     if buckets < 64 or buckets > 2000:
         raise HTTPException(
@@ -149,7 +165,9 @@ def get_mix_peaks(mix_id: str, buckets: int = 1000, db: Session = Depends(get_db
         )
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
 
     try:
         peaks, duration = load_or_compute_peaks(
@@ -159,9 +177,14 @@ def get_mix_peaks(mix_id: str, buckets: int = 1000, db: Session = Depends(get_db
             buckets,
         )
     except FileNotFoundError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found on storage")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio file not found on storage",
+        )
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
     return PeaksResponse(
         mix_id=mix_id,
@@ -172,14 +195,19 @@ def get_mix_peaks(mix_id: str, buckets: int = 1000, db: Session = Depends(get_db
 
 
 @router.get("/{mix_id}/analysis", response_model=AnalysisResultOut)
-def get_mix_analysis(mix_id: str, db: Session = Depends(get_db)):
+def get_mix_analysis(mix_id: str, db: Annotated[Session, Depends(get_db)]):
     """Retrieve full audio analysis metrics (BPM, key, Camelot, loudness, quality) for a mix."""
     analysis = db.query(AnalysisResult).filter(AnalysisResult.mix_id == mix_id).first()
     if not analysis:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis results not found for this mix")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Analysis results not found for this mix",
+        )
 
     bpm_cand = json.loads(analysis.bpm_candidates) if analysis.bpm_candidates else []
-    spectral = json.loads(analysis.spectral_summary) if analysis.spectral_summary else {}
+    spectral = (
+        json.loads(analysis.spectral_summary) if analysis.spectral_summary else {}
+    )
     quality = json.loads(analysis.quality_findings) if analysis.quality_findings else []
 
     return AnalysisResultOut(
@@ -202,36 +230,50 @@ def get_mix_analysis(mix_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{mix_id}/tracklist", response_model=TracklistResponse)
-def get_mix_tracklist(mix_id: str, db: Session = Depends(get_db)):
+def get_mix_tracklist(mix_id: str, db: Annotated[Session, Depends(get_db)]):
     """Retrieve detected track segments and identified song metadata for a mix."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
 
-    segments = db.query(TrackSegment).filter(TrackSegment.mix_id == mix_id).order_by(TrackSegment.segment_index.asc()).all()
+    segments = (
+        db.query(TrackSegment)
+        .filter(TrackSegment.mix_id == mix_id)
+        .order_by(TrackSegment.segment_index.asc())
+        .all()
+    )
     identified_count = sum(1 for s in segments if s.match is not None)
 
     return TracklistResponse(
         mix_id=mix_id,
         total_tracks=len(segments),
         identified_tracks=identified_count,
-        tracks=segments,
+        tracks=[TrackSegmentOut.model_validate(s) for s in segments],
     )
 
 
 @router.get("/{mix_id}/transitions", response_model=TransitionListResponse)
-def get_mix_transitions(mix_id: str, db: Session = Depends(get_db)):
+def get_mix_transitions(mix_id: str, db: Annotated[Session, Depends(get_db)]):
     """Retrieve detected transition blend regions, cue points, and harmonic compatibility."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
 
-    transitions = db.query(TransitionEvent).filter(TransitionEvent.mix_id == mix_id).order_by(TransitionEvent.transition_index.asc()).all()
+    transitions = (
+        db.query(TransitionEvent)
+        .filter(TransitionEvent.mix_id == mix_id)
+        .order_by(TransitionEvent.transition_index.asc())
+        .all()
+    )
 
     return TransitionListResponse(
         mix_id=mix_id,
         total_transitions=len(transitions),
-        transitions=transitions,
+        transitions=[TransitionEventOut.model_validate(t) for t in transitions],
     )
 
 
@@ -239,13 +281,15 @@ def get_mix_transitions(mix_id: str, db: Session = Depends(get_db)):
 def update_mix(
     mix_id: str,
     req: MixUpdateRequest,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(require_api_key),
+    db: Annotated[Session, Depends(get_db)],
+    _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Update title or artist metadata for a mix."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
 
     if req.title is not None:
         mix.title = req.title
@@ -260,19 +304,19 @@ def update_mix(
 @router.delete("/{mix_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_mix(
     mix_id: str,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(require_api_key),
+    db: Annotated[Session, Depends(get_db)],
+    _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Delete a mix, its database records, and its audio file if unreferenced."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
+        )
 
     asset = mix.media_asset
     shared = (
-        db.query(Mix)
-        .filter(Mix.id != mix_id, Mix.media_asset_id == asset.id)
-        .count()
+        db.query(Mix).filter(Mix.id != mix_id, Mix.media_asset_id == asset.id).count()
         if asset
         else 1
     )
@@ -287,4 +331,3 @@ def delete_mix(
             storage.delete_file(storage.safe_resolve(rel_path))
         except (ValueError, OSError):
             pass
-    return None

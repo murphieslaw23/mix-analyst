@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict
 from datetime import datetime
-from typing import Optional, List
+
+from pydantic import BaseModel, ConfigDict
+
 from .analysis import AnalysisResultOut
 
 
@@ -13,8 +14,8 @@ class MediaAssetOut(BaseModel):
     sample_rate: int
     channels: int
     codec: str
-    bit_rate: Optional[int] = None
-    format_name: Optional[str] = None
+    bit_rate: int | None = None
+    format_name: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -23,48 +24,48 @@ class MediaAssetOut(BaseModel):
 class MixOut(BaseModel):
     id: str
     title: str
-    artist: Optional[str] = None
+    artist: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
     media_asset: MediaAssetOut
-    analysis_result: Optional[AnalysisResultOut] = None
+    analysis_result: AnalysisResultOut | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class MixListResponse(BaseModel):
-    items: List[MixOut]
+    items: list[MixOut]
     total: int
 
 
 class MixUpdateRequest(BaseModel):
-    title: Optional[str] = None
-    artist: Optional[str] = None
+    title: str | None = None
+    artist: str | None = None
 
 
 class MixTrackOut(BaseModel):
     """Track cue in the shape the PWA waveform/timeline consumes."""
 
-    id: Optional[str] = None
+    id: str | None = None
     title: str
     artist: str
     start_time: float
-    end_time: Optional[float] = None
-    bpm: Optional[float] = None
-    camelot_key: Optional[str] = None
+    end_time: float | None = None
+    bpm: float | None = None
+    camelot_key: str | None = None
 
 
 class MixTransitionOut(BaseModel):
     """Transition zone in the shape the PWA timeline consumes."""
 
-    id: Optional[str] = None
+    id: str | None = None
     start_time: float
-    end_time: Optional[float] = None
-    transition_type: Optional[str] = None
-    from_key: Optional[str] = None
-    to_key: Optional[str] = None
-    harmonic_compatibility: Optional[str] = None
+    end_time: float | None = None
+    transition_type: str | None = None
+    from_key: str | None = None
+    to_key: str | None = None
+    harmonic_compatibility: str | None = None
 
 
 class MixDetailOut(BaseModel):
@@ -72,17 +73,17 @@ class MixDetailOut(BaseModel):
 
     id: str
     title: str
-    artist: Optional[str] = None
+    artist: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
     original_filename: str
     duration_seconds: float
-    bpm: Optional[float] = None
-    camelot_key: Optional[str] = None
+    bpm: float | None = None
+    camelot_key: str | None = None
     audio_url: str
-    tracks: List[MixTrackOut] = []
-    transitions: List[MixTransitionOut] = []
+    tracks: list[MixTrackOut] = []
+    transitions: list[MixTransitionOut] = []
 
 
 class PeaksResponse(BaseModel):
@@ -91,4 +92,4 @@ class PeaksResponse(BaseModel):
     mix_id: str
     buckets: int
     duration_seconds: float
-    peaks: List[float]
+    peaks: list[float]

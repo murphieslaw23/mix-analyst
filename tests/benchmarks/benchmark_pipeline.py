@@ -1,16 +1,18 @@
 """Benchmark suite for analysis pipeline throughput and latency."""
-import time
-import os
+
 import io
+import os
 import tempfile
+import time
 from pathlib import Path
 
 import psutil
+import soundfile as sf
+
 from tests.fixtures.synthetic_audio import generate_synthetic_audio
 from worker.analysis.bpm_detector import detect_bpm
 from worker.analysis.key_detector import detect_window_key
 from worker.analysis.loudness_analyzer import measure_program_loudness
-import soundfile as sf
 
 
 def benchmark_analysis_stages():
@@ -44,7 +46,9 @@ def benchmark_analysis_stages():
         mem_end = process.memory_info().rss / (1024 * 1024)
 
         print("\n--- Pipeline Benchmark Results (60s audio) ---")
-        print(f"BPM Estimate:            {bpm_res['bpm']} (conf {bpm_res['confidence']})")
+        print(
+            f"BPM Estimate:            {bpm_res['bpm']} (conf {bpm_res['confidence']})"
+        )
         print(f"Key Estimate:            {key_name} [{camelot_code}] (conf {key_conf})")
         print(f"Integrated Loudness:     {loudness_res['integrated_lufs']} LUFS")
         print(f"BPM Analysis Time:       {t_bpm * 1000:.2f} ms")
