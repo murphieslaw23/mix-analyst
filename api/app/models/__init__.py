@@ -6,6 +6,7 @@ from api.app.models.transition import TransitionEvent
 from api.app.models.mastering import MasteringPreset, MasteringJob
 from api.app.models.broadcast import BroadcastSync
 from api.app.models.stems import StemJob
+from api.app.models.sidechain import SidechainJob
 
 __all__ = [
     "MediaAsset",
@@ -21,5 +22,6 @@ __all__ = [
     "MasteringPreset",
     "MasteringJob",
     "BroadcastSync",
-    "StemJob"
+    "StemJob",
+    "SidechainJob",
 ]

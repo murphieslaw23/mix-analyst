@@ -25,9 +25,14 @@ celery_app.conf.update(
     task_queues=(
         Queue("analysis"),
         Queue("mastering"),
+        Queue("stems"),
         Queue("exports"),
     ),
     task_routes={
         "tasks.run_analysis_pipeline": {"queue": "analysis"},
+        "tasks.run_mastering_pipeline": {"queue": "mastering"},
+        "tasks.run_stem_separation": {"queue": "stems"},
+        "tasks.run_sidechain": {"queue": "mastering"},
+        "tasks.run_broadcast_render": {"queue": "exports"},
     },
 )

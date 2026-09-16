@@ -52,6 +52,6 @@ services:
       - rpi-redis
     # Module path matches the image layout (/app/worker/celery_app.py) and the
     # queues the API dispatches to (see worker/celery_app.py task_routes).
-    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--max-memory-per-child=256000", "-Q", "analysis,mastering,exports"]
+    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--max-memory-per-child=256000", "-Q", "analysis,mastering,stems,exports"]
     mem_limit: 380m
     mem_reservation: 150m
