@@ -20,9 +20,9 @@ import {
 } from './visualizer/SpeakerStackVisualizer';
 import { VisualizerControls } from './components/VisualizerControls';
 import { MidiControllerModal } from './components/MidiControllerModal';
+import { PipelinePanel } from './components/PipelinePanel';
 import { useWebMidi } from './midi/useWebMidi';
-
-const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+import { API_BASE } from './api';
 
 interface MixData {
   id: string;
@@ -95,7 +95,7 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     return (localStorage.getItem('syco_theme') as 'dark' | 'light') || 'dark';
   });
-  const [activeTab, setActiveTab] = useState<'analyzer' | 'imprint' | 'support'>('analyzer');
+  const [activeTab, setActiveTab] = useState<'analyzer' | 'pipeline' | 'imprint' | 'support'>('analyzer');
   const [viewMode, setViewMode] = useState<'waveform' | 'stack3d' | 'dual'>('dual');
   const [notification, setNotification] = useState<string | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
@@ -473,6 +473,16 @@ export const App: React.FC = () => {
             Mix Analyzer & 3D Rig
           </button>
           <button
+            onClick={() => setActiveTab('pipeline')}
+            className={`px-3 py-1.5 rounded transition ${
+              activeTab === 'pipeline'
+                ? 'bg-[#ea580c] text-white shadow-sm'
+                : isDark ? 'text-[#9ca3af] hover:text-white' : 'text-[#4b5563] hover:text-black'
+            }`}
+          >
+            Pipeline & Broadcast
+          </button>
+          <button
             onClick={() => setActiveTab('support')}
             className={`px-3 py-1.5 rounded transition flex items-center gap-1.5 ${
               activeTab === 'support'
@@ -539,6 +549,13 @@ export const App: React.FC = () => {
       )}
 
       <main className="p-6 max-w-7xl mx-auto">
+        {activeTab === 'pipeline' && (
+          <PipelinePanel
+            selectedMix={selectedMix}
+            isDark={isDark}
+            onLibraryChanged={fetchMixes}
+          />
+        )}
         {activeTab === 'analyzer' && (
           <div className="grid grid-cols-12 gap-6">
             <div className={`col-span-12 md:col-span-3 border rounded-lg p-4 ${
