@@ -1,11 +1,18 @@
 """FastAPI router for audio mastering and loudness reports."""
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+import uuid
 from typing import List
 from api.app.db.session import get_db
+from api.app.config import settings as app_settings
 from api.app.models.media import Mix
 from api.app.models.mastering import MasteringJob
+from api.app.models.job import JobType
 from api.app.schemas.mastering import MasteringPresetResponse, MasteringTriggerRequest, MasteringReportResponse
+from api.app.api.deps import require_api_key
+from api.app.services.pipeline_jobs import enqueue_pipeline_job
+from api.app.services.storage import StorageService
 from worker.analysis.mastering_engine import DEFAULT_PRESETS
 
 router = APIRouter()
@@ -28,24 +35,85 @@ def get_mastering_presets():
         ))
     return presets
 
-@router.post("/mixes/{mix_id}/master", response_model=MasteringReportResponse)
-def trigger_mix_mastering(mix_id: str, request: MasteringTriggerRequest, db: Session = Depends(get_db)):
-    """Trigger two-pass mastering on mix."""
+@router.post("/mixes/{mix_id}/master", response_model=MasteringReportResponse, status_code=202)
+def trigger_mix_mastering(
+    mix_id: str,
+    request: MasteringTriggerRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
+    """Enqueue two-pass loudness mastering; poll the report / job for progress."""
     media = db.query(Mix).filter(Mix.id == mix_id).first()
     if not media:
         raise HTTPException(status_code=404, detail="Mix not found")
 
-    # The offline TwoPassMasteringEngine exists in the worker, but no Celery
-    # task consumes it yet. Returning a fabricated "completed" report here
-    # would lie to operators, so fail loudly until the pipeline is wired.
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Mastering pipeline not implemented: no worker task consumes "
-            "TwoPassMasteringEngine yet. Track real MasteringJob rows via "
-            "GET /mixes/{mix_id}/mastering-report once the pipeline lands."
-        ),
+    preset_key = request.preset_id or "sound_system_heavy"
+    preset = DEFAULT_PRESETS.get(preset_key)
+    if not preset:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown preset '{preset_key}'. Available: {sorted(DEFAULT_PRESETS)}",
+        )
+
+    mjob = MasteringJob(
+        id=str(uuid.uuid4()),
+        media_id=mix_id,
+        preset_id=preset_key,
+        status="queued",
     )
+    db.add(mjob)
+    db.commit()
+    db.refresh(mjob)
+
+    enqueue_pipeline_job(
+        db,
+        mix_id=mix_id,
+        job_type=JobType.MASTERING,
+        task_name="tasks.run_mastering_pipeline",
+        task_args=lambda job_id: [job_id, mjob.id],
+        queue="mastering",
+    )
+    db.refresh(mjob)
+
+    return MasteringReportResponse(
+        job_id=mjob.id,
+        media_id=mix_id,
+        status=mjob.status,
+        preset_name=preset["name"],
+        input_measurements={},
+        output_measurements={},
+        gain_adjust_db=0.0,
+        compliance_passed=False,
+        created_at=mjob.created_at,
+        completed_at=None,
+    )
+
+@router.get("/mixes/{mix_id}/mastered")
+def download_mastered_mix(mix_id: str, db: Session = Depends(get_db)):
+    """Download the latest completed master WAV for a mix."""
+    job = (
+        db.query(MasteringJob)
+        .filter(MasteringJob.media_id == mix_id, MasteringJob.status == "completed")
+        .order_by(MasteringJob.completed_at.desc())
+        .first()
+    )
+    if not job or not job.output_storage_path:
+        raise HTTPException(status_code=404, detail="No completed master found for this mix")
+
+    storage = StorageService(app_settings.storage_root)
+    try:
+        abs_path = storage.safe_resolve(job.output_storage_path)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Stored master path is invalid")
+    if not abs_path.is_file():
+        raise HTTPException(status_code=404, detail="Master file not found on storage")
+
+    return FileResponse(
+        path=str(abs_path),
+        media_type="audio/wav",
+        filename=f"{mix_id}_master.wav",
+    )
+
 
 @router.get("/mixes/{mix_id}/mastering-report", response_model=MasteringReportResponse)
 def get_mastering_report(mix_id: str, db: Session = Depends(get_db)):

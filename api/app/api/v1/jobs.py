@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from celery import Celery
+from typing import List
 import uuid
 
 from ...db.session import get_db
@@ -10,6 +11,7 @@ from ...models.media import Mix
 from ...models.job import Job, JobType, JobStatus, JobAttempt
 from ...schemas.job import JobOut, JobCreateRequest
 from ...services.job_events import stream_job_events
+from ..deps import require_api_key
 
 router = APIRouter()
 celery_client = Celery("mix_analyst_client", broker=settings.celery_broker_url)
@@ -20,6 +22,7 @@ def create_mix_job(
     mix_id: str,
     req: JobCreateRequest,
     db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
 ):
     """Dispatch an asynchronous analysis/processing job for a mix."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
@@ -70,8 +73,23 @@ def create_mix_job(
     return job
 
 
+@router.get("/mixes/{mix_id}/jobs", response_model=List[JobOut])
+def list_mix_jobs(mix_id: str, db: Session = Depends(get_db)):
+    """List all jobs dispatched for a mix, newest first (powers the PWA panel)."""
+    mix = db.query(Mix).filter(Mix.id == mix_id).first()
+    if not mix:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+    jobs = db.query(Job).filter(Job.mix_id == mix_id).order_by(Job.created_at.desc()).all()
+    return jobs
+
+
 @router.get("/jobs/{job_id}", response_model=JobOut)
 def get_job(job_id: str, db: Session = Depends(get_db)):
+    """Get the current status and stage runs for a job."""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return job
     """Get the current status and stage runs for a job."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
@@ -94,7 +112,7 @@ async def get_job_events(job_id: str):
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobOut)
-def cancel_job(job_id: str, db: Session = Depends(get_db)):
+def cancel_job(job_id: str, db: Session = Depends(get_db), _auth: None = Depends(require_api_key)):
     """Cancel an active or queued job."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
@@ -117,7 +135,7 @@ def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/jobs/{job_id}/retry", response_model=JobOut)
-def retry_job(job_id: str, db: Session = Depends(get_db)):
+def retry_job(job_id: str, db: Session = Depends(get_db), _auth: None = Depends(require_api_key)):
     """Retry a failed or cancelled job as a new attempt."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:

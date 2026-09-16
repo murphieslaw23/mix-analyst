@@ -1,30 +1,63 @@
 """FastAPI router for stem separation and bassline analysis."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+import uuid
 from api.app.db.session import get_db
 from api.app.models.media import Mix
 from api.app.models.stems import StemJob
+from api.app.models.job import JobType
 from api.app.schemas.stems import StemSeparationRequest, StemSeparationResponse
+from api.app.api.deps import require_api_key
+from api.app.services.pipeline_jobs import enqueue_pipeline_job
 
 router = APIRouter()
 
-@router.post("/mixes/{mix_id}/stems", response_model=StemSeparationResponse)
-def trigger_stem_separation(mix_id: str, request: StemSeparationRequest, db: Session = Depends(get_db)):
-    """Trigger Demucs 4-stem separation and sub-bass collision analysis."""
+@router.post("/mixes/{mix_id}/stems", response_model=StemSeparationResponse, status_code=202)
+def trigger_stem_separation(
+    mix_id: str,
+    request: StemSeparationRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
+    """Enqueue Demucs 4-stem separation; fails clearly if Demucs is absent.
+
+    Demucs + torch are an optional worker extra (excluded from the base
+    images to stay RPi-viable). Without them the job ends FAILED with an
+    actionable message instead of fake results.
+    """
     media = db.query(Mix).filter(Mix.id == mix_id).first()
     if not media:
         raise HTTPException(status_code=404, detail="Mix not found")
 
-    # Demucs (torch) is not installed in the worker image and no separation
-    # task exists. Previously this endpoint returned instant "completed" jobs
-    # pointing at stem files that were never rendered — fail loudly instead.
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Stem separation not implemented: Demucs model weights and a "
-            "worker separation task are required before this endpoint can "
-            "render drums/bass/other/vocals stems."
-        ),
+    sjob = StemJob(
+        id=str(uuid.uuid4()),
+        media_id=mix_id,
+        model_name=request.model_name or "htdemucs",
+        status="queued",
+    )
+    db.add(sjob)
+    db.commit()
+    db.refresh(sjob)
+
+    enqueue_pipeline_job(
+        db,
+        mix_id=mix_id,
+        job_type=JobType.STEM_SEPARATION,
+        task_name="tasks.run_stem_separation",
+        task_args=lambda job_id: [job_id, sjob.id],
+        queue="stems",
+    )
+    db.refresh(sjob)
+
+    return StemSeparationResponse(
+        job_id=sjob.id,
+        media_id=mix_id,
+        status=sjob.status,
+        model_name=sjob.model_name,
+        stems={},
+        bassline_analysis={},
+        created_at=sjob.created_at,
+        completed_at=None,
     )
 
 @router.get("/mixes/{mix_id}/stems", response_model=StemSeparationResponse)
@@ -33,6 +66,16 @@ def get_mix_stems(mix_id: str, db: Session = Depends(get_db)):
     job = db.query(StemJob).filter(StemJob.media_id == mix_id).order_by(StemJob.created_at.desc()).first()
     if not job:
         raise HTTPException(status_code=404, detail="No stems found for this mix")
+
+    if job.status == "completed":
+        bassline: dict = {
+            "bass_fundamental_hz": job.bass_fundamental_hz,
+            "kick_sub_collision_score": job.kick_sub_collision_score,
+            "low_end_clarity": "optimal" if (job.kick_sub_collision_score or 0.3) < 0.4 else "moderate_clash",
+            "resonance_peaks": job.resonance_peaks or [],
+        }
+    else:
+        bassline = {}
 
     return StemSeparationResponse(
         job_id=job.id,
@@ -45,12 +88,7 @@ def get_mix_stems(mix_id: str, db: Session = Depends(get_db)):
             "other": job.other_path,
             "vocals": job.vocals_path
         },
-        bassline_analysis={
-            "bass_fundamental_hz": job.bass_fundamental_hz or 55.0,
-            "kick_sub_collision_score": job.kick_sub_collision_score or 0.285,
-            "low_end_clarity": "optimal" if (job.kick_sub_collision_score or 0.3) < 0.4 else "moderate_clash",
-            "resonance_peaks": job.resonance_peaks or []
-        },
+        bassline_analysis=bassline,
         created_at=job.created_at,
         completed_at=job.completed_at
     )

@@ -8,12 +8,18 @@ from api.app.models.media import Mix
 from api.app.models.tracklist import TrackSegment
 from api.app.models.broadcast import BroadcastSync
 from api.app.schemas.broadcast import BroadcastSyncRequest, BroadcastSyncResponse, AzuraCastWebhookPayload
+from api.app.api.deps import require_api_key
 from api.app.services.azuracast_service import AzuraCastService
 
 router = APIRouter()
 
 @router.post("/mixes/{mix_id}/sync/azuracast", response_model=BroadcastSyncResponse)
-def sync_to_azuracast(mix_id: str, request: BroadcastSyncRequest, db: Session = Depends(get_db)):
+def sync_to_azuracast(
+    mix_id: str,
+    request: BroadcastSyncRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
     """Sync mix audio, metadata, and cue points to AzuraCast station playlist."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:

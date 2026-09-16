@@ -22,6 +22,7 @@ from ...schemas.analysis import AnalysisResultOut
 from ...schemas.tracklist import TracklistResponse
 from ...schemas.transition import TransitionListResponse, TransitionEventOut
 from ...services.storage import StorageService
+from ..deps import require_api_key
 
 router = APIRouter()
 
@@ -202,7 +203,12 @@ def get_mix_transitions(mix_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{mix_id}", response_model=MixOut)
-def update_mix(mix_id: str, req: MixUpdateRequest, db: Session = Depends(get_db)):
+def update_mix(
+    mix_id: str,
+    req: MixUpdateRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
     """Update title or artist metadata for a mix."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
@@ -219,12 +225,33 @@ def update_mix(mix_id: str, req: MixUpdateRequest, db: Session = Depends(get_db)
 
 
 @router.delete("/{mix_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_mix(mix_id: str, db: Session = Depends(get_db)):
-    """Delete a mix and its associated database records."""
+def delete_mix(
+    mix_id: str,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_api_key),
+):
+    """Delete a mix, its database records, and its audio file if unreferenced."""
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
 
+    asset = mix.media_asset
+    shared = (
+        db.query(Mix)
+        .filter(Mix.id != mix_id, Mix.media_asset_id == asset.id)
+        .count()
+        if asset
+        else 1
+    )
+    rel_path = asset.storage_path if asset else None
+
     db.delete(mix)
     db.commit()
+
+    if shared == 0 and rel_path:
+        storage = StorageService(settings.storage_root)
+        try:
+            storage.delete_file(storage.safe_resolve(rel_path))
+        except (ValueError, OSError):
+            pass
     return None
