@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import List
 import json
 
 from ...db.session import get_db
 from ...config import settings
 from ...models.media import Mix
 from ...models.analysis import AnalysisResult
-from ...models.tracklist import TrackSegment, TrackMatch
+from ...models.tracklist import TrackSegment
 from ...models.transition import TransitionEvent
 from ...schemas.mix import (
     MixOut,
@@ -17,11 +16,13 @@ from ...schemas.mix import (
     MixUpdateRequest,
     MixTrackOut,
     MixTransitionOut,
+    PeaksResponse,
 )
 from ...schemas.analysis import AnalysisResultOut
 from ...schemas.tracklist import TracklistResponse
-from ...schemas.transition import TransitionListResponse, TransitionEventOut
+from ...schemas.transition import TransitionListResponse
 from ...services.storage import StorageService
+from ...services.peaks import load_or_compute_peaks
 from ..deps import require_api_key
 
 router = APIRouter()
@@ -135,6 +136,38 @@ def stream_mix_audio(mix_id: str, db: Session = Depends(get_db)):
         path=str(abs_path),
         media_type=AUDIO_MEDIA_TYPES.get(suffix, "application/octet-stream"),
         filename=mix.media_asset.original_filename,
+    )
+
+
+@router.get("/{mix_id}/peaks", response_model=PeaksResponse)
+def get_mix_peaks(mix_id: str, buckets: int = 1000, db: Session = Depends(get_db)):
+    """Downsampled waveform peaks for the timeline (computed once, then cached)."""
+    if buckets < 64 or buckets > 2000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="buckets must be between 64 and 2000",
+        )
+    mix = db.query(Mix).filter(Mix.id == mix_id).first()
+    if not mix:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found")
+
+    try:
+        peaks, duration = load_or_compute_peaks(
+            settings.storage_root,
+            mix.media_asset.storage_path,
+            mix.media_asset_id,
+            buckets,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found on storage")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    return PeaksResponse(
+        mix_id=mix_id,
+        buckets=len(peaks),
+        duration_seconds=duration,
+        peaks=peaks,
     )
 
 
