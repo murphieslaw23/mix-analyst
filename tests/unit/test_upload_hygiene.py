@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from api.app.models.media import UploadSession, UploadStatus
 from api.app.api.v1.uploads import purge_stale_uploads
+from api.app.services.storage import StorageService
 from tests.helpers.pipeline_seed import make_session
 
 
@@ -60,3 +61,30 @@ def test_purge_removes_only_expired_unfinished_sessions(tmp_path):
     assert fresh.exists()
     assert done.exists()
     assert not orphan.exists()
+
+
+def test_concurrent_same_offset_writes_exactly_one_wins(tmp_path):
+    """Two writers racing the same offset cannot interleave bytes."""
+    import threading
+
+    store = StorageService(str(tmp_path))
+    target = store.create_upload_session_file("race")
+    results = []
+
+    def writer():
+        try:
+            results.append(store.append_chunk(target, b"A" * 64, 0))
+        except ValueError as e:
+            results.append(e)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    successes = [r for r in results if isinstance(r, int)]
+    mismatches = [r for r in results if isinstance(r, ValueError)]
+    assert len(successes) == 1 and len(mismatches) == 1
+    assert target.stat().st_size == 64
+    assert target.read_bytes() == b"A" * 64

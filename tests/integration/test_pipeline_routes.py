@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.app.api.deps as deps
+import api.app.api.rate_limit as rate_limit_mod
 import api.app.api.v1.mixes as mixes_mod
 import api.app.api.v1.sidechain as sidechain_mod
 import api.app.api.v1.mastering as mastering_mod
@@ -55,6 +56,8 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(uploads_mod, "storage", StorageService(str(storage)))
     monkeypatch.setattr(deps, "settings", SimpleNamespace(api_keys=set()))
+    # Isolate the in-memory rate-limit fallback between tests.
+    rate_limit_mod._memory_buckets.clear()
 
     seed_mix(db, storage, generate_synthetic_audio(duration_sec=5.0, bpm=120.0))
 
@@ -69,7 +72,6 @@ def test_mastering_trigger_enqueues_202(client):
     body = res.json()
     assert body["status"] == "queued"
     assert body["preset_name"] == "Club Broadcast"
-    dispatches = [kw for _, kw in client.sent if "run_mastering_pipeline" in str(kw.get("args", [])) or "run_mastering_pipeline" == kw.get("task", "")]
     # send_task called positionally: (task_name, args=..., ...)
     assert any(a and a[0] == "tasks.run_mastering_pipeline" for a, _ in client.sent)
     assert any(kw.get("queue") == "mastering" for _, kw in client.sent)
@@ -189,3 +191,42 @@ def test_upload_init_chunk_abort_flow(client):
     status = client.client.get(f"/api/v1/{upload_id}")
     assert status.status_code == 200
     assert status.json()["status"] == "ABORTED"
+
+
+def test_peaks_endpoint_computes_caches_and_validates(client):
+    first = client.client.get("/api/v1/mixes/m1/peaks?buckets=500")
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["mix_id"] == "m1"
+    assert body["buckets"] == 500
+    assert len(body["peaks"]) == 500
+    assert all(0.0 <= v <= 1.0 for v in body["peaks"])
+    assert max(body["peaks"]) == 1.0
+    assert (client.storage / "assets" / "derived" / "a1_peaks.json").is_file()
+
+    second = client.client.get("/api/v1/mixes/m1/peaks?buckets=500")
+    assert second.json()["peaks"] == body["peaks"]
+
+    assert client.client.get("/api/v1/mixes/m1/peaks?buckets=10").status_code == 400
+    assert client.client.get("/api/v1/mixes/m1/peaks?buckets=5000").status_code == 400
+    assert client.client.get("/api/v1/mixes/nope/peaks").status_code == 404
+
+
+def test_rate_limit_429_then_reads_stay_open(client, monkeypatch):
+    import api.app.api.rate_limit as rate_limit_mod
+
+    monkeypatch.setattr(
+        rate_limit_mod,
+        "settings",
+        SimpleNamespace(rate_limit_per_minute=2, redis_url="redis://127.0.0.1:9/0"),
+    )
+
+    assert client.client.post("/api/v1/mixes/m1/stems", json={}).status_code == 202
+    assert client.client.post("/api/v1/mixes/m1/stems", json={}).status_code == 202
+    limited = client.client.post("/api/v1/mixes/m1/stems", json={})
+    assert limited.status_code == 429
+    assert "Retry-After" in limited.headers
+
+    # Reads are never throttled.
+    assert client.client.get("/api/v1/mixes/m1").status_code == 200
+    assert client.client.get("/api/v1/mixes/m1/peaks?buckets=100").status_code == 200

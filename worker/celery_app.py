@@ -18,6 +18,9 @@ celery_app.conf.update(
     task_track_started=True,
     task_time_limit=3600,
     worker_prefetch_multiplier=1,
+    # Celery results are never read back (status lives in Postgres and the
+    # Redis event stream); expire them so the result backend cannot fill Redis.
+    result_expires=3600,
     # Named queues must match the `-Q` flags in worker/Dockerfile and
     # docker-compose.rpi.yml, otherwise dispatched tasks sit unconsumed
     # in the default `celery` queue forever.

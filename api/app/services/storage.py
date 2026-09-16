@@ -3,6 +3,11 @@ import shutil
 import hashlib
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    fcntl = None
+
 
 class StorageService:
     def __init__(self, root_dir: str):
@@ -34,18 +39,29 @@ class StorageService:
         return temp_file
 
     def append_chunk(self, temp_path: Path, chunk_bytes: bytes, offset: int) -> int:
-        """Append a chunk to the temporary file at the verified offset."""
+        """Append a chunk to the temporary file at the verified offset.
+
+        The offset check and the write happen under an exclusive file lock,
+        so two concurrent writers racing the same offset cannot interleave
+        bytes: exactly one wins, the other gets an offset mismatch.
+        """
         if not temp_path.exists():
             raise FileNotFoundError(f"Upload file {temp_path} not found")
 
-        current_size = temp_path.stat().st_size
-        if current_size != offset:
-            raise ValueError(f"Offset mismatch: expected offset {current_size}, got {offset}")
-
         with open(temp_path, "ab") as f:
-            f.write(chunk_bytes)
-
-        return temp_path.stat().st_size
+            if fcntl is not None:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0, os.SEEK_END)
+                current_size = f.tell()
+                if current_size != offset:
+                    raise ValueError(f"Offset mismatch: expected offset {current_size}, got {offset}")
+                f.write(chunk_bytes)
+                f.flush()
+                return f.tell()
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def compute_sha256(self, file_path: Path) -> str:
         """Compute the SHA-256 hash of a file using streaming reads."""

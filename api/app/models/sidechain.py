@@ -1,5 +1,5 @@
 """Sidechain processing job records."""
-from sqlalchemy import Column, String, Float, ForeignKey, JSON, DateTime, Boolean
+from sqlalchemy import Column, String, Float, ForeignKey, DateTime, Boolean
 from sqlalchemy.sql import func
 from api.app.db.session import Base
 

@@ -5,7 +5,7 @@ and the SSE event stream) plus its domain row, then dispatches the Celery
 task to the queue the worker actually consumes.
 """
 import uuid
-from typing import Callable
+from collections.abc import Callable
 
 from celery import Celery
 from fastapi import HTTPException, status
