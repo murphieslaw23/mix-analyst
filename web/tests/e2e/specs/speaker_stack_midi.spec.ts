@@ -1,13 +1,31 @@
 import { test, expect } from '@playwright/test';
+import mix30MinFixture from '../fixtures/mix_30min.json' with { type: 'json' };
 
 test.describe('Phase 15: 3D Speaker-Stack Visualizer & Web MIDI Hardware Integration', () => {
   test.beforeEach(async ({ page }) => {
+    // Mock the backend so a mix auto-selects and dual view renders.
+    await page.route('**/api/v1/mixes', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([mix30MinFixture]),
+      });
+    });
+
+    await page.route(`**/api/v1/mixes/${mix30MinFixture.id}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mix30MinFixture),
+      });
+    });
+
     await page.goto('/');
   });
 
   test('renders 3D Speaker Stack Canvas and telemetry HUD', async ({ page }) => {
-    const canvas = page.locator('canvas');
-    await expect(canvas.first()).toBeVisible({ timeout: 5000 });
+    const canvas = page.getByTestId('stack-canvas');
+    await expect(canvas).toBeVisible({ timeout: 5000 });
 
     const hudHeader = page.locator('text=SYCO23 // 3D STACK RIG');
     await expect(hudHeader).toBeVisible();

@@ -417,7 +417,7 @@ export const SpeakerStackVisualizer: React.FC<SpeakerStackVisualizerProps> = ({
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
     >
-      <canvas ref={canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" />
+      <canvas ref={canvasRef} data-testid="stack-canvas" className="w-full h-full block cursor-grab active:cursor-grabbing" />
 
       {/* HUD Telemetry Overlay */}
       <div className="absolute top-3 left-3 bg-neutral-900/85 backdrop-blur border border-neutral-700 px-3 py-2 rounded text-xs font-mono text-neutral-300 space-y-1 pointer-events-none">

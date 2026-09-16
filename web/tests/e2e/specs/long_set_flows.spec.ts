@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import mix30MinFixture from './fixtures/mix_30min.json';
+import mix30MinFixture from '../fixtures/mix_30min.json' with { type: 'json' };
 
 test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
   test.beforeEach(async ({ page }) => {
@@ -64,8 +64,12 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
   });
 
   test('User Flow 2: Long-Set Waveform Timeline Interaction & Scrubbing', async ({ page }) => {
-    const canvas = page.locator('canvas');
+    const canvas = page.getByTestId('waveform-canvas');
     await expect(canvas).toBeVisible();
+
+    // The waveform sits below the fold in dual view: scroll first, as
+    // page.mouse.click does not auto-scroll like locator.click does.
+    await canvas.scrollIntoViewIfNeeded();
 
     // Measure bounding box to simulate scrub clicks across 30 minutes
     const box = await canvas.boundingBox();
@@ -94,7 +98,8 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await expect(page.locator('button:has-text("PLAY")')).toBeVisible();
 
     // Scrub forward and test Restart button
-    const canvas = page.locator('canvas');
+    const canvas = page.getByTestId('waveform-canvas');
+    await canvas.scrollIntoViewIfNeeded();
     const box = await canvas.boundingBox();
     if (box) {
       await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.5);
@@ -111,7 +116,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await expect(page.getByText('Detected Tracks (8)')).toBeVisible();
 
     // Click Track #4 (Acid Wall Destroyer at 11:15 = 675s)
-    const track4 = page.locator('div:has-text("4. Acid Wall Destroyer")').last();
+    const track4 = page.getByTestId('track-card').nth(3);
     await expect(track4).toBeVisible();
     await track4.click();
 
@@ -119,7 +124,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await expect(page.getByText('Position: 11:15 / 30:00')).toBeVisible();
 
     // Click Track #7 (Hardtek Ritual Anthem at 24:10 = 1450s)
-    const track7 = page.locator('div:has-text("7. Hardtek Ritual Anthem")').last();
+    const track7 = page.getByTestId('track-card').nth(6);
     await expect(track7).toBeVisible();
     await track7.click();
 
@@ -132,7 +137,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     await expect(page.getByText('Harmonic Transitions (7)')).toBeVisible();
 
     // Inspect Transition #2 (Energy Boost Drop at 07:00 = 420s)
-    const trans2 = page.locator('div:has-text("ENERGY_BOOST_DROP")').first();
+    const trans2 = page.getByTestId('transition-card').nth(1);
     await expect(trans2).toBeVisible();
     await expect(trans2).toContainText('9A → 9B');
     await expect(trans2).toContainText('Relative Major');
@@ -169,12 +174,12 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
   test('User Flow 7: Responsive Layouts (Desktop / Tablet / Mobile)', async ({ page }) => {
     // Verify all primary cards are rendered and accessible
     await expect(page.getByText('Mix Archive')).toBeVisible();
-    await expect(page.locator('canvas')).toBeVisible();
+    await expect(page.getByTestId('waveform-canvas')).toBeVisible();
     await expect(page.getByText('Detected Tracks (8)')).toBeVisible();
     await expect(page.getByText('Harmonic Transitions (7)')).toBeVisible();
 
     // Test responsive canvas interaction on any viewport
-    const canvas = page.locator('canvas');
+    const canvas = page.getByTestId('waveform-canvas');
     await canvas.click({ position: { x: 50, y: 50 } });
     await expect(page.getByText(/Position:/)).toBeVisible();
   });

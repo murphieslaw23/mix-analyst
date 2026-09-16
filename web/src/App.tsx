@@ -192,9 +192,12 @@ export const App: React.FC = () => {
 
   const togglePlayback = useCallback(() => {
     setupAudioGraph();
-    if (audioRef.current && audioRef.current.src) {
+    // NB: use getAttribute, not the .src property — the property resolves
+    // an empty src to the page URL (truthy), which breaks demo-mode toggle.
+    const audioSrc = audioRef.current?.getAttribute('src');
+    if (audioRef.current && audioSrc) {
       if (audioRef.current.paused) {
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(true));
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
       } else {
         audioRef.current.pause();
         setIsPlaying(false);
@@ -701,6 +704,7 @@ export const App: React.FC = () => {
                           width={900}
                           height={160}
                           onClick={handleCanvasClick}
+                          data-testid="waveform-canvas"
                           className="w-full h-[160px] block"
                         />
                       </div>
@@ -751,6 +755,7 @@ export const App: React.FC = () => {
                         {selectedMix.tracks?.map((t, idx) => (
                           <div
                             key={t.id || idx}
+                            data-testid="track-card"
                             onClick={() => {
                               setCurrentTime(t.start_time);
                               if (audioRef.current) audioRef.current.currentTime = t.start_time;
@@ -792,6 +797,7 @@ export const App: React.FC = () => {
                         {selectedMix.transitions?.map((tr, idx) => (
                           <div
                             key={tr.id || idx}
+                            data-testid="transition-card"
                             onClick={() => {
                               setCurrentTime(tr.start_time);
                               if (audioRef.current) audioRef.current.currentTime = tr.start_time;
