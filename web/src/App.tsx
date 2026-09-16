@@ -131,6 +131,8 @@ export const App: React.FC = () => {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const filterRef = useRef<BiquadFilterNode | null>(null);
+  const [peaks, setPeaks] = useState<number[] | null>(null);
   const lastNoteActionTimeRef = useRef<number>(0);
 
   useEffect(() => {
@@ -176,9 +178,14 @@ export const App: React.FC = () => {
         if (audioRef.current && !sourceNodeRef.current) {
           try {
             const src = ctx.createMediaElementSource(audioRef.current);
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 18000;
             src.connect(analyser);
-            analyser.connect(ctx.destination);
+            analyser.connect(filter);
+            filter.connect(ctx.destination);
             sourceNodeRef.current = src;
+            filterRef.current = filter;
           } catch {
             // MediaElementSource fallback
           }
@@ -237,6 +244,12 @@ export const App: React.FC = () => {
 
     if (audioRef.current && midiParamValues.masterVolume !== undefined) {
       audioRef.current.volume = Math.max(0, Math.min(1, midiParamValues.masterVolume));
+    }
+
+    // MIDI filter cutoff drives a lowpass on the player graph (200 Hz..18 kHz).
+    if (filterRef.current && midiParamValues.filterCutoff !== undefined) {
+      const v = Math.max(0, Math.min(1, midiParamValues.filterCutoff));
+      filterRef.current.frequency.value = 200 * Math.pow(90, v);
     }
   }, [midiParamValues]);
 
@@ -301,6 +314,7 @@ export const App: React.FC = () => {
       setSelectedMix(normalizeMixDetail(res.data));
       setCurrentTime(0);
       setIsPlaying(false);
+      void fetchPeaks(mixId);
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
         audioRef.current.pause();
@@ -311,7 +325,22 @@ export const App: React.FC = () => {
         setSelectedMix(found);
         setCurrentTime(0);
         setIsPlaying(false);
+        setPeaks(null);
       }
+    }
+  };
+
+  const fetchPeaks = async (mixId: string) => {
+    try {
+      const res = await axios.get(`${API_BASE}/mixes/${mixId}/peaks?buckets=900`);
+      if (Array.isArray(res.data?.peaks) && res.data.peaks.length > 0) {
+        setPeaks(res.data.peaks);
+      } else {
+        setPeaks(null);
+      }
+    } catch {
+      // Demo mode and unreachable backends fall back to synthetic bars.
+      setPeaks(null);
     }
   };
 
@@ -342,8 +371,11 @@ export const App: React.FC = () => {
     const barWidth = width / numBars;
     for (let i = 0; i < numBars; i++) {
       const x = i * barWidth;
-      const waveHeight = Math.sin(i * 0.15) * 0.3 + Math.cos(i * 0.08) * 0.4 + 0.3;
-      const h = Math.max(8, waveHeight * (height * 0.7));
+      // Real peaks from the backend when available; synthetic bars in demo mode.
+      const waveHeight = peaks && peaks.length > 0
+        ? peaks[Math.min(peaks.length - 1, Math.floor((i / numBars) * peaks.length))]
+        : Math.sin(i * 0.15) * 0.3 + Math.cos(i * 0.08) * 0.4 + 0.3;
+      const h = Math.max(3, Math.min(1, waveHeight) * (height * 0.85));
       const y = (height - h) / 2;
 
       ctx.fillStyle = theme === 'dark' ? '#ea580c' : '#c2410c';
@@ -389,7 +421,7 @@ export const App: React.FC = () => {
     ctx.lineTo(playheadX, height);
     ctx.stroke();
 
-  }, [selectedMix, currentTime, theme, activeTab, viewMode]);
+  }, [selectedMix, currentTime, theme, activeTab, viewMode, peaks]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !selectedMix) return;

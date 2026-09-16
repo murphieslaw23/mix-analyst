@@ -7,7 +7,9 @@ export default defineConfig({
     port: 3000,
     proxy: {
       "/api": {
-        target: "http://api:8000",
+        // Docker hostname by default; override for host-local API runs:
+        // VITE_DEV_API_TARGET=http://localhost:8000 npm run dev
+        target: process.env.VITE_DEV_API_TARGET || "http://api:8000",
         changeOrigin: true,
       },
     },

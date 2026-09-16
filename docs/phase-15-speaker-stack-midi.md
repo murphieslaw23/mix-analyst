@@ -90,7 +90,7 @@ Still open before calling Phase 15 done:
 - Do not treat the HUD dB figures as calibrated measurements; they are display values derived from normalized FFT magnitudes.
 - The HUD frame counter shows smoothed rAF FPS. Sustained operation below ~28 FPS engages ECO mode (badge in the HUD): the stage-glow gradient and strobe flash are skipped until FPS recovers above ~50 for 5 s. If ECO engages on target hardware, reduce canvas pixel ratio or rig complexity before a show.
 - `atmosphericHaze` is implemented as a high-energy-reactive haze band (single gradient fill per frame, skipped in ECO mode).
-- `masterVolume` drives the player element volume; `filterCutoff` is emitted by the MIDI hook but has no DSP target in the player yet.
+- `masterVolume` drives the player element volume; `filterCutoff` drives a lowpass biquad (200 Hz–18 kHz) inserted in the player graph.
 - Prefer WebGL/Three.js or a carefully profiled custom WebGL renderer if the visualizer must scale to richer meshes, textures, post-processing, or low-power mobile hardware.
 
 ## Acceptance checklist
