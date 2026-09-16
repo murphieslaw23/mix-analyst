@@ -5,11 +5,14 @@ from sqlalchemy.orm import Session
 
 from api.app.db.session import get_db
 from api.app.models.media import Mix
+from api.app.models.analysis import AnalysisResult
 from api.app.models.tracklist import TrackSegment
 from api.app.models.transition import TransitionEvent
 from api.app.services.export_service import ExportService
 
 router = APIRouter()
+
+DEFAULT_EXPORT_BPM = 128.0
 
 
 def _get_mix_or_404(db: Session, mix_id: str) -> Mix:
@@ -17,6 +20,14 @@ def _get_mix_or_404(db: Session, mix_id: str) -> Mix:
     if not mix:
         raise HTTPException(status_code=404, detail="Mix not found")
     return mix
+
+
+def _get_mix_bpm(db: Session, mix_id: str) -> float:
+    """Use the analyzed primary BPM; fall back to 128 only when unanalyzed."""
+    analysis = db.query(AnalysisResult).filter(AnalysisResult.mix_id == mix_id).first()
+    if analysis and analysis.primary_bpm:
+        return float(analysis.primary_bpm)
+    return DEFAULT_EXPORT_BPM
 
 
 def _get_tracks(db: Session, mix_id: str) -> list[dict]:
@@ -61,7 +72,7 @@ def export_rekordbox(mix_id: str, db: Session = Depends(get_db)):
         title=mix.title,
         file_path=mix.media_asset.storage_path,
         duration=mix.media_asset.duration_seconds,
-        bpm=128.0,
+        bpm=_get_mix_bpm(db, mix_id),
         tracks=_get_tracks(db, mix_id),
         transitions=transitions,
     )
@@ -75,7 +86,7 @@ def export_traktor(mix_id: str, db: Session = Depends(get_db)):
         title=mix.title,
         file_path=mix.media_asset.storage_path,
         duration=mix.media_asset.duration_seconds,
-        bpm=128.0,
+        bpm=_get_mix_bpm(db, mix_id),
         tracks=_get_tracks(db, mix_id),
     )
     return Response(content=nml_content, media_type="application/xml", headers={"Content-Disposition": f'attachment; filename="{mix.id}_traktor.nml"'})

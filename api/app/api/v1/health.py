@@ -15,6 +15,17 @@ def health_live():
     return {"status": "ok"}
 
 
+def _check_redis() -> bool:
+    """Ping the broker/result backend instead of assuming it is up."""
+    try:
+        import redis
+
+        client = redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+        return client.ping() is True
+    except Exception:
+        return False
+
+
 @router.get("/ready")
 def health_ready(db: Session = Depends(get_db)):
     """Readiness probe: validates database connection and storage availability."""
@@ -37,13 +48,14 @@ def health_ready(db: Session = Depends(get_db)):
         storage_ok = False
 
     all_ready = db_ok and storage_ok
-    status_str = "ok" if all_ready else "degraded"
+    redis_ok = _check_redis()
+    status_str = "ok" if (all_ready and redis_ok) else "degraded"
 
     return {
         "status": status_str,
         "checks": {
             "database": "ok" if db_ok else "error",
             "storage": "ok" if storage_ok else "error",
-            "redis": "ok",
+            "redis": "ok" if redis_ok else "error",
         },
     }
