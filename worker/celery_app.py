@@ -1,4 +1,5 @@
 from celery import Celery
+from kombu import Queue
 import os
 
 celery_app = Celery(
@@ -17,4 +18,16 @@ celery_app.conf.update(
     task_track_started=True,
     task_time_limit=3600,
     worker_prefetch_multiplier=1,
+    # Named queues must match the `-Q` flags in worker/Dockerfile and
+    # docker-compose.rpi.yml, otherwise dispatched tasks sit unconsumed
+    # in the default `celery` queue forever.
+    task_default_queue="analysis",
+    task_queues=(
+        Queue("analysis"),
+        Queue("mastering"),
+        Queue("exports"),
+    ),
+    task_routes={
+        "tasks.run_analysis_pipeline": {"queue": "analysis"},
+    },
 )

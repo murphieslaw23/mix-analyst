@@ -47,12 +47,14 @@ def create_mix_job(
     db.commit()
     db.refresh(job)
 
-    # Dispatch to Celery worker queue
+    # Dispatch to Celery worker queue (must match the `analysis` queue
+    # the worker consumes via `-Q analysis,mastering,exports`)
     try:
         async_result = celery_client.send_task(
             "tasks.run_analysis_pipeline",
             args=[job.id],
             task_id=f"job_{job.id}",
+            queue="analysis",
         )
         job.celery_task_id = async_result.id
         db.commit()
@@ -145,6 +147,7 @@ def retry_job(job_id: str, db: Session = Depends(get_db)):
             "tasks.run_analysis_pipeline",
             args=[job.id],
             task_id=f"job_{job.id}_att_{new_attempt.attempt_number}",
+            queue="analysis",
         )
         job.celery_task_id = async_result.id
         db.commit()
