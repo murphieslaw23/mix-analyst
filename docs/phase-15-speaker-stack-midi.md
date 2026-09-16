@@ -1,6 +1,9 @@
 # Phase 15 — Speaker-Stack Visualizer & Web MIDI
 
-**Status:** Source modules committed; application integration is pending.
+**Status:** Implemented and integrated in `web/src/App.tsx` (visualizer, controls,
+MIDI modal, live `AnalyserNode` graph, MIDI→visual/playback mapping with
+250 ms note debounce). Remaining: physical-controller verification and
+mobile frame-time profiling (see checklist).
 
 **Repository:** `murphieslaw23/mix-analyst`  
 **Branch:** `main`  
@@ -63,17 +66,24 @@ Mappings are stored per browser origin under `syco23_midi_mapping`. No MIDI data
 
 ## Integration status
 
-The Phase 15 source modules were added in commit `fe026d8`, but the current `web/src/App.tsx` was not updated by that commit. Therefore the components are not yet mounted in the application and MIDI parameter values are not yet connected to playback, cue navigation, DSP, or visualizer settings.
+The Phase 15 source modules were first added in commit `fe026d8`, and the
+application wiring landed afterwards (`1472ee9` and follow-up `fix(phase15)`
+commits): `App.tsx` mounts `SpeakerStackVisualizer`, `VisualizerControls`,
+and `MidiControllerModal`, holds the shared `VisualizerSettings` state,
+builds the playback `AudioContext`/`AnalyserNode` graph, maps CC values to
+excursion/strobe/orbit/volume, and maps debounced note triggers to
+play/pause and cue jumps. The HUD telemetry update is throttled to ~8 Hz.
 
-Before calling Phase 15 feature-complete, implement these wiring steps:
+Still open before calling Phase 15 done:
 
-1. Import and render `SpeakerStackVisualizer`, `VisualizerControls`, and `MidiControllerModal` from `web/src/App.tsx`.
-2. Create a shared `VisualizerSettings` state object and pass it to the visualizer and controls.
-3. Create or expose the playback `AudioContext` / `AnalyserNode` and pass it to `SpeakerStackVisualizer` with the actual playing state.
-4. Use `useWebMidi()` in the mounted feature boundary, then map emitted CC values to volume, excursion, strobe sensitivity, and orbit state.
-5. Map play/pause and cue note triggers only to existing, user-safe player actions; avoid repeated note-on retriggers.
-6. Run `npm run typecheck`, `npm run build`, and the Playwright suite. The committed Phase 15 E2E spec assumes the visualizer and controls are mounted, so it should be enabled only after integration.
-7. Test with a physical controller in a Chromium-family browser over a secure origin or localhost. Provide graceful unavailable/permission-denied UI for other browsers.
+1. Test with a physical controller in a Chromium-family browser over a secure
+   origin or localhost (presets are untested against real hardware).
+2. Profile frame times on low-power mobile devices; if the animation loop
+   causes UI churn, render telemetry directly to canvas.
+3. Decide on `atmosphericHaze`: it is declared in `VisualizerSettings` but not
+   consumed by the renderer — implement it or remove it from the contract.
+4. Evaluate a WebGL/Three.js renderer if richer meshes, textures, or
+   post-processing are required (current projection is 2D canvas).
 
 ## Operational notes
 
@@ -85,11 +95,11 @@ Before calling Phase 15 feature-complete, implement these wiring steps:
 
 ## Acceptance checklist
 
-- [ ] Visualizer and controls are mounted from `App.tsx`
-- [ ] Playback audio provides a live `AnalyserNode`
-- [ ] MIDI access and permission denial states are visible and recoverable
+- [x] Visualizer and controls are mounted from `App.tsx`
+- [x] Playback audio provides a live `AnalyserNode`
+- [x] MIDI access and permission denial states are visible and recoverable
 - [ ] At least one physical controller is verified via MIDI Learn
 - [ ] MIDI CC values produce the intended visual or playback changes
-- [ ] Note triggers are debounced and do not fire on note-off
-- [ ] Typecheck, production build, and Phase 15 Playwright test pass
+- [x] Note triggers are debounced and do not fire on note-off
+- [x] Typecheck, production build, and Phase 15 Playwright test pass
 - [ ] Chromium desktop and mobile/responsive behavior are manually checked

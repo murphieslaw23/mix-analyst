@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   rpi-redis:
     image: redis:7-alpine
@@ -13,18 +11,20 @@ services:
 
   rpi-api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      # Repo-root context: Dockerfiles address api//worker//tests/ relatively.
+      context: .
+      dockerfile: api/Dockerfile
     container_name: syco-rpi-api
     restart: unless-stopped
     environment:
-      - ENVIRONMENT=production
-      - PORT=8000
+      # Names must match api/app/config.py Settings (unknown names are ignored,
+      # so the previous STORAGE_PATH/CORS_ORIGINS/DEMUCS_* entries had no effect).
       - DATABASE_URL=sqlite:////app/storage/mixanalyst.db
       - REDIS_URL=redis://rpi-redis:6379/0
-      - STORAGE_PATH=/app/storage
-      - CORS_ORIGINS=https://mix-analyzer-system-corrupt.vercel.app,http://localhost:3000
-      - DEMUCS_ENABLED=false
+      - CELERY_BROKER_URL=redis://rpi-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://rpi-redis:6379/0
+      - STORAGE_ROOT=/app/storage
+      - ALLOWED_ORIGINS=https://mix-analyzer-system-corrupt.vercel.app,http://localhost:3000
     volumes:
       - ./storage:/app/storage
     ports:
@@ -36,20 +36,22 @@ services:
 
   rpi-worker:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: worker/Dockerfile
     container_name: syco-rpi-worker
     restart: unless-stopped
     environment:
       - DATABASE_URL=sqlite:////app/storage/mixanalyst.db
       - REDIS_URL=redis://rpi-redis:6379/0
-      - STORAGE_PATH=/app/storage
-      - DEMUCS_DEVICE=cpu
-      - DEMUCS_ENABLED=false
+      - CELERY_BROKER_URL=redis://rpi-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://rpi-redis:6379/0
+      - STORAGE_ROOT=/app/storage
     volumes:
       - ./storage:/app/storage
     depends_on:
       - rpi-redis
-    command: ["celery", "-A", "celery_app.celery", "worker", "--loglevel=INFO", "--concurrency=1", "--max-memory-per-child=256000"]
+    # Module path matches the image layout (/app/worker/celery_app.py) and the
+    # queues the API dispatches to (see worker/celery_app.py task_routes).
+    command: ["celery", "-A", "worker.celery_app", "worker", "--loglevel=INFO", "--concurrency=1", "--max-memory-per-child=256000", "-Q", "analysis,mastering,exports"]
     mem_limit: 380m
     mem_reservation: 150m

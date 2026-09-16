@@ -70,8 +70,8 @@ Run the memory-capped, single-concurrency compose stack:
 git clone https://github.com/murphieslaw23/mix-analyst.git /opt/syco23/mix-analyst
 cd /opt/syco23/mix-analyst
 
-# 2. Create storage directory
-mkdir -p storage/uploads storage/mastered
+# 2. Create storage directory (quarantine/assets subdirs are auto-created)
+mkdir -p storage
 sudo chown -R 1000:1000 storage
 
 # 3. Start lightweight stack
@@ -110,9 +110,15 @@ After=network.target redis-server.service
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/opt/syco23/mix-analyst/api
+WorkingDirectory=/opt/syco23/mix-analyst
 EnvironmentFile=/opt/syco23/mix-analyst/.env
-ExecStart=/opt/syco23/mix-analyst/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log
+# .env must define (names match api/app/config.py Settings):
+#   DATABASE_URL=sqlite:////opt/syco23/storage/mixanalyst.db
+#   REDIS_URL=redis://127.0.0.1:6379/0
+#   CELERY_BROKER_URL / CELERY_RESULT_BACKEND (same Redis URL)
+#   STORAGE_ROOT=/opt/syco23/storage
+#   ALLOWED_ORIGINS=https://mix-analyzer-system-corrupt.vercel.app,http://localhost:3000
+ExecStart=/opt/syco23/mix-analyst/.venv/bin/uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log
 Restart=always
 RestartSec=5
 MemoryMax=200M
@@ -130,9 +136,11 @@ After=network.target redis-server.service
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/opt/syco23/mix-analyst/worker
+WorkingDirectory=/opt/syco23/mix-analyst
 EnvironmentFile=/opt/syco23/mix-analyst/.env
-ExecStart=/opt/syco23/mix-analyst/.venv/bin/celery -A celery_app.celery worker --loglevel=INFO --concurrency=1 --max-memory-per-child=256000
+# Module path must match the repo layout (worker/celery_app.py); running with
+# cwd inside worker/ as `-A celery_app.celery` breaks task imports.
+ExecStart=/opt/syco23/mix-analyst/.venv/bin/celery -A worker.celery_app worker --loglevel=INFO --concurrency=1 --max-memory-per-child=256000 -Q analysis,mastering,exports
 Restart=always
 RestartSec=10
 MemoryMax=400M
