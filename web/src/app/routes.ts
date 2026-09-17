@@ -30,7 +30,25 @@ export const MORE_ROUTE = '/more';
 /** In-page anchor for the Analysis Jobs section of the Process surface. */
 export const JOBS_ANCHOR = `${PROCESS_ROUTE}#jobs`;
 
-export type AppRouteKey = 'library' | 'process' | 'jobs' | 'more';
+/**
+ * Task 3/4/7 feature routes (deep-linkable workflow surfaces).
+ * PROCESS_INTAKE_ROUTE ('/process') is the new reducer-first upload journey;
+ * PROCESS_ROUTE ('/pipeline') keeps rendering PipelinePanel (job dispatch stays
+ * there until a later task moves it). Detail routes are matched by prefix —
+ * see parseJobDetailId / parseBatchDetailId.
+ */
+export const PROCESS_INTAKE_ROUTE = '/process';
+export const BATCHES_ROUTE = '/batches';
+
+export type AppRouteKey =
+  | 'library'
+  | 'process'
+  | 'jobs'
+  | 'more'
+  | 'intake'
+  | 'jobDetail'
+  | 'batches'
+  | 'batchDetail';
 
 export interface AppRouteDef {
   key: AppRouteKey;
@@ -61,7 +79,49 @@ export function getRouteForPath(pathname: string): AppRouteKey {
   if (clean === PROCESS_ROUTE) return 'process';
   if (clean === JOBS_ROUTE) return 'jobs';
   if (clean === MORE_ROUTE) return 'more';
+  if (clean === PROCESS_INTAKE_ROUTE) return 'intake';
+  if (clean === BATCHES_ROUTE) return 'batches';
+  if (parseJobDetailId(clean) !== null) return 'jobDetail';
+  if (parseBatchDetailId(clean) !== null) return 'batchDetail';
   return 'library';
+}
+
+/** Deep link for one job's progress/recovery view. */
+export function jobDetailPath(jobId: string): string {
+  return `${JOBS_ROUTE}/${jobId}`;
+}
+
+/** Deep link for one batch aggregate view. */
+export function batchDetailPath(batchId: string): string {
+  return `${BATCHES_ROUTE}/${batchId}`;
+}
+
+/** Extract the job id from `/jobs/:jobId`; null for anything else. */
+export function parseJobDetailId(pathname: string): string | null {
+  const clean = normalizePath(pathname);
+  const prefix = `${JOBS_ROUTE}/`;
+  if (!clean.startsWith(prefix) || clean.length <= prefix.length) return null;
+  const rest = clean.slice(prefix.length);
+  if (rest.includes('/') || rest.length === 0) return null;
+  try {
+    return decodeURIComponent(rest);
+  } catch {
+    return rest;
+  }
+}
+
+/** Extract the batch id from `/batches/:batchId`; null for anything else. */
+export function parseBatchDetailId(pathname: string): string | null {
+  const clean = normalizePath(pathname);
+  const prefix = `${BATCHES_ROUTE}/`;
+  if (!clean.startsWith(prefix) || clean.length <= prefix.length) return null;
+  const rest = clean.slice(prefix.length);
+  if (rest.includes('/') || rest.length === 0) return null;
+  try {
+    return decodeURIComponent(rest);
+  } catch {
+    return rest;
+  }
 }
 
 /** Human-readable title for the current pathname (for live announcements). */
@@ -71,6 +131,14 @@ export function routeTitle(pathname: string): string {
       return 'Pipeline & Broadcast';
     case 'jobs':
       return 'Jobs';
+    case 'jobDetail':
+      return 'Job detail';
+    case 'intake':
+      return 'Process audio';
+    case 'batches':
+      return 'Batch review';
+    case 'batchDetail':
+      return 'Batch detail';
     case 'more':
       return 'More';
     default:
@@ -79,7 +147,13 @@ export function routeTitle(pathname: string): string {
 }
 
 export function isActivePath(currentPathname: string, targetPath: string): boolean {
-  return normalizePath(currentPathname) === normalizePath(targetPath);
+  const current = normalizePath(currentPathname);
+  const target = normalizePath(targetPath);
+  if (current === target) return true;
+  // Detail views keep their section nav highlighted (e.g. /jobs/:id -> Jobs).
+  if (target === JOBS_ROUTE && current.startsWith(`${JOBS_ROUTE}/`)) return true;
+  if (target === BATCHES_ROUTE && current.startsWith(`${BATCHES_ROUTE}/`)) return true;
+  return false;
 }
 
 /** SPA navigation: pushState + popstate so usePathname subscribers update. */
@@ -105,4 +179,23 @@ export function usePathname(): string {
     () => LIBRARY_ROUTE,
   );
   return normalizePath(full);
+}
+
+function searchSnapshot(): string {
+  return typeof window === 'undefined' ? '' : window.location.search || '';
+}
+
+/** Current query string, updated on back/forward + navigate(). */
+export function useSearchString(): string {
+  return useSyncExternalStore(subscribeToPathname, searchSnapshot, () => '');
+}
+
+/** Single query param (e.g. `mix` on /jobs?mix=:id); null when absent. */
+export function useQueryParam(name: string): string | null {
+  const search = useSearchString();
+  try {
+    return new URLSearchParams(search).get(name);
+  } catch {
+    return null;
+  }
 }

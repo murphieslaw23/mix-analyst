@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import axios from 'axios';
 import {
   CheckCircle,
@@ -14,10 +14,9 @@ import { AnalysisPanel } from './components/AnalysisPanel';
 import { MixLibrary } from './components/MixLibrary';
 import { AppShell } from './app/AppShell';
 import {
-  JOBS_ANCHOR,
-  PROCESS_ROUTE,
   getRouteForPath,
-  navigate,
+  parseBatchDetailId,
+  parseJobDetailId,
   usePathname,
 } from './app/routes';
 import { API_BASE } from './api';
@@ -38,6 +37,14 @@ import type {
 
 const FULL_ZOOM: ZoomWindow = { start: 0, end: 1 };
 const PEAK_BUCKETS = 1200;
+
+// Task 3/4/7 feature surfaces load lazily so the initial bundle stays lean.
+// PipelinePanel (the /pipeline Process surface) keeps its eager import.
+const ProcessPage = React.lazy(() => import('./features/process/ProcessPage'));
+const JobsPage = React.lazy(() => import('./features/jobs/JobsPage'));
+const JobDetailPage = React.lazy(() => import('./features/jobs/JobDetailPage'));
+const BatchReviewPage = React.lazy(() => import('./features/batches/BatchReviewPage'));
+const BatchDetailPage = React.lazy(() => import('./features/batches/BatchDetailPage'));
 
 export const App: React.FC = () => {
   const [mixes, setMixes] = useState<MixListItem[]>([]);
@@ -243,6 +250,17 @@ export const App: React.FC = () => {
   };
 
   const isDark = theme === 'dark';
+  const routeFallback = (
+    <div
+      className={`p-12 text-center rounded-lg border ${isDark ? 'bg-[#15171e] border-[#232630] text-[#71717a]' : 'bg-white border-[#e5e7eb] text-[#6b7280]'}`}
+      aria-busy="true"
+      role="status"
+    >
+      Loading…
+    </div>
+  );
+  const jobDetailId = route === 'jobDetail' ? parseJobDetailId(pathname) : null;
+  const batchDetailId = route === 'batchDetail' ? parseBatchDetailId(pathname) : null;
   const duration = selectedMix?.duration_seconds || 0;
   const tracks = selectedMix?.tracks ?? [];
   const transitions = selectedMix?.transitions ?? [];
@@ -358,45 +376,30 @@ export const App: React.FC = () => {
             onLibraryChanged={fetchMixes}
           />
         )}
+        {route === 'intake' && (
+          <Suspense fallback={routeFallback}>
+            <ProcessPage isDark={isDark} />
+          </Suspense>
+        )}
         {route === 'jobs' && (
-          <div className="space-y-6" data-testid="jobs-view">
-            <div className={`border rounded-lg p-6 ${isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'}`}>
-              <h2 className="text-xl font-bold text-[#ea580c] uppercase tracking-wide mb-2">
-                Jobs
-              </h2>
-              <p className={`text-sm leading-relaxed ${isDark ? 'text-[#9ca3af]' : 'text-[#4b5563]'}`}>
-                Job dispatch and live progress live in the Process surface. No jobs are
-                fabricated here — open Pipeline &amp; Broadcast to dispatch and track real
-                engine jobs for the selected mix.
-              </p>
-              <div className="flex flex-wrap gap-2 mt-4">
-                <a
-                  href={PROCESS_ROUTE}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    navigate(PROCESS_ROUTE);
-                  }}
-                  className="px-4 py-2 min-h-[44px] inline-flex items-center rounded bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-bold"
-                >
-                  Go to Pipeline &amp; Broadcast
-                </a>
-                <a
-                  href={JOBS_ANCHOR}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    navigate(JOBS_ANCHOR);
-                  }}
-                  className={`px-4 py-2 min-h-[44px] inline-flex items-center text-xs font-semibold rounded border transition ${
-                    isDark
-                      ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
-                      : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
-                  }`}
-                >
-                  Analysis jobs anchor
-                </a>
-              </div>
-            </div>
-          </div>
+          <Suspense fallback={routeFallback}>
+            <JobsPage isDark={isDark} />
+          </Suspense>
+        )}
+        {route === 'jobDetail' && jobDetailId && (
+          <Suspense fallback={routeFallback}>
+            <JobDetailPage jobId={jobDetailId} isDark={isDark} />
+          </Suspense>
+        )}
+        {route === 'batches' && (
+          <Suspense fallback={routeFallback}>
+            <BatchReviewPage isDark={isDark} />
+          </Suspense>
+        )}
+        {route === 'batchDetail' && batchDetailId && (
+          <Suspense fallback={routeFallback}>
+            <BatchDetailPage batchId={batchDetailId} isDark={isDark} />
+          </Suspense>
         )}
         {route === 'library' && (
           <div className="grid grid-cols-12 gap-6">

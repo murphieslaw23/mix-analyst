@@ -38,8 +38,14 @@ export const AppShell: React.FC<AppShellProps> = ({
     switch (getRouteForPath(currentPath)) {
       case 'process':
         return 'Process';
+      case 'intake':
+        return 'Process audio';
       case 'jobs':
+      case 'jobDetail':
         return 'Jobs';
+      case 'batches':
+      case 'batchDetail':
+        return 'Batches';
       case 'more':
         return 'More';
       default:
