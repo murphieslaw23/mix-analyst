@@ -50,3 +50,16 @@ def test_alembic_reports_exactly_one_head():
     cfg = Config(str(PROJECT_ROOT / "api" / "alembic.ini"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
     assert len(heads) == 1
+
+
+def test_revision_ids_fit_alembic_version_column():
+    """alembic_version.version_num is varchar(32): longer ids roll back DDL."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(PROJECT_ROOT / "api" / "alembic.ini"))
+    script = ScriptDirectory.from_config(cfg)
+    revisions = list(script.walk_revisions())
+    assert revisions
+    for rev in revisions:
+        assert len(rev.revision) <= 32, rev.revision

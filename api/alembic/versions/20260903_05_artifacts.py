@@ -1,7 +1,7 @@
 """immutable artifacts
 
 Revision ID: 20260903_05_artifacts
-Revises: 20260903_04_batches_notifications
+Revises: 20260903_04_batches
 Create Date: 2026-09-17 17:11:45.651148
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260903_05_artifacts"
-down_revision: str | Sequence[str] | None = "20260903_04_batches_notifications"
+down_revision: str | Sequence[str] | None = "20260903_04_batches"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

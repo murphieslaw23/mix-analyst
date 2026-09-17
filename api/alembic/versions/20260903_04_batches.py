@@ -1,6 +1,6 @@
 """batches and notifications
 
-Revision ID: 20260903_04_batches_notifications
+Revision ID: 20260903_04_batches
 Revises: 20260903_03_identity_scope
 Create Date: 2026-09-17 16:52:31.397125
 
@@ -11,7 +11,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260903_04_batches_notifications"
+revision: str = "20260903_04_batches"
 down_revision: str | Sequence[str] | None = "20260903_03_identity_scope"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
