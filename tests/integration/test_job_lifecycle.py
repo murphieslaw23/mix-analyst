@@ -57,6 +57,7 @@ def test_create_job_persists_outbox_before_broker_publish(tmp_path):
     job = enqueue_job(
         db,
         mix_id="m1",
+        project_id="default-project",
         job_type=JobType.ANALYSIS,
         task_name="tasks.run_analysis_pipeline",
         task_args=lambda new_id: [new_id],
@@ -74,6 +75,7 @@ def test_broker_failure_keeps_durable_queued_job(tmp_path):
     job = enqueue_job(
         db,
         mix_id="m1",
+        project_id="default-project",
         job_type=JobType.ANALYSIS,
         task_name="tasks.run_analysis_pipeline",
         task_args=["x"],
@@ -111,6 +113,7 @@ def test_dispatcher_delivers_pending_after_outage(tmp_path):
     job = enqueue_job(
         db,
         mix_id="m1",
+        project_id="default-project",
         job_type=JobType.ANALYSIS,
         task_name="tasks.run_analysis_pipeline",
         task_args=["x"],

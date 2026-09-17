@@ -25,6 +25,7 @@ def enqueue_job(
     db: Session,
     *,
     mix_id: str,
+    project_id: str,
     job_type: JobType,
     task_name: str,
     task_args: list[Any] | Callable[[str], list[Any]],
@@ -39,6 +40,7 @@ def enqueue_job(
     """
     job = Job(
         id=str(uuid.uuid4()),
+        project_id=project_id,
         mix_id=mix_id,
         job_type=job_type,
         status=JobStatus.QUEUED,

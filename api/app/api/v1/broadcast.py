@@ -4,19 +4,20 @@ import datetime
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from api.app.api.deps import require_api_key
+from api.app.api.deps import get_current_principal, require_api_key
 from api.app.db.session import get_db
 from api.app.models.broadcast import BroadcastSync
-from api.app.models.media import Mix
 from api.app.models.tracklist import TrackSegment
+from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.broadcast import (
     AzuraCastWebhookPayload,
     BroadcastSyncRequest,
     BroadcastSyncResponse,
 )
+from api.app.services.auth import require_owned_mix
 from api.app.services.azuracast_service import AzuraCastService
 
 router = APIRouter()
@@ -27,12 +28,11 @@ def sync_to_azuracast(
     mix_id: str,
     request: BroadcastSyncRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Sync mix audio, metadata, and cue points to AzuraCast station playlist."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=404, detail="Mix not found")
+    mix = require_owned_mix(db, principal, mix_id)
 
     segments = (
         db.query(TrackSegment)
@@ -88,8 +88,13 @@ def sync_to_azuracast(
 
 
 @router.get("/mixes/{mix_id}/broadcast-status")
-def get_broadcast_status(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_broadcast_status(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Retrieve broadcast sync status for a mix."""
+    require_owned_mix(db, principal, mix_id)
     sync_record = (
         db.query(BroadcastSync)
         .filter(BroadcastSync.media_id == mix_id)

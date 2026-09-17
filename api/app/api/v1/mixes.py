@@ -12,6 +12,7 @@ from ...models.media import Mix
 from ...models.tracklist import TrackSegment
 from ...models.transition import TransitionEvent
 from ...schemas.analysis import AnalysisResultOut
+from ...schemas.auth import CurrentPrincipal
 from ...schemas.mix import (
     MixDetailOut,
     MixListResponse,
@@ -23,9 +24,10 @@ from ...schemas.mix import (
 )
 from ...schemas.tracklist import TracklistResponse, TrackSegmentOut
 from ...schemas.transition import TransitionEventOut, TransitionListResponse
+from ...services.auth import require_owned_mix
 from ...services.peaks import load_or_compute_peaks
 from ...services.storage import StorageService
-from ..deps import require_api_key
+from ..deps import get_current_principal, require_api_key
 
 router = APIRouter()
 
@@ -43,9 +45,17 @@ AUDIO_MEDIA_TYPES = {
 
 
 @router.get("", response_model=MixListResponse)
-def list_mixes(db: Annotated[Session, Depends(get_db)]):
-    """List all analyzed and registered DJ mixes."""
-    mixes = db.query(Mix).order_by(Mix.created_at.desc()).all()
+def list_mixes(
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
+    """List all analyzed and registered DJ mixes in the caller's project."""
+    mixes = (
+        db.query(Mix)
+        .filter(Mix.project_id == principal.project_id)
+        .order_by(Mix.created_at.desc())
+        .all()
+    )
     return MixListResponse(
         total=len(mixes), items=[MixOut.model_validate(m) for m in mixes]
     )
@@ -112,24 +122,24 @@ def _build_mix_detail(mix: Mix, db: Session) -> MixDetailOut:
 
 
 @router.get("/{mix_id}", response_model=MixDetailOut)
-def get_mix(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_mix(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Get full metadata, audio URL, track cues and transitions for a mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    mix = require_owned_mix(db, principal, mix_id)
     return _build_mix_detail(mix, db)
 
 
 @router.get("/{mix_id}/audio")
-def stream_mix_audio(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def stream_mix_audio(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Stream the original mix audio file (supports HTTP Range seeks)."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    mix = require_owned_mix(db, principal, mix_id)
 
     storage = StorageService(settings.storage_root)
     try:
@@ -155,7 +165,10 @@ def stream_mix_audio(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 @router.get("/{mix_id}/peaks", response_model=PeaksResponse)
 def get_mix_peaks(
-    mix_id: str, db: Annotated[Session, Depends(get_db)], buckets: int = 1000
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+    buckets: int = 1000,
 ):
     """Downsampled waveform peaks for the timeline (computed once, then cached)."""
     if buckets < 64 or buckets > 2000:
@@ -163,11 +176,7 @@ def get_mix_peaks(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="buckets must be between 64 and 2000",
         )
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    mix = require_owned_mix(db, principal, mix_id)
 
     try:
         peaks, duration = load_or_compute_peaks(
@@ -195,8 +204,13 @@ def get_mix_peaks(
 
 
 @router.get("/{mix_id}/analysis", response_model=AnalysisResultOut)
-def get_mix_analysis(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_mix_analysis(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Retrieve full audio analysis metrics (BPM, key, Camelot, loudness, quality) for a mix."""
+    require_owned_mix(db, principal, mix_id)
     analysis = db.query(AnalysisResult).filter(AnalysisResult.mix_id == mix_id).first()
     if not analysis:
         raise HTTPException(
@@ -230,13 +244,13 @@ def get_mix_analysis(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.get("/{mix_id}/tracklist", response_model=TracklistResponse)
-def get_mix_tracklist(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_mix_tracklist(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Retrieve detected track segments and identified song metadata for a mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    require_owned_mix(db, principal, mix_id)
 
     segments = (
         db.query(TrackSegment)
@@ -255,13 +269,13 @@ def get_mix_tracklist(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.get("/{mix_id}/transitions", response_model=TransitionListResponse)
-def get_mix_transitions(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_mix_transitions(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Retrieve detected transition blend regions, cue points, and harmonic compatibility."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    require_owned_mix(db, principal, mix_id)
 
     transitions = (
         db.query(TransitionEvent)
@@ -282,14 +296,11 @@ def update_mix(
     mix_id: str,
     req: MixUpdateRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Update title or artist metadata for a mix."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    mix = require_owned_mix(db, principal, mix_id)
 
     if req.title is not None:
         mix.title = req.title
@@ -305,14 +316,11 @@ def update_mix(
 def delete_mix(
     mix_id: str,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Delete a mix, its database records, and its audio file if unreferenced."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    mix = require_owned_mix(db, principal, mix_id)
 
     asset = mix.media_asset
     shared = (

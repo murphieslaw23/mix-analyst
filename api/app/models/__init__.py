@@ -1,5 +1,6 @@
 from api.app.models.analysis import AnalysisResult
 from api.app.models.broadcast import BroadcastSync
+from api.app.models.identity import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, Project, User
 from api.app.models.job import Job, JobAttempt, StageRun
 from api.app.models.job_event import JobEvent
 from api.app.models.mastering import MasteringJob, MasteringPreset
@@ -11,6 +12,8 @@ from api.app.models.tracklist import TrackMatch, TrackSegment
 from api.app.models.transition import TransitionEvent
 
 __all__ = [
+    "DEFAULT_PROJECT_ID",
+    "DEFAULT_USER_ID",
     "AnalysisResult",
     "BroadcastSync",
     "Job",
@@ -21,6 +24,7 @@ __all__ = [
     "MediaAsset",
     "Mix",
     "OutboxMessage",
+    "Project",
     "SidechainJob",
     "StageRun",
     "StemJob",
@@ -28,4 +32,5 @@ __all__ = [
     "TrackSegment",
     "TransitionEvent",
     "UploadSession",
+    "User",
 ]

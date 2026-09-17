@@ -4,18 +4,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.app.api.deps import require_api_key
+from api.app.api.deps import get_current_principal, require_api_key
 from api.app.config import settings as app_settings
 from api.app.db.session import get_db
 from api.app.models.job import JobType
-from api.app.models.media import Mix
 from api.app.models.sidechain import SidechainJob
 from api.app.models.stems import StemJob
+from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.sidechain import (
     SidechainProcessRequest,
     SidechainProcessResponse,
     SidechainReportResponse,
 )
+from api.app.services.auth import require_owned_mix
 from api.app.services.pipeline_jobs import enqueue_pipeline_job
 from api.app.services.storage import StorageService
 
@@ -48,12 +49,11 @@ def _latest_usable_stems(db: Session, mix_id: str) -> StemJob | None:
 def apply_dynamic_sidechain(
     request: SidechainProcessRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Enqueue kick/sub sidechain ducking on real separated stems (409 otherwise)."""
-    media = db.query(Mix).filter(Mix.id == request.media_id).first()
-    if not media:
-        raise HTTPException(status_code=404, detail="Mix asset not found")
+    require_owned_mix(db, principal, request.media_id)
 
     if not _latest_usable_stems(db, request.media_id):
         raise HTTPException(
@@ -79,6 +79,7 @@ def apply_dynamic_sidechain(
     enqueue_pipeline_job(
         db,
         mix_id=request.media_id,
+        project_id=principal.project_id,
         job_type=JobType.SIDECHAIN,
         task_name="tasks.run_sidechain",
         task_args=lambda job_id: [job_id, scj.id],
@@ -99,8 +100,13 @@ def apply_dynamic_sidechain(
 
 
 @router.get("/mixes/{mix_id}/sidechain", response_model=SidechainReportResponse)
-def get_sidechain_report(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_sidechain_report(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Retrieve the latest sidechain result for a mix."""
+    require_owned_mix(db, principal, mix_id)
     job = (
         db.query(SidechainJob)
         .filter(SidechainJob.media_id == mix_id)

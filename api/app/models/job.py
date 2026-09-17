@@ -15,6 +15,7 @@ from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
+from .identity import DEFAULT_PROJECT_ID
 
 if TYPE_CHECKING:
     from .job_event import JobEvent
@@ -53,6 +54,9 @@ class Job(Base):
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id"), default=DEFAULT_PROJECT_ID, index=True
     )
     mix_id: Mapped[str] = mapped_column(String(36), ForeignKey("mixes.id"), index=True)
     job_type: Mapped[JobType] = mapped_column(

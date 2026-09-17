@@ -7,17 +7,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from api.app.api.deps import require_api_key
+from api.app.api.deps import get_current_principal, require_api_key
 from api.app.config import settings as app_settings
 from api.app.db.session import get_db
 from api.app.models.job import JobType
 from api.app.models.mastering import MasteringJob
-from api.app.models.media import Mix
+from api.app.schemas.auth import CurrentPrincipal
 from api.app.schemas.mastering import (
     MasteringPresetResponse,
     MasteringReportResponse,
     MasteringTriggerRequest,
 )
+from api.app.services.auth import require_owned_mix
 from api.app.services.jsonfields import parse_json_field
 from api.app.services.pipeline_jobs import enqueue_pipeline_job
 from api.app.services.storage import StorageService
@@ -54,12 +55,11 @@ def trigger_mix_mastering(
     mix_id: str,
     request: MasteringTriggerRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Enqueue two-pass loudness mastering; poll the report / job for progress."""
-    media = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not media:
-        raise HTTPException(status_code=404, detail="Mix not found")
+    require_owned_mix(db, principal, mix_id)
 
     preset_key = request.preset_id or "sound_system_heavy"
     preset: dict[str, Any] = DEFAULT_PRESETS.get(preset_key, {})
@@ -82,6 +82,7 @@ def trigger_mix_mastering(
     enqueue_pipeline_job(
         db,
         mix_id=mix_id,
+        project_id=principal.project_id,
         job_type=JobType.MASTERING,
         task_name="tasks.run_mastering_pipeline",
         task_args=lambda job_id: [job_id, mjob.id],
@@ -104,8 +105,13 @@ def trigger_mix_mastering(
 
 
 @router.get("/mixes/{mix_id}/mastered")
-def download_mastered_mix(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def download_mastered_mix(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Download the latest completed master WAV for a mix."""
+    require_owned_mix(db, principal, mix_id)
     job = (
         db.query(MasteringJob)
         .filter(MasteringJob.media_id == mix_id, MasteringJob.status == "completed")
@@ -133,8 +139,13 @@ def download_mastered_mix(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.get("/mixes/{mix_id}/mastering-report", response_model=MasteringReportResponse)
-def get_mastering_report(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_mastering_report(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Retrieve the latest mastering report for a mix."""
+    require_owned_mix(db, principal, mix_id)
     job = (
         db.query(MasteringJob)
         .filter(MasteringJob.media_id == mix_id)
@@ -164,7 +175,9 @@ def get_mastering_report(mix_id: str, db: Annotated[Session, Depends(get_db)]):
             "true_peak_db": job.output_true_peak or preset["true_peak_ceiling"],
         },
         gain_adjust_db=parse_json_field(job.metrics, {}).get("gain_adjust_db", 0.0),
-        compliance_passed=True,
+        compliance_passed=bool(
+            parse_json_field(job.metrics, {}).get("compliance_passed", False)
+        ),
         created_at=job.created_at,
         completed_at=job.completed_at or job.created_at,
     )

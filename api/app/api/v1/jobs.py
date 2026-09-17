@@ -15,13 +15,14 @@ from worker.outbox_dispatcher import dispatch_pending
 from ...config import settings
 from ...db.session import get_db
 from ...models.job import Job, JobAttempt, JobStatus, JobType
-from ...models.media import Mix
 from ...models.outbox import OutboxMessage
+from ...schemas.auth import CurrentPrincipal
 from ...schemas.job import JobCreateRequest, JobOut
+from ...services.auth import require_owned_job, require_owned_mix
 from ...services.job_commands import enqueue_job
 from ...services.job_events import publish_terminal_event, stream_job_events
 from ...services.job_events_store import record_job_event
-from ..deps import require_api_key
+from ..deps import get_current_principal, require_api_key
 
 router = APIRouter()
 celery_client = Celery("mix_analyst_client", broker=settings.celery_broker_url)
@@ -34,6 +35,7 @@ def create_mix_job(
     mix_id: str,
     req: JobCreateRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Dispatch an asynchronous analysis/processing job for a mix.
@@ -42,11 +44,7 @@ def create_mix_job(
     a down broker leaves the job QUEUED and retryable instead of failing
     the request.
     """
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    mix = require_owned_mix(db, principal, mix_id)
 
     try:
         job_type = (
@@ -65,6 +63,7 @@ def create_mix_job(
     return enqueue_job(
         db,
         mix_id=mix.id,
+        project_id=principal.project_id,
         job_type=job_type,
         task_name="tasks.run_analysis_pipeline",
         task_args=lambda new_id: [new_id],
@@ -74,44 +73,45 @@ def create_mix_job(
 
 
 @router.get("/mixes/{mix_id}/jobs", response_model=list[JobOut])
-def list_mix_jobs(mix_id: str, db: Annotated[Session, Depends(get_db)]):
+def list_mix_jobs(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """List all jobs dispatched for a mix, newest first (powers the PWA panel)."""
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
-        )
+    require_owned_mix(db, principal, mix_id)
     jobs = (
-        db.query(Job).filter(Job.mix_id == mix_id).order_by(Job.created_at.desc()).all()
+        db.query(Job)
+        .filter(Job.mix_id == mix_id, Job.project_id == principal.project_id)
+        .order_by(Job.created_at.desc())
+        .all()
     )
     return jobs
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
-def get_job(job_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_job(
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Get the current status and stage runs for a job."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
-        )
-    return job
+    return require_owned_job(db, principal, job_id)
 
 
 @router.get("/jobs/{job_id}/events")
 async def get_job_events(
-    request: Request, job_id: str, db: Annotated[Session, Depends(get_db)]
+    request: Request,
+    job_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
 ):
     """Replay durable events, then subscribe to the live tail.
 
     Clients resume with Last-Event-ID; unknown jobs 404 instead of
     opening an empty stream.
     """
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
-        )
+    require_owned_job(db, principal, job_id)
     try:
         last_event_id = int(request.headers.get("Last-Event-ID", "0"))
     except ValueError:
@@ -138,14 +138,11 @@ async def get_job_events(
 def cancel_job(
     job_id: str,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Cancel an active or queued job (cooperative: no force-terminate)."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
-        )
+    job = require_owned_job(db, principal, job_id)
 
     if job.status in [JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED]:
         return job
@@ -189,14 +186,11 @@ def cancel_job(
 def retry_job(
     job_id: str,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Retry a failed or cancelled job as a new attempt."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
-        )
+    job = require_owned_job(db, principal, job_id)
 
     if job.status not in [JobStatus.FAILED, JobStatus.CANCELLED]:
         raise HTTPException(

@@ -23,6 +23,7 @@ def enqueue_pipeline_job(
     db: Session,
     *,
     mix_id: str,
+    project_id: str,
     job_type: JobType,
     task_name: str,
     task_args: list | Callable[[str], list],
@@ -46,6 +47,7 @@ def enqueue_pipeline_job(
         return enqueue_job(
             db,
             mix_id=mix_id,
+            project_id=project_id,
             job_type=job_type,
             task_name=task_name,
             task_args=task_args,

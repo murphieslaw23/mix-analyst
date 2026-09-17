@@ -2,14 +2,17 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
+from api.app.api.deps import get_current_principal
 from api.app.db.session import get_db
 from api.app.models.analysis import AnalysisResult
 from api.app.models.media import Mix
 from api.app.models.tracklist import TrackSegment
 from api.app.models.transition import TransitionEvent
+from api.app.schemas.auth import CurrentPrincipal
+from api.app.services.auth import require_owned_mix
 from api.app.services.export_service import ExportService
 
 router = APIRouter()
@@ -17,11 +20,8 @@ router = APIRouter()
 DEFAULT_EXPORT_BPM = 128.0
 
 
-def _get_mix_or_404(db: Session, mix_id: str) -> Mix:
-    mix = db.query(Mix).filter(Mix.id == mix_id).first()
-    if not mix:
-        raise HTTPException(status_code=404, detail="Mix not found")
-    return mix
+def _get_mix_or_404(db: Session, principal: CurrentPrincipal, mix_id: str) -> Mix:
+    return require_owned_mix(db, principal, mix_id)
 
 
 def _get_mix_bpm(db: Session, mix_id: str) -> float:
@@ -50,8 +50,12 @@ def _get_tracks(db: Session, mix_id: str) -> list[dict]:
 
 
 @router.get("/{mix_id}/export/cue")
-def export_cue_sheet(mix_id: str, db: Annotated[Session, Depends(get_db)]):
-    mix = _get_mix_or_404(db, mix_id)
+def export_cue_sheet(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
+    mix = _get_mix_or_404(db, principal, mix_id)
     cue_content = ExportService.generate_cue_sheet(
         filename=mix.media_asset.original_filename,
         title=mix.title,
@@ -66,8 +70,12 @@ def export_cue_sheet(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.get("/{mix_id}/export/youtube")
-def export_youtube_timestamps(mix_id: str, db: Annotated[Session, Depends(get_db)]):
-    _get_mix_or_404(db, mix_id)
+def export_youtube_timestamps(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
+    _get_mix_or_404(db, principal, mix_id)
     return Response(
         content=ExportService.generate_youtube_timestamps(_get_tracks(db, mix_id)),
         media_type="text/plain; charset=utf-8",
@@ -75,8 +83,12 @@ def export_youtube_timestamps(mix_id: str, db: Annotated[Session, Depends(get_db
 
 
 @router.get("/{mix_id}/export/rekordbox")
-def export_rekordbox(mix_id: str, db: Annotated[Session, Depends(get_db)]):
-    mix = _get_mix_or_404(db, mix_id)
+def export_rekordbox(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
+    mix = _get_mix_or_404(db, principal, mix_id)
     transitions = [
         {
             "start_time": event.start_time_seconds,
@@ -106,8 +118,12 @@ def export_rekordbox(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 
 @router.get("/{mix_id}/export/traktor")
-def export_traktor(mix_id: str, db: Annotated[Session, Depends(get_db)]):
-    mix = _get_mix_or_404(db, mix_id)
+def export_traktor(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
+    mix = _get_mix_or_404(db, principal, mix_id)
     nml_content = ExportService.generate_traktor_nml(
         title=mix.title,
         file_path=mix.media_asset.storage_path,

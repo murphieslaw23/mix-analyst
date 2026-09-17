@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ...config import settings
 from ...db.session import get_db
 from ...models.media import MediaAsset, Mix, UploadSession, UploadStatus
+from ...schemas.auth import CurrentPrincipal
 from ...schemas.upload import (
     UploadChunkResponse,
     UploadCompleteRequest,
@@ -20,8 +21,9 @@ from ...schemas.upload import (
     UploadStatusResponse,
 )
 from ...services.audio_probe import AudioProbeError, probe_audio
+from ...services.auth import require_owned_upload_session
 from ...services.storage import StorageService
-from ..deps import require_api_key
+from ..deps import get_current_principal, require_api_key
 
 router = APIRouter()
 storage = StorageService(settings.storage_root)
@@ -78,6 +80,7 @@ def purge_stale_uploads(
 def init_upload(
     req: UploadInitRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Initialize a new resumable upload session."""
@@ -96,6 +99,7 @@ def init_upload(
 
     upload_session = UploadSession(
         id=session_id,
+        project_id=principal.project_id,
         filename=req.filename,
         total_size_bytes=req.total_size_bytes,
         chunk_size=req.chunk_size,
@@ -122,16 +126,11 @@ async def upload_chunk(
     file: Annotated[UploadFile, File(...)],
     offset: Annotated[int, Form(...)],
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Append a chunk to the active upload session."""
-    upload_session = (
-        db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    )
-    if not upload_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found"
-        )
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     if upload_session.status in [UploadStatus.COMPLETED, UploadStatus.FAILED]:
         raise HTTPException(
@@ -175,16 +174,11 @@ def complete_upload(
     upload_id: str,
     req: UploadCompleteRequest,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Finalize the upload, probe audio validity with ffprobe, and create the MediaAsset and Mix."""
-    upload_session = (
-        db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    )
-    if not upload_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found"
-        )
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     temp_path = Path(upload_session.temp_path)
     if not temp_path.exists():
@@ -224,6 +218,7 @@ def complete_upload(
     # Persist MediaAsset
     media_asset = MediaAsset(
         id=asset_id,
+        project_id=principal.project_id,
         original_filename=upload_session.filename,
         storage_path=rel_path,
         file_size_bytes=actual_size,
@@ -244,6 +239,7 @@ def complete_upload(
         else Path(upload_session.filename).stem
     )
     mix = Mix(
+        project_id=principal.project_id,
         title=mix_title,
         artist=req.artist.strip() if req.artist and req.artist.strip() else None,
         media_asset_id=media_asset.id,
@@ -271,15 +267,13 @@ def complete_upload(
 
 
 @router.get("/{upload_id}", response_model=UploadStatusResponse)
-def get_upload_status(upload_id: str, db: Annotated[Session, Depends(get_db)]):
+def get_upload_status(
+    upload_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
     """Get status of an active or completed upload session."""
-    upload_session = (
-        db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    )
-    if not upload_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found"
-        )
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     progress = 0.0
     if upload_session.total_size_bytes > 0:
@@ -303,16 +297,11 @@ def get_upload_status(upload_id: str, db: Annotated[Session, Depends(get_db)]):
 def abort_upload(
     upload_id: str,
     db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
     """Abort an upload session and remove its quarantined temp file."""
-    upload_session = (
-        db.query(UploadSession).filter(UploadSession.id == upload_id).first()
-    )
-    if not upload_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Upload session not found"
-        )
+    upload_session = require_owned_upload_session(db, principal, upload_id)
 
     if upload_session.status not in [UploadStatus.COMPLETED]:
         try:

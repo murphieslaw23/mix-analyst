@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # Empty (default) = single-user open mode, reads always stay open.
     api_keys: Annotated[set[str], NoDecode] = set()
 
+    # JWT ownership (core plan Task 2). Bearer tokens carry sub/project_id
+    # and are membership-checked against users/projects on every request.
+    # Open mode (default) falls back to the default project principal;
+    # AUTH_ENFORCED=true requires a Bearer token for every request.
+    auth_jwt_secret: str = "development-only-change-me-before-enforcement"
+    auth_jwt_algorithm: str = "HS256"
+    auth_enforced: bool = False
+
     # Rate limiting for write methods (POST/PUT/DELETE). 0 disables.
     rate_limit_per_minute: int = 60
 
