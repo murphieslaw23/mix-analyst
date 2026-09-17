@@ -6,28 +6,25 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      // The update applies only after the user accepts it in UpdateBanner;
-      // never skipWaiting on install.
-      registerType: "prompt",
+      // Custom worker (src/pwa/sw.ts): versioned precache plus push /
+      // click handlers with safe-link validation. Updates still apply
+      // only after the user accepts them in UpdateBanner.
+      strategies: 'injectManifest',
+      srcDir: 'src/pwa',
+      filename: 'sw.ts',
+      registerType: 'prompt',
       includeAssets: [
-        "icon.svg",
-        "icon-192.png",
-        "icon-512.png",
-        "icon-maskable-512.png",
-        "apple-touch-icon.png",
+        'icon.svg',
+        'icon-192.png',
+        'icon-512.png',
+        'icon-maskable-512.png',
+        'apple-touch-icon.png',
       ],
       manifest: false, // hand-authored manifest.webmanifest stays canonical
-      workbox: {
-        // App-shell fallback for navigations only. Operational traffic
-        // (/api/*, uploads, streams, downloads) is network-only: no cached
-        // API response may ever impersonate the backend.
-        navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//, /^\/uploads\//, /^\/downloads\//],
-        runtimeCaching: [],
-        // Push/click handlers live in a follow-up injectManifest worker;
-        // generateSW must not claim clients out from under the user.
-        skipWaiting: false,
-        clientsClaim: false,
+      injectManifest: {
+        // Navigation fallback is registered inside src/pwa/sw.ts
+        // (NavigationRoute with an operational-path denylist).
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
       },
       devOptions: {
         // Service workers stay disabled under `vite dev` so E2E and local
