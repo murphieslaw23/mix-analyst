@@ -29,8 +29,12 @@ def get_db() -> Generator:
 
 
 def init_db() -> None:
-    """Initialize database tables."""
-    # Import registers every model on Base.metadata (intentional re-export).
-    from api.app import models as models  # noqa: PLC0414
+    """Initialize the database schema via Alembic migrations.
 
-    Base.metadata.create_all(bind=engine)
+    Kept under this name so lifespan startup and existing test doubles
+    keep working; new code should prefer
+    api.app.db.migrations.upgrade_to_head directly.
+    """
+    from .migrations import upgrade_to_head
+
+    upgrade_to_head()

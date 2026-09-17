@@ -1,4 +1,5 @@
 import json
+import os
 from functools import lru_cache
 from typing import Annotated
 
@@ -8,7 +9,10 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "Mix Analyst"
@@ -29,7 +33,8 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://redis:6379/0"
     celery_result_backend: str = "redis://redis:6379/0"
 
-    # Storage
+    # Storage (STORAGE_ROOT canonical for compose; STORAGE_DIR accepted
+    # as a legacy alias from the deployment contract).
     storage_root: str = "/data/storage"
     max_upload_size_bytes: int = 4 * 1024 * 1024 * 1024  # 4 GB max per mix
     default_chunk_size_bytes: int = 5 * 1024 * 1024  # 5 MB per chunk
@@ -43,6 +48,17 @@ class Settings(BaseSettings):
 
     # Rate limiting for write methods (POST/PUT/DELETE). 0 disables.
     rate_limit_per_minute: int = 60
+
+    @field_validator("storage_root", mode="before")
+    @classmethod
+    def apply_storage_dir_alias(cls, value: object) -> object:
+        # An explicitly configured STORAGE_ROOT (environment or .env)
+        # always wins; STORAGE_DIR only fills the gap.
+        if "STORAGE_ROOT" not in os.environ:
+            legacy = os.environ.get("STORAGE_DIR")
+            if legacy:
+                return legacy
+        return value
 
     @field_validator("allowed_origins", mode="before")
     @classmethod
