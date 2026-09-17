@@ -203,3 +203,26 @@ def test_mastering_registers_immutable_artifact(env):
     assert len(rows) == 1
     assert rows[0].key.endswith("_master_club_broadcast.wav")
     assert len(rows[0].sha256) == 64
+
+
+def test_analysis_result_id_fits_primary_key(env):
+    """Regression: worker-written ids must fit Postgres varchar(36).
+
+    SQLite never enforces column lengths, so this runs the real analysis
+    task and asserts the persisted analysis id length explicitly.
+    """
+    from api.app.models.analysis import AnalysisResult
+    from worker.tasks import run_analysis_pipeline
+
+    wav = generate_synthetic_audio(duration_sec=5.0, bpm=150.0)
+    seed_mix(env.db, env.storage, wav)
+    seed_job(env.db, "jA", "m1", JobType.ANALYSIS)
+    env.db.commit()
+
+    result = run_analysis_pipeline("jA")
+
+    assert result["status"] == "ok"
+    env.db.expire_all()
+    row = env.db.query(AnalysisResult).filter_by(mix_id="m1").one()
+    assert len(row.id) <= 36
+    assert env.db.query(Job).filter_by(id="jA").one().status == JobStatus.SUCCEEDED

@@ -169,8 +169,9 @@ def run_analysis_pipeline(self, job_id: str):
             progress_callback=progress_tracker
         )
 
-        # Persist AnalysisResult in DB
-        analysis_id = f"analysis_{mix_id}"
+        # Persist AnalysisResult in DB (surrogate uuid: Postgres enforces
+        # the String(36) primary key, so no prefixed composite ids here).
+        analysis_id = str(uuid.uuid4())
         db.execute(
             text("""
                 INSERT INTO analysis_results (
