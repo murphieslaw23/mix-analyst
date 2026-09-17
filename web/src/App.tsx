@@ -1,23 +1,32 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import {
-  Sun,
-  Moon,
-  ShieldCheck,
-  HelpCircle,
-  Download,
-  Radio,
-  Layers,
-  Wrench,
   CheckCircle,
   ExternalLink,
   Volume2,
+  Layers,
+  Radio,
+  Wrench,
 } from 'lucide-react';
 import { PipelinePanel } from './components/PipelinePanel';
 import { WaveformDetail } from './components/WaveformDetail';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { MixLibrary } from './components/MixLibrary';
+import { AppShell } from './app/AppShell';
+import {
+  JOBS_ANCHOR,
+  PROCESS_ROUTE,
+  getRouteForPath,
+  navigate,
+  usePathname,
+} from './app/routes';
 import { API_BASE } from './api';
+import {
+  normalizeAnalysis,
+  normalizeMixDetail,
+  normalizeMixListItem,
+} from './api/mixAdapters';
+import { normalizeMixListResponse } from './api/contracts';
 import { clamp, formatTime } from './audio/format';
 import type {
   AnalysisSummary,
@@ -26,64 +35,6 @@ import type {
   RegionSelection,
   ZoomWindow,
 } from './types';
-
-// Backend contracts: GET /mixes returns {total, items[]} with nested
-// media_asset/analysis_result, GET /mixes/{id} returns the same field names
-// flattened (see api/app/schemas/mix.py MixDetailOut). E2E fixtures and
-// older payloads may already be flat arrays — accept every known shape.
-const normalizeMixListItem = (raw: any): MixListItem => ({
-  id: raw.id,
-  original_filename: raw.original_filename ?? raw.media_asset?.original_filename ?? 'unknown-mix',
-  title: raw.title,
-  duration_seconds: raw.duration_seconds ?? raw.media_asset?.duration_seconds,
-  bpm: raw.bpm ?? raw.analysis_result?.primary_bpm,
-});
-
-const normalizeMixDetail = (raw: any): MixDetail => ({
-  ...normalizeMixListItem(raw),
-  audio_url: raw.audio_url ?? raw.audio,
-  tracks: (raw.tracks ?? []).map((t: any) => ({
-    id: t.id,
-    title: t.title ?? t.name,
-    artist: t.artist,
-    start_time: t.start_time ?? t.start_time_seconds ?? 0,
-    end_time: t.end_time ?? t.end_time_seconds,
-    bpm: t.bpm,
-    camelot_key: t.camelot_key,
-  })),
-  transitions: (raw.transitions ?? []).map((tr: any) => ({
-    id: tr.id,
-    start_time: tr.start_time ?? tr.start_time_seconds ?? 0,
-    end_time: tr.end_time ?? tr.end_time_seconds,
-    transition_type: tr.transition_type,
-    from_key: tr.from_key,
-    to_key: tr.to_key,
-    harmonic_compatibility: tr.harmonic_compatibility ?? tr.camelot_compatibility,
-    confidence: tr.confidence,
-  })),
-});
-
-const normalizeAnalysis = (raw: any): AnalysisSummary => ({
-  primary_bpm: raw.primary_bpm,
-  bpm_confidence: raw.bpm_confidence,
-  bpm_candidates: (raw.bpm_candidates ?? []).map((c: any) => ({
-    bpm: c.bpm,
-    confidence: c.confidence,
-    support_count: c.support_count ?? 0,
-  })),
-  detected_key: raw.detected_key,
-  camelot_code: raw.camelot_code,
-  key_confidence: raw.key_confidence,
-  integrated_lufs: raw.integrated_lufs,
-  loudness_range_lra: raw.loudness_range_lra,
-  true_peak_db: raw.true_peak_db,
-  quality_findings: (raw.quality_findings ?? []).map((q: any) => ({
-    type: q.type,
-    severity: q.severity,
-    description: q.description,
-    timestamp_range: q.timestamp_range ?? null,
-  })),
-});
 
 const FULL_ZOOM: ZoomWindow = { start: 0, end: 1 };
 const PEAK_BUCKETS = 1200;
@@ -107,7 +58,8 @@ export const App: React.FC = () => {
       return 'dark';
     }
   });
-  const [activeTab, setActiveTab] = useState<'analyzer' | 'pipeline' | 'imprint' | 'support'>('analyzer');
+  const pathname = usePathname();
+  const route = getRouteForPath(pathname);
   const [notification, setNotification] = useState<string | null>(null);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [zoom, setZoom] = useState<ZoomWindow>(FULL_ZOOM);
@@ -198,8 +150,8 @@ export const App: React.FC = () => {
     try {
       const res = await axios.get(`${API_BASE}/mixes`);
       const payload = res.data;
-      const rawItems = Array.isArray(payload) ? payload : payload?.items ?? [];
-      const items = rawItems.map(normalizeMixListItem);
+      const page = normalizeMixListResponse(payload);
+      const items = page.items.map(normalizeMixListItem);
       setMixes(items);
       if (items.length > 0) {
         const stillThere = selectedMix && items.some((m: MixListItem) => m.id === selectedMix.id);
@@ -372,9 +324,13 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className={`min-h-screen font-sans antialiased transition-colors duration-200 ${
-      isDark ? 'bg-[#0d0e12] text-[#e0e2ec]' : 'bg-[#f3f4f6] text-[#1f2937]'
-    }`}>
+    <AppShell
+      currentPath={pathname}
+      theme={theme}
+      onToggleTheme={() => setTheme(isDark ? 'light' : 'dark')}
+      installPrompt={installPrompt}
+      onInstall={() => void triggerInstall()}
+    >
       <audio
         ref={audioRef}
         src={selectedMix?.audio_url || ''}
@@ -388,98 +344,6 @@ export const App: React.FC = () => {
         className="hidden"
       />
 
-      <header className={`px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20 backdrop-blur ${
-        isDark ? 'bg-[#0d0e12]/90 border-[#232630]' : 'bg-[#ffffff]/90 border-[#e5e7eb]'
-      }`}>
-        <div className="flex items-center gap-4">
-          <div className="w-9 h-9 rounded-md bg-[#ea580c] flex items-center justify-center font-black text-white shadow-lg shadow-orange-900/30">
-            23
-          </div>
-          <div>
-            <h1 className="text-xl font-black uppercase tracking-wider text-[#ea580c] flex items-center gap-2">
-              SYSTEM CORRUPT <span className={isDark ? 'text-[#888] font-light' : 'text-[#6b7280] font-light'}>| MIX ANALYST</span>
-            </h1>
-            <p className={`text-[10px] uppercase tracking-widest font-mono ${isDark ? 'text-[#8c909e]' : 'text-[#6b7280]'}`}>
-              Long-Set Transition & Mastering Engine
-            </p>
-          </div>
-        </div>
-
-        <nav
-          aria-label="Primary"
-          className={`flex items-center p-1 rounded-lg border text-xs font-semibold ${
-            isDark ? 'bg-[#15171e] border-[#292c38]' : 'bg-[#e5e7eb] border-[#d1d5db]'
-          }`}
-        >
-          <button
-            onClick={() => setActiveTab('analyzer')}
-            aria-current={activeTab === 'analyzer' ? 'page' : undefined}
-            className={`px-3 py-1.5 min-h-[44px] rounded transition ${
-              activeTab === 'analyzer'
-                ? 'bg-[#ea580c] text-white shadow-sm'
-                : isDark ? 'text-[#9ca3af] hover:text-white' : 'text-[#4b5563] hover:text-black'
-            }`}
-          >
-            Mix Library & Detail
-          </button>
-          <button
-            onClick={() => setActiveTab('pipeline')}
-            aria-current={activeTab === 'pipeline' ? 'page' : undefined}
-            className={`px-3 py-1.5 min-h-[44px] rounded transition ${
-              activeTab === 'pipeline'
-                ? 'bg-[#ea580c] text-white shadow-sm'
-                : isDark ? 'text-[#9ca3af] hover:text-white' : 'text-[#4b5563] hover:text-black'
-            }`}
-          >
-            Pipeline & Broadcast
-          </button>
-          <button
-            onClick={() => setActiveTab('support')}
-            aria-current={activeTab === 'support' ? 'page' : undefined}
-            className={`px-3 py-1.5 min-h-[44px] rounded transition flex items-center gap-1.5 ${
-              activeTab === 'support'
-                ? 'bg-[#ea580c] text-white shadow-sm'
-                : isDark ? 'text-[#9ca3af] hover:text-white' : 'text-[#4b5563] hover:text-black'
-            }`}
-          >
-            <HelpCircle className="w-3.5 h-3.5" /> Support & Docs
-          </button>
-          <button
-            onClick={() => setActiveTab('imprint')}
-            aria-current={activeTab === 'imprint' ? 'page' : undefined}
-            className={`px-3 py-1.5 min-h-[44px] rounded transition flex items-center gap-1.5 ${
-              activeTab === 'imprint'
-                ? 'bg-[#ea580c] text-white shadow-sm'
-                : isDark ? 'text-[#9ca3af] hover:text-white' : 'text-[#4b5563] hover:text-black'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" /> Imprint & Privacy
-          </button>
-        </nav>
-
-        <div className="flex items-center gap-3">
-          {installPrompt && (
-            <button
-              onClick={triggerInstall}
-              className="px-3 py-1.5 min-h-[44px] bg-[#ea580c] hover:bg-[#c2410c] text-white rounded text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-md shadow-orange-950/40"
-            >
-              <Download className="w-3.5 h-3.5" /> Install App
-            </button>
-          )}
-
-          <button
-            onClick={() => setTheme(isDark ? 'light' : 'dark')}
-            className={`p-2 rounded-lg border transition min-w-[44px] min-h-[44px] flex items-center justify-center ${
-              isDark ? 'bg-[#15171e] border-[#292c38] text-amber-400 hover:bg-[#1f222d]' : 'bg-[#ffffff] border-[#d1d5db] text-slate-700 hover:bg-[#f3f4f6]'
-            }`}
-            title={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`}
-            aria-label={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`}
-          >
-            {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-        </div>
-      </header>
-
       {notification && (
         <div className="fixed bottom-6 right-6 z-50 bg-[#ea580c] text-white px-5 py-3 rounded-lg shadow-xl font-medium text-xs flex items-center gap-2" role="status">
           <CheckCircle className="w-4 h-4" />
@@ -487,15 +351,54 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      <main className="p-6 max-w-7xl mx-auto">
-        {activeTab === 'pipeline' && (
+        {route === 'process' && (
           <PipelinePanel
             selectedMix={selectedMix}
             isDark={isDark}
             onLibraryChanged={fetchMixes}
           />
         )}
-        {activeTab === 'analyzer' && (
+        {route === 'jobs' && (
+          <div className="space-y-6" data-testid="jobs-view">
+            <div className={`border rounded-lg p-6 ${isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'}`}>
+              <h2 className="text-xl font-bold text-[#ea580c] uppercase tracking-wide mb-2">
+                Jobs
+              </h2>
+              <p className={`text-sm leading-relaxed ${isDark ? 'text-[#9ca3af]' : 'text-[#4b5563]'}`}>
+                Job dispatch and live progress live in the Process surface. No jobs are
+                fabricated here — open Pipeline &amp; Broadcast to dispatch and track real
+                engine jobs for the selected mix.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-4">
+                <a
+                  href={PROCESS_ROUTE}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(PROCESS_ROUTE);
+                  }}
+                  className="px-4 py-2 min-h-[44px] inline-flex items-center rounded bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-bold"
+                >
+                  Go to Pipeline &amp; Broadcast
+                </a>
+                <a
+                  href={JOBS_ANCHOR}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    navigate(JOBS_ANCHOR);
+                  }}
+                  className={`px-4 py-2 min-h-[44px] inline-flex items-center text-xs font-semibold rounded border transition ${
+                    isDark
+                      ? 'bg-[#1f222c] hover:bg-[#282c38] border-[#374151] text-[#d1d5db]'
+                      : 'bg-[#f3f4f6] hover:bg-[#e5e7eb] border-[#d1d5db] text-[#374151]'
+                  }`}
+                >
+                  Analysis jobs anchor
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+        {route === 'library' && (
           <div className="grid grid-cols-12 gap-6">
             <div className="col-span-12 md:col-span-3">
               <MixLibrary
@@ -782,8 +685,8 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'support' && (
-          <div className="space-y-6">
+        {route === 'more' && (
+          <div className="space-y-6" data-testid="more-view">
             <div className={`border rounded-lg p-6 ${isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'}`}>
               <h2 className="text-xl font-bold text-[#ea580c] uppercase tracking-wide flex items-center gap-2 mb-4">
                 <Wrench className="w-5 h-5" /> Sound-System Engineering & Support
@@ -836,11 +739,6 @@ export const App: React.FC = () => {
                 GitHub Issue Tracker <ExternalLink className="w-3.5 h-3.5" />
               </a>
             </div>
-          </div>
-        )}
-
-        {activeTab === 'imprint' && (
-          <div className="space-y-6">
             <div className={`border rounded-lg p-6 space-y-6 ${isDark ? 'bg-[#15171e] border-[#232630]' : 'bg-white border-[#e5e7eb] shadow-sm'}`}>
               <div>
                 <h2 className="text-xl font-black text-[#ea580c] uppercase tracking-wide mb-1">
@@ -873,8 +771,7 @@ export const App: React.FC = () => {
             </div>
           </div>
         )}
-      </main>
-    </div>
+    </AppShell>
   );
 };
 

@@ -1,6 +1,9 @@
 import React from 'react';
 import { formatTime } from '../audio/format';
 import type { MixListItem } from '../types';
+import { EmptyState } from './ui/EmptyState';
+import { ErrorState } from './ui/ErrorState';
+import { Skeleton } from './ui/Skeleton';
 
 interface MixLibraryProps {
   mixes: MixListItem[];
@@ -36,35 +39,31 @@ export const MixLibrary: React.FC<MixLibraryProps> = ({
       </span>
     </div>
 
-    {loading && (
-      <div className="space-y-2" aria-busy="true" aria-label="Loading mixes">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className={`p-3 rounded border animate-pulse ${isDark ? 'bg-[#1a1c24] border-[#292c38]' : 'bg-[#f9fafb] border-[#e5e7eb]'}`}>
-            <div className={`h-4 rounded w-3/4 ${isDark ? 'bg-[#292c38]' : 'bg-[#e5e7eb]'}`} />
-            <div className={`h-3 rounded w-1/2 mt-2 ${isDark ? 'bg-[#292c38]' : 'bg-[#e5e7eb]'}`} />
-          </div>
-        ))}
-      </div>
-    )}
+    {loading && <Skeleton lines={3} label="Loading mixes" isDark={isDark} />}
 
     {!loading && error && (
-      <div role="alert" className="text-sm">
-        <p className="font-semibold text-red-400">Could not load mixes</p>
-        <p className={`text-xs mt-1 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>{error}</p>
-        <button
-          onClick={onRetry}
-          className="mt-3 px-4 py-2 min-h-[44px] rounded bg-[#ea580c] hover:bg-[#c2410c] text-white text-xs font-bold"
-        >
-          Retry
-        </button>
-      </div>
+      <ErrorState
+        title="Could not load mixes"
+        message={error}
+        onRetry={onRetry}
+        retryLabel="Retry"
+        isDark={isDark}
+      />
     )}
 
     {!loading && !error && mixes.length === 0 && (
-      <p className={`text-xs leading-relaxed ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
-        No mixes yet. Upload a long set from <span className="font-semibold">Pipeline &amp; Broadcast</span> to
-        start engine analysis.
-      </p>
+      <div className={`text-xs leading-relaxed ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
+        <EmptyState
+          title="No mixes yet."
+          description={
+            <>
+              Upload a long set from <span className="font-semibold">Pipeline &amp; Broadcast</span> to
+              start engine analysis.
+            </>
+          }
+        />
+        {/* Live announcements for the library surface are handled by the AppShell route region. */}
+      </div>
     )}
 
     {!loading && !error && mixes.length > 0 && (

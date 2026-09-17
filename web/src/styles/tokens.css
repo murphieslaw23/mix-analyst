@@ -1,0 +1,299 @@
+/**
+ * Press Plate semantic tokens.
+ *
+ * Gradual adoption: only AppShell consumes these tokens so far.
+ * Other components keep their current hardcoded hexes until later tasks.
+ *
+ * Dark (default) maps to the current palette:
+ *   oil   #0d0e12 (page background)
+ *   iron  #15171e (card / nav background)
+ *   bone  #e0e2ec (primary text)
+ *   rust  #ea580c (primary accent)
+ * Light maps to the current light palette:
+ *   oil   #f3f4f6, iron #ffffff, bone #1f2937, rust #c2410c
+ */
+
+:root {
+  --surface-oil: #0d0e12;
+  --surface-iron: #15171e;
+  --surface-fog: #1a1c24;
+  --text-bone: #e0e2ec;
+  --text-fog: #9ca3af;
+  --text-dim: #71717a;
+  --accent-rust: #ea580c;
+  --accent-rust-strong: #c2410c;
+  --border-iron: #232630;
+  --border-soft: #292c38;
+  --focus-ring: #ea580c;
+  color-scheme: dark;
+}
+
+html.light-mode {
+  --surface-oil: #f3f4f6;
+  --surface-iron: #ffffff;
+  --surface-fog: #f9fafb;
+  --text-bone: #1f2937;
+  --text-fog: #6b7280;
+  --text-dim: #9ca3af;
+  --accent-rust: #c2410c;
+  --accent-rust-strong: #9a3412;
+  --border-iron: #e5e7eb;
+  --border-soft: #d1d5db;
+  color-scheme: light;
+}
+
+/* Reflow guard: never allow accidental horizontal scrolling. */
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+img,
+canvas,
+table {
+  max-width: 100%;
+}
+
+/* ---------- AppShell ---------- */
+
+.app-shell {
+  min-height: 100vh;
+  min-width: 0;
+  max-width: 100vw;
+  overflow-x: hidden;
+  background: var(--surface-oil);
+  color: var(--text-bone);
+}
+
+.app-shell-header {
+  background: var(--surface-oil);
+  border-bottom: 1px solid var(--border-iron);
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  max-width: 100vw;
+}
+
+.app-shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.app-shell-brand-badge {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.375rem;
+  background: var(--accent-rust);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+
+.app-shell-brand-title {
+  font-size: 1.25rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-rust);
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.app-shell-brand-subtitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-family: ui-monospace, monospace;
+  color: var(--text-fog);
+}
+
+.app-shell-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Primary navigation: mobile bottom bar by default. */
+.app-shell-nav {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  background: var(--surface-iron);
+  border-top: 1px solid var(--border-iron);
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 0.25rem 0.5rem calc(0.25rem + env(safe-area-inset-bottom));
+  max-width: 100vw;
+}
+
+.app-shell-nav-link {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-fog);
+  text-decoration: none;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.app-shell-nav-link:hover {
+  color: var(--text-bone);
+}
+
+.app-shell-nav-link-active {
+  background: var(--accent-rust);
+  color: #fff;
+}
+
+.app-shell-main {
+  padding: 1.5rem;
+  padding-bottom: 5.5rem; /* room for the mobile bottom nav */
+  max-width: 80rem;
+  margin-left: auto;
+  margin-right: auto;
+  min-width: 0;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+@media (min-width: 768px) {
+  .app-shell-nav {
+    position: static;
+    border-top: none;
+    border-bottom: 1px solid var(--border-iron);
+    justify-content: center;
+    padding: 0.5rem 1rem;
+  }
+
+  .app-shell-nav-link {
+    flex: 0 1 auto;
+    min-width: 44px;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .app-shell-main {
+    padding-bottom: 1.5rem;
+    max-width: 80rem;
+  }
+}
+
+/* Desktop rail: side navigation on wide viewports. */
+@media (min-width: 1024px) {
+  .app-shell-with-rail {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+
+  .app-shell-with-rail .app-shell-header {
+    grid-column: 1 / -1;
+  }
+
+  .app-shell-with-rail .app-shell-nav {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    border-bottom: none;
+    border-right: 1px solid var(--border-iron);
+    position: sticky;
+    top: 0;
+    align-self: start;
+    min-height: calc(100vh - 73px);
+    padding: 1rem 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .app-shell-with-rail .app-shell-nav-link {
+    justify-content: flex-start;
+    text-align: left;
+    padding: 0.625rem 0.875rem;
+  }
+
+  .app-shell-with-rail .app-shell-main {
+    grid-column: 2;
+    grid-row: 2;
+    max-width: 80rem;
+  }
+}
+
+.app-shell-skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent-rust);
+  color: #fff;
+  padding: 0.75rem 1rem;
+  font-size: 12px;
+  font-weight: 700;
+  z-index: 50;
+  border-radius: 0 0 0.5rem 0;
+}
+
+.app-shell-skip:focus {
+  left: 0;
+}
+
+.app-shell-theme-toggle {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-iron);
+  color: var(--text-bone);
+}
+
+.app-shell-install {
+  min-height: 44px;
+  padding: 0.375rem 0.75rem;
+  background: var(--accent-rust);
+  color: #fff;
+  border-radius: 0.375rem;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *,
+  .app-shell *::before,
+  .app-shell *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
