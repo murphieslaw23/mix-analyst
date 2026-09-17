@@ -13,7 +13,8 @@ env:
 jobs:
   lint-and-typecheck:
     name: Lint & Static Type Analysis
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -63,7 +64,8 @@ jobs:
 
   test-suite:
     name: Backend Unit & Integration Tests
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     env:
       PYTHONPATH: .
     steps:
@@ -98,7 +100,8 @@ jobs:
 
   playwright-e2e:
     name: Frontend Playwright E2E Test Suite
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -142,7 +145,8 @@ jobs:
 
   docker-build:
     name: Multi-Stage Docker Image Build
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
