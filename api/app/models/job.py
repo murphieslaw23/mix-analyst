@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     DateTime,
@@ -14,6 +15,10 @@ from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.session import Base
+
+if TYPE_CHECKING:
+    from .job_event import JobEvent
+    from .outbox import OutboxMessage
 
 
 class JobType(str, enum.Enum):
@@ -81,6 +86,15 @@ class Job(Base):
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="JobAttempt.attempt_number",
+    )
+    outbox_messages: Mapped[list["OutboxMessage"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
+    events: Mapped[list["JobEvent"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobEvent.sequence",
     )
 
 

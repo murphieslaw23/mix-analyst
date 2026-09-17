@@ -1,4 +1,5 @@
 import contextlib
+import json
 import uuid
 from typing import Annotated
 
@@ -9,11 +10,15 @@ from kombu.exceptions import KombuError
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
+from worker.outbox_dispatcher import dispatch_pending
+
 from ...config import settings
 from ...db.session import get_db
 from ...models.job import Job, JobAttempt, JobStatus, JobType
 from ...models.media import Mix
+from ...models.outbox import OutboxMessage
 from ...schemas.job import JobCreateRequest, JobOut
+from ...services.job_commands import enqueue_job
 from ...services.job_events import stream_job_events
 from ..deps import require_api_key
 
@@ -30,57 +35,41 @@ def create_mix_job(
     db: Annotated[Session, Depends(get_db)],
     _auth: Annotated[None, Depends(require_api_key)],
 ):
-    """Dispatch an asynchronous analysis/processing job for a mix."""
+    """Dispatch an asynchronous analysis/processing job for a mix.
+
+    The job and its broker dispatch command commit atomically (outbox);
+    a down broker leaves the job QUEUED and retryable instead of failing
+    the request.
+    """
     mix = db.query(Mix).filter(Mix.id == mix_id).first()
     if not mix:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Mix not found"
         )
 
-    job_id = str(uuid.uuid4())
-    job = Job(
-        id=job_id,
-        mix_id=mix.id,
-        job_type=JobType[req.job_type.upper()]
-        if req.job_type.upper() in JobType.__members__
-        else JobType.ANALYSIS,
-        status=JobStatus.QUEUED,
-        progress_percent=0.0,
-        current_stage="Queued",
-    )
-    db.add(job)
-
-    attempt = JobAttempt(
-        id=str(uuid.uuid4()),
-        job_id=job.id,
-        attempt_number=1,
-        status=JobStatus.QUEUED,
-    )
-    db.add(attempt)
-    db.commit()
-    db.refresh(job)
-
-    # Dispatch to Celery worker queue (must match the `analysis` queue
-    # the worker consumes via `-Q analysis,mastering,exports`)
     try:
-        async_result = celery_client.send_task(
-            "tasks.run_analysis_pipeline",
-            args=[job.id],
-            task_id=f"job_{job.id}",
-            queue="analysis",
+        job_type = (
+            JobType[req.job_type.upper()]
+            if req.job_type.upper() in JobType.__members__
+            else JobType.ANALYSIS
         )
-        job.celery_task_id = async_result.id
-        db.commit()
-    except (KombuError, RedisError, OSError) as e:
-        job.status = JobStatus.FAILED
-        job.error_message = f"Failed to dispatch to Celery: {e}"
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Worker queue unavailable: {e}",
-        )
+    except (AttributeError, KeyError):
+        job_type = JobType.ANALYSIS
 
-    return job
+    def _send(task_name: str, args: list, task_id: str, queue: str) -> str:
+        return celery_client.send_task(
+            task_name, args=args, task_id=task_id, queue=queue
+        ).id
+
+    return enqueue_job(
+        db,
+        mix_id=mix.id,
+        job_type=job_type,
+        task_name="tasks.run_analysis_pipeline",
+        task_args=lambda new_id: [new_id],
+        queue="analysis",
+        sender=_send,
+    )
 
 
 @router.get("/mixes/{mix_id}/jobs", response_model=list[JobOut])
@@ -99,13 +88,6 @@ def list_mix_jobs(mix_id: str, db: Annotated[Session, Depends(get_db)]):
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
 def get_job(job_id: str, db: Annotated[Session, Depends(get_db)]):
-    """Get the current status and stage runs for a job."""
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
-        )
-    return job
     """Get the current status and stage runs for a job."""
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
@@ -194,19 +176,32 @@ def retry_job(
     job.error_message = None
     db.commit()
 
-    try:
-        async_result = celery_client.send_task(
-            "tasks.run_analysis_pipeline",
-            args=[job.id],
-            task_id=f"job_{job.id}_att_{new_attempt.attempt_number}",
-            queue="analysis",
+    # A retry is a fresh dispatch command: commit it to the outbox, then
+    # attempt one inline delivery (a down broker keeps it retryable).
+    db.add(
+        OutboxMessage(
+            id=str(uuid.uuid4()),
+            aggregate_id=job.id,
+            kind="job.dispatch",
+            payload=json.dumps(
+                {
+                    "task_name": "tasks.run_analysis_pipeline",
+                    "args": [job.id],
+                    "task_id": f"job_{job.id}_att_{new_attempt.attempt_number}",
+                    "queue": "analysis",
+                }
+            ),
         )
-        job.celery_task_id = async_result.id
-        db.commit()
-    except (KombuError, RedisError, OSError) as e:
-        job.status = JobStatus.FAILED
-        job.error_message = f"Failed to re-dispatch to Celery: {e}"
-        db.commit()
+    )
+    db.commit()
+
+    def _send(task_name: str, args: list, task_id: str, queue: str) -> str:
+        return celery_client.send_task(
+            task_name, args=args, task_id=task_id, queue=queue
+        ).id
+
+    with contextlib.suppress(KombuError, RedisError, OSError):
+        dispatch_pending(db, _send, job_ids=[job.id])
 
     db.refresh(job)
     return job

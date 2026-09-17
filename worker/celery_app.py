@@ -19,6 +19,12 @@ celery_app.conf.update(
     task_track_started=True,
     task_time_limit=3600,
     worker_prefetch_multiplier=1,
+    # Durability: a worker lost mid-task must not lose the job. Tasks are
+    # acknowledged only after they return, and the broker redelivers work
+    # the dead worker never finished; the atomic QUEUED->RUNNING claim in
+    # worker/tasks.py makes redelivery idempotent.
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
     # Celery results are never read back (status lives in Postgres and the
     # Redis event stream); expire them so the result backend cannot fill Redis.
     result_expires=3600,

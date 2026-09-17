@@ -100,9 +100,7 @@ def record_stage_failure(stage: str, job_type: str) -> None:
         raise ValueError("stage must be a non-empty string")
     if not isinstance(job_type, str) or not job_type:
         raise ValueError("job_type must be a non-empty string")
-    record_counter(
-        STAGE_FAILURE_COUNTER, 1, {"stage": stage, "job_type": job_type}
-    )
+    record_counter(STAGE_FAILURE_COUNTER, 1, {"stage": stage, "job_type": job_type})
 
 
 def snapshot() -> dict[str, dict[str, float]]:

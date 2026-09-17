@@ -70,13 +70,18 @@ def run_analysis_pipeline(self, job_id: str):
         duration_seconds = float(job_row.duration_seconds)
         audio_abs_path = Path(STORAGE_ROOT) / storage_rel_path
 
-        # Transition Job to RUNNING
-        db.execute(
+        # Atomically claim the job: exactly one worker may move a QUEUED
+        # job to RUNNING. A redelivered task (acks_late) or a job that was
+        # cancelled while queued stops here instead of double-processing.
+        claim = db.execute(
             text(
-                "UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = 'Initializing' WHERE id = :id"
+                "UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = 'Initializing' WHERE id = :id AND status = 'QUEUED'"
             ),
             {"id": job_id, "now": start_time},
         )
+        if claim.rowcount != 1:
+            db.rollback()
+            return {"status": "not-claimed", "job_id": job_id}
         db.execute(
             text(
                 "UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"
@@ -257,11 +262,11 @@ def run_analysis_pipeline(self, job_id: str):
 
         db.commit()
 
-        # Finalize Job
+        # Finalize Job (scoped: a concurrent cancellation wins over us).
         finish_time = datetime.now(timezone.utc)
         db.execute(
             text(
-                "UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id"
+                "UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id AND status = 'RUNNING'"
             ),
             {"id": job_id, "finish": finish_time},
         )
@@ -293,7 +298,7 @@ def run_analysis_pipeline(self, job_id: str):
 
         db.execute(
             text(
-                "UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id"
+                "UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id AND status IN ('QUEUED', 'RUNNING')"
             ),
             {"id": job_id, "err": error_str, "finish": fail_time},
         )
@@ -327,14 +332,18 @@ def run_analysis_pipeline(self, job_id: str):
 
 def _pipeline_mark_running(
     db, job_id: str, hostname: str, stage: str = "Initializing"
-) -> None:
+) -> bool:
+    """Atomically claim a QUEUED job for this worker. False = stop work."""
     now = datetime.now(timezone.utc)
-    db.execute(
+    claim = db.execute(
         text(
-            "UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = :stage WHERE id = :id"
+            "UPDATE jobs SET status = 'RUNNING', started_at = :now, current_stage = :stage WHERE id = :id AND status = 'QUEUED'"
         ),
         {"id": job_id, "now": now, "stage": stage},
     )
+    if claim.rowcount != 1:
+        db.rollback()
+        return False
     db.execute(
         text(
             "UPDATE job_attempts SET status = 'RUNNING', worker_hostname = :host, started_at = :now WHERE job_id = :id AND status = 'QUEUED'"
@@ -343,6 +352,7 @@ def _pipeline_mark_running(
     )
     db.commit()
     _stage_open(db, job_id, stage)
+    return True
 
 
 def _stage_open(db, job_id: str, stage_name: str, version: str = "1.0.0") -> None:
@@ -407,9 +417,13 @@ def _pipeline_mark_finished(
 ) -> None:
     now = datetime.now(timezone.utc)
     final = "SUCCEEDED" if ok else "FAILED"
+    # Success requires a claimed (RUNNING) job; failure may also land from
+    # QUEUED (e.g. missing audio before the claim). A terminal state —
+    # notably CANCELLED — is never overwritten.
+    scope = "status = 'RUNNING'" if ok else "status IN ('QUEUED', 'RUNNING')"
     db.execute(
         text(
-            "UPDATE jobs SET status = :st, progress_percent = :pct, current_stage = :stage, error_message = :err, finished_at = :finish WHERE id = :id"
+            f"UPDATE jobs SET status = :st, progress_percent = :pct, current_stage = :stage, error_message = :err, finished_at = :finish WHERE id = :id AND {scope}"
         ),
         {
             "id": job_id,
@@ -474,7 +488,8 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
         preset = DEFAULT_PRESETS.get(preset_key, DEFAULT_PRESETS["sound_system_heavy"])
 
         _, in_abs = _resolve_mix_audio(db, mjob.media_id)
-        _pipeline_mark_running(db, job_id, hostname, "Measuring input loudness")
+        if not _pipeline_mark_running(db, job_id, hostname, "Measuring input loudness"):
+            return {"status": "not-claimed", "job_id": job_id}
 
         target_lufs = float(preset["target_lufs"])
         tp_ceiling = float(preset["true_peak_ceiling"])
@@ -583,7 +598,10 @@ def run_stem_separation(self, job_id: str, stem_job_id: str):
             raise ValueError(f"StemJob {stem_job_id} not found")
 
         _, in_abs = _resolve_mix_audio(db, sjob.media_id)
-        _pipeline_mark_running(db, job_id, hostname, "Checking Demucs availability")
+        if not _pipeline_mark_running(
+            db, job_id, hostname, "Checking Demucs availability"
+        ):
+            return {"status": "not-claimed", "job_id": job_id}
 
         if not _demucs_available():
             raise RuntimeError(
@@ -725,7 +743,8 @@ def run_sidechain(self, job_id: str, sidechain_job_id: str):
                 "files on storage. Run stem separation for this mix first."
             )
 
-        _pipeline_mark_running(db, job_id, hostname, "Loading isolated stems")
+        if not _pipeline_mark_running(db, job_id, hostname, "Loading isolated stems"):
+            return {"status": "not-claimed", "job_id": job_id}
 
         def _load_mono(abs_path: Path, seconds: int = 60):
             with sf.SoundFile(str(abs_path), "r") as f:
@@ -819,7 +838,10 @@ def run_broadcast_render(self, job_id: str, mix_id: str, params: dict):
         out_abs = Path(STORAGE_ROOT) / out_rel
         out_abs.parent.mkdir(parents=True, exist_ok=True)
 
-        _pipeline_mark_running(db, job_id, hostname, "Rendering 1080p broadcast")
+        if not _pipeline_mark_running(
+            db, job_id, hostname, "Rendering 1080p broadcast"
+        ):
+            return {"status": "not-claimed", "job_id": job_id}
 
         cmd = FFmpegBroadcastCompositor.build_ffmpeg_command(
             input_audio=str(in_abs),
