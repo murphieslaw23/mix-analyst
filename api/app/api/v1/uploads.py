@@ -141,6 +141,23 @@ async def upload_chunk(
     temp_path = Path(upload_session.temp_path)
     chunk_bytes = await file.read()
 
+    # Bounded streaming: a single chunk may never exceed the configured
+    # server limit, and the session may never grow past its declared total.
+    # The offset itself stays authoritative in storage (409 on mismatch).
+    if len(chunk_bytes) > settings.default_chunk_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Chunk of {len(chunk_bytes)} bytes exceeds the "
+                f"{settings.default_chunk_size_bytes} byte limit"
+            ),
+        )
+    if offset + len(chunk_bytes) > upload_session.total_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Chunk would exceed the session's declared total size",
+        )
+
     try:
         new_size = storage.append_chunk(temp_path, chunk_bytes, offset)
     except ValueError as e:
@@ -209,6 +226,14 @@ def complete_upload(
 
     # Compute SHA-256
     sha256 = storage.compute_sha256(temp_path)
+    if req.sha256_hash and req.sha256_hash.lower() != sha256.lower():
+        upload_session.status = UploadStatus.FAILED
+        storage.delete_file(temp_path)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SHA-256 mismatch: uploaded bytes do not match the declared checksum",
+        )
     upload_session.sha256_hash = sha256
 
     # Atomically move from quarantine to permanent audio storage

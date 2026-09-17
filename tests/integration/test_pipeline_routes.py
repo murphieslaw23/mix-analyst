@@ -49,6 +49,7 @@ def client(tmp_path, monkeypatch):
         storage_root=str(storage),
         api_v1_prefix="/api/v1",
         max_upload_size_bytes=50 * 1024 * 1024,
+        default_chunk_size_bytes=5 * 1024 * 1024,
         upload_expiry_hours=24,
     )
     monkeypatch.setattr(mixes_mod, "settings", storage_settings)

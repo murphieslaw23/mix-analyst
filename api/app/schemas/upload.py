@@ -28,6 +28,7 @@ class UploadChunkResponse(BaseModel):
 class UploadCompleteRequest(BaseModel):
     title: str | None = None
     artist: str | None = None
+    sha256_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class UploadCompleteResponse(BaseModel):
