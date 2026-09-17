@@ -3,6 +3,7 @@ from typing import Annotated
 
 import redis
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -33,7 +34,11 @@ def _check_redis() -> bool:
 
 @router.get("/ready")
 def health_ready(db: Annotated[Session, Depends(get_db)]):
-    """Readiness probe: validates database connection and storage availability."""
+    """Readiness probe: database, storage and broker must all answer.
+
+    Returns 503 while any dependency is down so orchestrators stop
+    routing traffic instead of serving a degraded API as healthy.
+    """
     db_ok = False
     try:
         db.execute(text("SELECT 1"))
@@ -52,15 +57,17 @@ def health_ready(db: Annotated[Session, Depends(get_db)]):
     except OSError:
         storage_ok = False
 
-    all_ready = db_ok and storage_ok
     redis_ok = _check_redis()
-    status_str = "ok" if (all_ready and redis_ok) else "degraded"
+    all_ready = db_ok and storage_ok and redis_ok
 
-    return {
-        "status": status_str,
+    body = {
+        "status": "ok" if all_ready else "degraded",
         "checks": {
             "database": "ok" if db_ok else "error",
             "storage": "ok" if storage_ok else "error",
             "redis": "ok" if redis_ok else "error",
         },
     }
+    if all_ready:
+        return body
+    return JSONResponse(status_code=503, content=body)

@@ -5,13 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.app.api.rate_limit import RateLimitMiddleware
 from api.app.api.v1 import (
+    batches,
     broadcast,
     compositor,
     export,
     health,
     jobs,
     mastering,
+    metrics,
     mixes,
+    notifications,
     sidechain,
     stems,
     uploads,
@@ -48,7 +51,12 @@ app.include_router(
 app.include_router(
     uploads.router, prefix=f"{settings.api_v1_prefix}/uploads", tags=["uploads"]
 )
+app.include_router(batches.router, prefix=settings.api_v1_prefix, tags=["batches"])
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
+app.include_router(metrics.router, prefix=settings.api_v1_prefix, tags=["metrics"])
+app.include_router(
+    notifications.router, prefix=settings.api_v1_prefix, tags=["notifications"]
+)
 app.include_router(
     mixes.router, prefix=f"{settings.api_v1_prefix}/mixes", tags=["mixes"]
 )

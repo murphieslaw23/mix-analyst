@@ -1,18 +1,20 @@
-"""Operational metrics endpoint.
-
-Wiring into ``main.py`` is done separately; this module only defines ``router``.
-"""
+"""Operational metrics endpoint (operator-only in locked mode)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
 
 from ...services.metrics import snapshot
+from ..deps import require_api_key
 
 router = APIRouter()
 
 
 @router.get("/metrics")
-def get_metrics() -> dict[str, dict[str, float]]:
+def get_metrics(
+    _auth: Annotated[None, Depends(require_api_key)],
+) -> dict[str, dict[str, float]]:
     """Return the current in-memory metrics snapshot as JSON."""
     return snapshot()

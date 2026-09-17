@@ -58,6 +58,9 @@ class Job(Base):
     project_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("projects.id"), default=DEFAULT_PROJECT_ID, index=True
     )
+    batch_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("batches.id"), nullable=True, index=True
+    )
     mix_id: Mapped[str] = mapped_column(String(36), ForeignKey("mixes.id"), index=True)
     job_type: Mapped[JobType] = mapped_column(
         SQLEnum(JobType), default=JobType.ANALYSIS

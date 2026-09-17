@@ -142,3 +142,82 @@ def test_delivery_upsert_dedupes_per_pair(tmp_path):
         == 1
     )
     db.close()
+
+
+# --- Route-level coverage for the wired notification center ---
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
+
+import api.app.main as main_mod
+from api.app.db.session import get_db
+from api.app.main import app
+
+
+@pytest.fixture
+def center_client(tmp_path, monkeypatch):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    session_factory = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = session_factory()
+    create_job_notification(
+        db,
+        project_id="default-project",
+        job_id="job-1",
+        kind="job.succeeded",
+        deep_link="/jobs/job-1",
+    )
+    create_job_notification(
+        db,
+        project_id="project-b",
+        job_id="job-9",
+        kind="job.failed",
+        deep_link="/jobs/job-9",
+    )
+    db.close()
+
+    monkeypatch.setattr(main_mod, "init_db", lambda: None)
+    app.dependency_overrides[get_db] = lambda: session_factory()
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.clear()
+
+
+def test_center_lists_only_own_project(center_client):
+    res = center_client.get("/api/v1/notifications")
+    assert res.status_code == 200
+    items = res.json()
+    assert len(items) == 1
+    assert items[0]["job_id"] == "job-1"
+
+
+def test_center_read_and_dismiss_persist(center_client):
+    item_id = center_client.get("/api/v1/notifications").json()[0]["id"]
+    read = center_client.post(f"/api/v1/notifications/{item_id}/read")
+    assert read.status_code == 200
+    assert read.json()["status"] == "read"
+    # Foreign ids 404 instead of leaking existence.
+    assert center_client.post("/api/v1/notifications/nope/read").status_code == 404
+    dismissed = center_client.post(f"/api/v1/notifications/{item_id}/dismiss")
+    assert dismissed.json()["status"] == "dismissed"
+
+
+def test_push_subscription_upsert_and_delete(center_client):
+    body = {
+        "endpoint": "https://push.example/abc",
+        "keys": {"p256dh": "k", "auth": "a"},
+    }
+    first = center_client.post("/api/v1/push/subscriptions", json=body)
+    assert first.status_code == 201, first.text
+    sub_id = first.json()["id"]
+    assert len(first.json()["endpoint_hash"]) == 64
+    second = center_client.post("/api/v1/push/subscriptions", json=body)
+    assert second.json()["id"] == sub_id
+    assert (
+        center_client.delete(f"/api/v1/push/subscriptions/{sub_id}").status_code == 204
+    )
+    assert (
+        center_client.delete(f"/api/v1/push/subscriptions/{sub_id}").status_code == 404
+    )
