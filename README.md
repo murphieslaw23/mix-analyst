@@ -58,6 +58,19 @@ Designed in accordance with the **SYSTEM CORRUPT Brand Book**:
 
 ---
 
+## 🧭 App Routes
+
+Deep-linkable destinations (mobile bottom nav, desktop rail):
+
+- `/` — Mix library & waveform detail (zoomable engine-region timeline)
+- `/process` — Upload journey with resumable sessions
+- `/pipeline` — Pipeline & broadcast operations
+- `/jobs`, `/jobs/:jobId` — Durable job progress, cancel/retry, recovery
+- `/batches`, `/batches/:batchId` — Batch review with partial-failure recovery
+- `/more/notifications` — Notification center + opt-in Web Push settings
+
+---
+
 ## 🧪 Comprehensive E2E Testing with Playwright
 
 End-to-end tests simulate realistic **30-minute long-format DJ sets** (`1800.0s`) across multiple device viewports:
@@ -65,15 +78,18 @@ End-to-end tests simulate realistic **30-minute long-format DJ sets** (`1800.0s`
 ```bash
 cd web
 
-# Install test dependencies & Playwright browsers
-npm install
-npx playwright install --with-deps
+# Install dependencies & Playwright browsers (pnpm)
+pnpm install
+pnpm exec playwright install --with-deps chromium
 
-# Run full test suite
-npm run test:e2e
+# Run full test suite (dev server)
+pnpm run test:e2e
+
+# Production PWA lifecycle (versioned precache, offline shell, updates)
+pnpm run test:pwa
 
 # Interactive UI runner
-npm run test:e2e:ui
+pnpm run test:e2e:ui
 ```
 
 ### Supported Viewports:
@@ -103,7 +119,9 @@ docker compose up --build -d
 
 ## 🔧 Pipeline Operations (PWA "Pipeline & Broadcast" Tab)
 
-- **Ingestion**: chunked upload with ffprobe validation; stale unfinished sessions auto-purge after `UPLOAD_EXPIRY_HOURS`.
-- **Jobs**: dispatch analysis, watch live SSE progress, cancel/retry. Queues: `analysis`, `mastering`, `stems`, `exports`.
-- **DSP**: two-pass loudness mastering (preset targets, downloadable master WAV), Demucs 4-stem separation **(optional worker extra: `torch` + `demucs`, excluded by default)**, kick/sub sidechain ducking (requires completed stems), 1080p FFmpeg broadcast render, AzuraCast sync.
-- **Auth**: reads are open; uploads, dispatches, triggers, sync and mix edits require `X-API-Key` when `API_KEYS` is set (empty = open single-user mode).
+- **Ingestion**: chunked upload with ffprobe validation and optional client SHA-256 check; chunks bounded per request, offsets authoritative; stale unfinished sessions auto-purge after `UPLOAD_EXPIRY_HOURS`.
+- **Jobs**: dispatch analysis, watch live SSE progress (durable replay with `Last-Event-ID`), cancel/retry. Dispatch is outbox-backed: a down broker leaves jobs `QUEUED` and retryable, never lost. Queues: `analysis`, `mastering`, `stems`, `exports`.
+- **Batches**: `POST /batches` processes owned mixes with bounded parallelism and `PARTIAL_FAILED` aggregation; only failed items retry.
+- **DSP**: two-pass loudness mastering (preset targets, downloadable master WAV, immutable artifact records), Demucs 4-stem separation **(optional worker extra: `torch` + `demucs`, excluded by default)**, kick/sub sidechain ducking (requires completed stems), 1080p FFmpeg broadcast render, AzuraCast sync. Pure versioned stages live in `worker/dsp/` + `worker/stages/`.
+- **Auth & ownership**: Bearer JWT project ownership with DB membership checks; open appliance mode serves the default project. Reads are open; uploads, dispatches, triggers, sync and mix edits require `X-API-Key` when `API_KEYS` is set (empty = open single-user mode). `AUTH_ENFORCED=true` requires a token for every request.
+- **Notifications**: terminal job outcomes land in a durable center (`GET /notifications`); opt-in Web Push carries only notification id + safe deep link, with bounded retry and 410 deactivation. Schema is migration-managed (`api/alembic/versions/`); the API upgrades to head on startup.
