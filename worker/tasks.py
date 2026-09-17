@@ -10,7 +10,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import redis
 import soundfile as sf
 from redis.exceptions import RedisError
@@ -25,6 +24,12 @@ from .analysis.stem_separator import StemSeparatorEngine
 from .broadcast.ffmpeg_compositor import FFmpegBroadcastCompositor
 from .celery_app import celery_app
 from .db import SessionLocal
+from .dsp.mastering import (
+    MASTERING_ALGORITHM_VERSION,
+    MasterSettings,
+    compute_master_gain,
+)
+from .stages.master_mix import master_mix
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 STORAGE_ROOT = os.getenv("STORAGE_ROOT", "/data/storage")
@@ -569,9 +574,6 @@ def _pipeline_mark_finished(
     return finished
 
 
-MASTERING_ALGORITHM_VERSION = "twopass-mastering/1.0.0"
-
-
 def _register_artifact(
     db,
     *,
@@ -677,28 +679,23 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
         db.commit()
         _pipeline_progress(db, job_id, 30.0, "Applying gain and true-peak ceiling")
 
-        gain_db = target_lufs - float(input_metrics["integrated_lufs"])
-        gain_lin = 10.0 ** (gain_db / 20.0)
-        ceil_lin = 10.0 ** (tp_ceiling / 20.0)
+        # Single implementation of the two-pass DSP lives in the versioned
+        # stage; the pipeline only maps presets to settings and records.
+        stage_settings = MasterSettings(
+            target_lufs=target_lufs, true_peak_dbtp=tp_ceiling
+        )
+        gain_db = compute_master_gain(
+            float(input_metrics["integrated_lufs"]), stage_settings
+        )
         out_rel = f"assets/derived/{mjob.media_id}_master_{preset_key}.wav"
         out_abs = Path(STORAGE_ROOT) / out_rel
-        out_abs.parent.mkdir(parents=True, exist_ok=True)
-
-        with (
-            sf.SoundFile(str(in_abs), "r") as fin,
-            sf.SoundFile(
-                str(out_abs),
-                "w",
-                samplerate=fin.samplerate,
-                channels=fin.channels,
-                subtype="PCM_16",
-            ) as fout,
-        ):
-            for block in fin.blocks(blocksize=65536, dtype="float32", always_2d=True):
-                fout.write(np.clip(block * gain_lin, -ceil_lin, ceil_lin))
+        stage_result = master_mix(in_abs, out_abs, stage_settings)
 
         _pipeline_progress(db, job_id, 80.0, "Verifying output compliance")
-        out_metrics = measure_program_loudness(out_abs)
+        out_metrics = {
+            "integrated_lufs": stage_result.integrated_lufs,
+            "true_peak_db": stage_result.true_peak_dbtp,
+        }
         compliance = abs(float(out_metrics["integrated_lufs"]) - target_lufs) <= 1.0
         now = datetime.now(timezone.utc)
         db.execute(
