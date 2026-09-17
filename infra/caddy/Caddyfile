@@ -1,0 +1,43 @@
+# Production HTTPS ingress for the Mix Analyst PWA.
+#
+# Caddy terminates TLS automatically (set PUBLIC_ORIGIN to the canonical
+# https:// origin) and proxies operational traffic to the API. Plain-HTTP
+# LAN deployment stays explicitly available via docker-compose for local
+# development, but is NOT release-capable for install/Push (which require
+# a secure context).
+#
+# Usage:
+#   PUBLIC_ORIGIN=mix.example.org VAPID_PUBLIC_KEY=... docker compose \
+#     -f docker-compose.yml -f infra/caddy/compose.https.yml up -d
+#
+# The API service must carry the same /api/* routes; see web/nginx.conf
+# for the local-dev equivalent.
+
+{$PUBLIC_ORIGIN} {
+	# API, SSE, uploads, streams and downloads: always network-only,
+	# never cached. Long SSE/upload timeouts for multi-hour sets.
+	reverse_proxy /api/* api:8000 {
+		flush_interval -1
+	}
+	reverse_proxy /uploads/* api:8000 {
+		flush_interval -1
+	}
+
+	# Static PWA shell served from the web build output.
+	root * /srv
+	file_server
+
+	# SPA fallback for deep-linkable routes (/pipeline, /jobs, ...),
+	# excluding operational paths which must never serve index.html.
+	@appShell not path /api/* /uploads/*
+	handle_response @appShell 404 {
+		rewrite * /index.html
+		file_server
+	}
+
+	header {
+		# Service worker must revalidate every navigation.
+		Cache-Control "no-cache"
+		-Server
+	}
+}
