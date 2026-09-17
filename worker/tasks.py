@@ -14,7 +14,7 @@ import redis
 import soundfile as sf
 from redis.exceptions import RedisError
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from .analysis.dynamic_sidechain import DynamicSidechainDSP
 from .analysis.loudness_analyzer import measure_program_loudness
@@ -37,6 +37,43 @@ def publish_event(job_id: str, payload: dict) -> None:
         redis_client.publish(channel, json.dumps(payload))
     except (RedisError, OSError) as e:
         print(f"Failed to publish Redis event: {e}")
+
+
+def _record_event(db, job_id: str, event_type: str, payload: dict) -> int | None:
+    """Persist one sequenced job event (durable SSE replay source).
+
+    Sequence races resolve via the (job_id, sequence) unique constraint
+    with a single retry; a second collision gives up quietly so event
+    recording can never fail the pipeline itself.
+    """
+    for _ in range(2):
+        row = db.execute(
+            text(
+                "SELECT COALESCE(MAX(sequence), 0) FROM job_events WHERE job_id = :id"
+            ),
+            {"id": job_id},
+        ).fetchone()
+        sequence = int(row[0]) + 1
+        try:
+            db.execute(
+                text("""
+                    INSERT INTO job_events (id, job_id, sequence, event_type, payload, created_at)
+                    VALUES (:id, :job, :seq, :type, :payload, :now)
+                """),
+                {
+                    "id": str(uuid.uuid4()),
+                    "job": job_id,
+                    "seq": sequence,
+                    "type": event_type,
+                    "payload": json.dumps(payload),
+                    "now": datetime.now(timezone.utc),
+                },
+            )
+            db.commit()
+            return sequence
+        except IntegrityError:
+            db.rollback()
+    return None
 
 
 @celery_app.task(bind=True, name="tasks.run_analysis_pipeline")
@@ -89,6 +126,17 @@ def run_analysis_pipeline(self, job_id: str):
             {"id": job_id, "host": hostname, "now": start_time},
         )
         db.commit()
+        _record_event(
+            db,
+            job_id,
+            "started",
+            {
+                "job_id": job_id,
+                "status": "RUNNING",
+                "progress_percent": 0.0,
+                "current_stage": "Initializing",
+            },
+        )
 
         def progress_tracker(pct: float, stage_name: str):
             db.execute(
@@ -264,7 +312,7 @@ def run_analysis_pipeline(self, job_id: str):
 
         # Finalize Job (scoped: a concurrent cancellation wins over us).
         finish_time = datetime.now(timezone.utc)
-        db.execute(
+        claimed = db.execute(
             text(
                 "UPDATE jobs SET status = 'SUCCEEDED', progress_percent = 100.0, current_stage = 'Complete', finished_at = :finish WHERE id = :id AND status = 'RUNNING'"
             ),
@@ -279,15 +327,27 @@ def run_analysis_pipeline(self, job_id: str):
         db.commit()
         _stage_close_all(db, job_id, True)
 
-        publish_event(
-            job_id,
-            {
-                "job_id": job_id,
-                "status": "SUCCEEDED",
-                "progress_percent": 100.0,
-                "current_stage": "Complete",
-            },
-        )
+        if claimed.rowcount == 1:
+            _record_event(
+                db,
+                job_id,
+                "terminal",
+                {
+                    "job_id": job_id,
+                    "status": "SUCCEEDED",
+                    "progress_percent": 100.0,
+                    "current_stage": "Complete",
+                },
+            )
+            publish_event(
+                job_id,
+                {
+                    "job_id": job_id,
+                    "status": "SUCCEEDED",
+                    "progress_percent": 100.0,
+                    "current_stage": "Complete",
+                },
+            )
 
         return {"status": "ok", "job_id": job_id, "analysis": analysis_data}
 
@@ -296,7 +356,7 @@ def run_analysis_pipeline(self, job_id: str):
         fail_time = datetime.now(timezone.utc)
         error_str = str(e)
 
-        db.execute(
+        failed = db.execute(
             text(
                 "UPDATE jobs SET status = 'FAILED', error_message = :err, finished_at = :finish WHERE id = :id AND status IN ('QUEUED', 'RUNNING')"
             ),
@@ -311,15 +371,27 @@ def run_analysis_pipeline(self, job_id: str):
         db.commit()
         _stage_close_all(db, job_id, False)
 
-        publish_event(
-            job_id,
-            {
-                "job_id": job_id,
-                "status": "FAILED",
-                "progress_percent": 0.0,
-                "error_message": error_str,
-            },
-        )
+        if failed.rowcount == 1:
+            _record_event(
+                db,
+                job_id,
+                "terminal",
+                {
+                    "job_id": job_id,
+                    "status": "FAILED",
+                    "progress_percent": 0.0,
+                    "error_message": error_str,
+                },
+            )
+            publish_event(
+                job_id,
+                {
+                    "job_id": job_id,
+                    "status": "FAILED",
+                    "progress_percent": 0.0,
+                    "error_message": error_str,
+                },
+            )
         raise
     finally:
         db.close()
@@ -352,6 +424,17 @@ def _pipeline_mark_running(
     )
     db.commit()
     _stage_open(db, job_id, stage)
+    _record_event(
+        db,
+        job_id,
+        "started",
+        {
+            "job_id": job_id,
+            "status": "RUNNING",
+            "progress_percent": 0.0,
+            "current_stage": stage,
+        },
+    )
     return True
 
 
@@ -378,6 +461,16 @@ def _stage_open(db, job_id: str, stage_name: str, version: str = "1.0.0") -> Non
         },
     )
     db.commit()
+    _record_event(
+        db,
+        job_id,
+        "stage",
+        {
+            "job_id": job_id,
+            "status": "RUNNING",
+            "current_stage": stage_name,
+        },
+    )
 
 
 def _stage_close_all(db, job_id: str, ok: bool) -> None:
@@ -414,14 +507,20 @@ def _pipeline_progress(db, job_id: str, pct: float, stage: str) -> None:
 
 def _pipeline_mark_finished(
     db, job_id: str, ok: bool, error: str | None = None
-) -> None:
+) -> bool:
+    """Record the terminal outcome; False when the job already left our hands.
+
+    The jobs row moves only out of QUEUED/RUNNING, so a concurrent
+    cancellation is never overwritten — and neither the durable event nor
+    the Redis fan-out fires for work we no longer own.
+    """
     now = datetime.now(timezone.utc)
     final = "SUCCEEDED" if ok else "FAILED"
     # Success requires a claimed (RUNNING) job; failure may also land from
     # QUEUED (e.g. missing audio before the claim). A terminal state —
     # notably CANCELLED — is never overwritten.
     scope = "status = 'RUNNING'" if ok else "status IN ('QUEUED', 'RUNNING')"
-    db.execute(
+    result = db.execute(
         text(
             f"UPDATE jobs SET status = :st, progress_percent = :pct, current_stage = :stage, error_message = :err, finished_at = :finish WHERE id = :id AND {scope}"
         ),
@@ -434,6 +533,7 @@ def _pipeline_mark_finished(
             "finish": now,
         },
     )
+    finished = result.rowcount == 1
     db.execute(
         text(
             "UPDATE job_attempts SET status = :st, error_details = :err, finished_at = :finish WHERE job_id = :id AND status IN ('RUNNING', 'QUEUED')"
@@ -442,16 +542,30 @@ def _pipeline_mark_finished(
     )
     db.commit()
     _stage_close_all(db, job_id, ok)
-    publish_event(
-        job_id,
-        {
-            "job_id": job_id,
-            "status": final,
-            "progress_percent": 100.0 if ok else 0.0,
-            "current_stage": "Complete" if ok else "Failed",
-            **({"error_message": error} if error else {}),
-        },
-    )
+    if finished:
+        _record_event(
+            db,
+            job_id,
+            "terminal",
+            {
+                "job_id": job_id,
+                "status": final,
+                "progress_percent": 100.0 if ok else 0.0,
+                "current_stage": "Complete" if ok else "Failed",
+                **({"error_message": error} if error else {}),
+            },
+        )
+        publish_event(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": final,
+                "progress_percent": 100.0 if ok else 0.0,
+                "current_stage": "Complete" if ok else "Failed",
+                **({"error_message": error} if error else {}),
+            },
+        )
+    return finished
 
 
 def _resolve_mix_audio(db, mix_id: str) -> tuple[str, Path]:
