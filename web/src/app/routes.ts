@@ -40,11 +40,15 @@ export const JOBS_ANCHOR = `${PROCESS_ROUTE}#jobs`;
 export const PROCESS_INTAKE_ROUTE = '/process';
 export const BATCHES_ROUTE = '/batches';
 
+/** Notification center route (PWA plan Tasks 3-4 frontend). */
+export const NOTIFICATIONS_ROUTE = '/more/notifications';
+
 export type AppRouteKey =
   | 'library'
   | 'process'
   | 'jobs'
   | 'more'
+  | 'notifications'
   | 'intake'
   | 'jobDetail'
   | 'batches'
@@ -76,6 +80,7 @@ export function normalizePath(path: string): string {
 /** Map a pathname to its route key; unknown paths fall back to library. */
 export function getRouteForPath(pathname: string): AppRouteKey {
   const clean = normalizePath(pathname);
+  if (clean === NOTIFICATIONS_ROUTE) return 'notifications';
   if (clean === PROCESS_ROUTE) return 'process';
   if (clean === JOBS_ROUTE) return 'jobs';
   if (clean === MORE_ROUTE) return 'more';
@@ -141,6 +146,8 @@ export function routeTitle(pathname: string): string {
       return 'Batch detail';
     case 'more':
       return 'More';
+    case 'notifications':
+      return 'Notifications';
     default:
       return 'Mix Library & Detail';
   }
@@ -153,6 +160,8 @@ export function isActivePath(currentPathname: string, targetPath: string): boole
   // Detail views keep their section nav highlighted (e.g. /jobs/:id -> Jobs).
   if (target === JOBS_ROUTE && current.startsWith(`${JOBS_ROUTE}/`)) return true;
   if (target === BATCHES_ROUTE && current.startsWith(`${BATCHES_ROUTE}/`)) return true;
+  // Notification center keeps the More section highlighted.
+  if (target === MORE_ROUTE && current === NOTIFICATIONS_ROUTE) return true;
   return false;
 }
 

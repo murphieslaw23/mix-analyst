@@ -45,6 +45,11 @@ const JobsPage = React.lazy(() => import('./features/jobs/JobsPage'));
 const JobDetailPage = React.lazy(() => import('./features/jobs/JobDetailPage'));
 const BatchReviewPage = React.lazy(() => import('./features/batches/BatchReviewPage'));
 const BatchDetailPage = React.lazy(() => import('./features/batches/BatchDetailPage'));
+// Product UI Task 5 + PWA Tasks 3-4 surfaces (route wiring additions only).
+const NotificationCenterPage = React.lazy(
+  () => import('./features/notifications/NotificationCenterPage'),
+);
+const MixResultPanel = React.lazy(() => import('./features/library/MixResultPanel'));
 
 export const App: React.FC = () => {
   const [mixes, setMixes] = useState<MixListItem[]>([]);
@@ -550,6 +555,15 @@ export const App: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Product UI Task 5: results library panel BELOW WaveformDetail. */}
+                  <Suspense fallback={routeFallback}>
+                    <MixResultPanel
+                      mixId={selectedMix.id}
+                      originalUrl={selectedMix.audio_url}
+                      isDark={isDark}
+                    />
+                  </Suspense>
+
                   {renderRegionInspector()}
 
                   <AnalysisPanel
@@ -773,6 +787,12 @@ export const App: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+
+        {route === 'notifications' && (
+          <Suspense fallback={routeFallback}>
+            <NotificationCenterPage isDark={isDark} />
+          </Suspense>
         )}
     </AppShell>
   );
