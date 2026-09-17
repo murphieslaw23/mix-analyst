@@ -20,6 +20,7 @@ from api.app.schemas.mastering import (
 )
 from api.app.services.auth import require_owned_mix
 from api.app.services.jsonfields import parse_json_field
+from api.app.services.mastering_presets import ensure_builtin_presets
 from api.app.services.pipeline_jobs import enqueue_pipeline_job
 from api.app.services.storage import StorageService
 from worker.analysis.mastering_engine import DEFAULT_PRESETS
@@ -60,6 +61,7 @@ def trigger_mix_mastering(
 ):
     """Enqueue two-pass loudness mastering; poll the report / job for progress."""
     require_owned_mix(db, principal, mix_id)
+    ensure_builtin_presets(db)
 
     preset_key = request.preset_id or "sound_system_heavy"
     preset: dict[str, Any] = DEFAULT_PRESETS.get(preset_key, {})
