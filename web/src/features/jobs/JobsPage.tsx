@@ -8,6 +8,7 @@ import {
   PROCESS_ROUTE,
   jobDetailPath,
   navigate,
+  pipelinePath,
   useQueryParam,
 } from '../../app/routes';
 import type { MixListItem } from '../../types';
@@ -122,7 +123,11 @@ export const JobsPage: React.FC<JobsPageProps> = ({ isDark = true }) => {
             : 'Pick a mix to review its engine jobs, or open Pipeline & Broadcast to dispatch new ones.'}
         </p>
         <div className="flex flex-wrap gap-2 mt-4">
-          <a href={PROCESS_ROUTE} onClick={linkTo(PROCESS_ROUTE)} className={btnPrimary}>
+          <a
+            href={state.kind === 'listing' ? pipelinePath(state.mixId) : PROCESS_ROUTE}
+            onClick={linkTo(state.kind === 'listing' ? pipelinePath(state.mixId) : PROCESS_ROUTE)}
+            className={btnPrimary}
+          >
             Go to Pipeline &amp; Broadcast
           </a>
           <a href={BATCHES_ROUTE} onClick={linkTo(BATCHES_ROUTE)} className={btnGhost}>

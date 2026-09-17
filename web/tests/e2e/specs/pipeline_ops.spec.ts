@@ -201,22 +201,25 @@ async function mockPipelineApi(page: any) {
 test.describe('Pipeline & Broadcast operations', () => {
   test.beforeEach(async ({ page }) => {
     await mockPipelineApi(page);
-    await page.goto('/');
-    await page.getByText('Pipeline & Broadcast').click();
+    await page.goto(`/pipeline?mix=${MIX_ID}`);
     await expect(page.getByTestId('pipeline-panel')).toBeVisible();
   });
 
-  test('completes a chunked mix upload', async ({ page }) => {
-    await page.getByTestId('pipeline-upload-input').setInputFiles({
+  test('hands new uploads to the guided Process journey scoped back here', async ({ page }) => {
+    await page.getByTestId('pipeline-go-process').click();
+    await expect(page).toHaveURL(/\/process$/);
+
+    await page.getByLabel('Choose audio').setInputFiles({
       name: 'tiny.wav',
       mimeType: 'audio/wav',
       buffer: Buffer.from(new Uint8Array(2048)),
     });
-    await page.getByTestId('pipeline-upload-title').fill('E2E Upload');
-    await page.getByTestId('pipeline-upload-start').click();
+    await page.getByTestId('process-title').fill('E2E Upload');
+    await page.getByRole('button', { name: 'Start mastering' }).click();
 
-    await expect(page.getByText(/Upload complete/)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/tiny\.wav.*100%/)).toBeVisible();
+    // The journey hands the persisted mix back, scoped to its pipeline view.
+    await expect(page).toHaveURL(/\/pipeline\?mix=mix-new/);
+    await expect(page.getByTestId('pipeline-panel')).toBeVisible();
   });
 
   test('dispatches, tracks, cancels and retries an analysis job', async ({ page }) => {
@@ -262,10 +265,10 @@ test.describe('Pipeline & Broadcast operations', () => {
   });
 
   test('persists the API key across reloads', async ({ page }) => {
-    await page.getByTestId('pipeline-api-key').fill('e2e-secret');
-    await page.getByTestId('pipeline-api-key-save').click();
+    await page.goto('/more');
+    await page.getByTestId('settings-api-key').fill('e2e-secret');
+    await page.getByTestId('settings-api-key-save').click();
     await page.reload();
-    await page.getByText('Pipeline & Broadcast').click();
-    await expect(page.getByTestId('pipeline-api-key')).toHaveValue('e2e-secret');
+    await expect(page.getByTestId('settings-api-key')).toHaveValue('e2e-secret');
   });
 });

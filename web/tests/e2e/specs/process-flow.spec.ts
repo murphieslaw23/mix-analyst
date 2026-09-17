@@ -74,8 +74,9 @@ test.describe('Process upload journey', () => {
 
     await page.getByRole('button', { name: 'Start mastering' }).click();
     await expect(page.getByRole('progressbar')).toBeVisible();
-    await expect(page).toHaveURL(/\/pipeline$/);
-    await expect(page.getByText('Mix Ingestion')).toBeVisible();
+    // Hand-off lands scoped to the persisted mix, where dispatch lives.
+    await expect(page).toHaveURL(/\/pipeline\?mix=mix-new/);
+    await expect(page.getByRole('heading', { name: 'Analysis Jobs' })).toBeVisible();
   });
 
   test('unsupported file types are rejected with guidance', async ({ page }) => {

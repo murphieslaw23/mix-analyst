@@ -62,11 +62,13 @@ Designed in accordance with the **SYSTEM CORRUPT Brand Book**:
 
 Deep-linkable destinations (mobile bottom nav, desktop rail):
 
-- `/` — Mix library & waveform detail (zoomable engine-region timeline)
-- `/process` — Upload journey with resumable sessions
-- `/pipeline` — Pipeline & broadcast operations
-- `/jobs`, `/jobs/:jobId` — Durable job progress, cancel/retry, recovery
+- `/` — Dashboard start page: engine status, quick actions, recent sets, items needing attention
+- `/library`, `/library?mix=:id` — Mix archive (searchable) & waveform detail (zoomable engine-region timeline)
+- `/process` — Upload journey with resumable sessions (the single upload implementation)
+- `/pipeline`, `/pipeline?mix=:id` — Pipeline & broadcast operations for one mix (jobs, mastering, stems, sidechain, broadcast)
+- `/jobs`, `/jobs/:jobId` — Durable job progress, cancel/retry, recovery (`/jobs?mix=:id` scopes to one mix)
 - `/batches`, `/batches/:batchId` — Batch review with partial-failure recovery
+- `/more` — Shortcuts, API-key settings, support docs, legal notice
 - `/more/notifications` — Notification center + opt-in Web Push settings
 
 ---

@@ -75,7 +75,7 @@ async function mockLibraryApi(page: Page, opts: { withMaster: boolean }): Promis
 test.describe('Results library and honest A/B playback', () => {
   test('A/B switch toggles the active source on the real audio element', async ({ page }) => {
     await mockLibraryApi(page, { withMaster: true });
-    await page.goto('/');
+    await page.goto('/library?mix=mix-1');
 
     const panel = page.getByTestId('mix-result-panel');
     await expect(panel).toBeVisible();
@@ -112,7 +112,7 @@ test.describe('Results library and honest A/B playback', () => {
         Promise.reject(new DOMException('blocked', 'NotAllowedError'));
     });
     await mockLibraryApi(page, { withMaster: true });
-    await page.goto('/');
+    await page.goto('/library?mix=mix-1');
 
     await expect(page.getByTestId('ab-player')).toBeVisible();
     await page.getByRole('button', { name: 'Mastered', exact: true }).click();
@@ -127,7 +127,7 @@ test.describe('Results library and honest A/B playback', () => {
 
   test('artifact list exposes a mastered download link and loudness', async ({ page }) => {
     await mockLibraryApi(page, { withMaster: true });
-    await page.goto('/');
+    await page.goto('/library?mix=mix-1');
 
     await expect(page.getByTestId('mix-result-panel')).toBeVisible();
     await expect(page.getByTestId('artifact-list')).toBeVisible();
@@ -144,7 +144,7 @@ test.describe('Results library and honest A/B playback', () => {
     page,
   }) => {
     await mockLibraryApi(page, { withMaster: false });
-    await page.goto('/');
+    await page.goto('/library?mix=mix-1');
 
     await expect(page.getByTestId('mix-result-panel')).toBeVisible();
     await expect(page.getByText('No mastered audio yet')).toBeVisible();

@@ -1,14 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 
 /**
- * Tasks 1-2: tokenized shell + history-API routing.
+ * Tokenized shell + history-API routing.
  * - Mobile (390px) primary nav reaches every route without horizontal overflow.
  * - Direct goto of each route renders its surface (vite + nginx fall back to index.html).
  */
 const ROUTES = [
-  { path: '/', navName: 'Mix Library & Detail', urlPattern: /\/$/, marker: 'Mix Archive' },
-  { path: '/pipeline', navName: 'Pipeline & Broadcast', urlPattern: /\/pipeline$/, marker: 'Mix Ingestion' },
-  { path: '/jobs', navName: 'Jobs', urlPattern: /\/jobs$/, marker: 'Go to Pipeline' },
+  { path: '/', navName: 'Dashboard', urlPattern: /\/$/, marker: 'Engine status' },
+  { path: '/library', navName: 'Library', urlPattern: /\/library$/, marker: 'Mix Archive' },
+  { path: '/pipeline', navName: 'Pipeline', urlPattern: /\/pipeline$/, marker: 'Pipeline & Broadcast' },
   { path: '/more', navName: 'More', urlPattern: /\/more$/, marker: 'Impressum (Legal Notice)' },
 ] as const;
 

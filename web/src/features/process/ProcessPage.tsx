@@ -1,5 +1,5 @@
 import React from 'react';
-import { PROCESS_ROUTE, navigate } from '../../app/routes';
+import { pipelinePath, navigate } from '../../app/routes';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LiveRegion } from '../../components/ui/LiveRegion';
@@ -152,10 +152,10 @@ export const ProcessPage: React.FC<ProcessPageProps> = ({ isDark = true }) => {
             </p>
             <div className="flex flex-wrap gap-2">
               <a
-                href={PROCESS_ROUTE}
+                href={pipelinePath(upload.mixId ?? undefined)}
                 onClick={(e) => {
                   e.preventDefault();
-                  navigate(PROCESS_ROUTE);
+                  navigate(pipelinePath(upload.mixId ?? undefined));
                 }}
                 className={`${btnPrimary} no-underline`}
                 data-testid="process-go-pipeline"

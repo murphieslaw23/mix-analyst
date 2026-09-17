@@ -163,17 +163,17 @@ test.describe('Accessibility semantics', () => {
     await expect(progress).toHaveAttribute('aria-valuemax', '100');
     await expect(progress).toHaveAttribute('aria-valuenow', /\d+/);
 
-    await expect(page).toHaveURL(/\/pipeline$/);
-    await expect(page.getByText('Mix Ingestion')).toBeVisible();
+    await expect(page).toHaveURL(/\/pipeline\?mix=/);
+    await expect(page.getByRole('heading', { name: 'Analysis Jobs' })).toBeVisible();
   });
 
   test('primary navigation marks the current destination with aria-current', async ({ page }) => {
     await mockA11yApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/');
+    await page.goto('/library');
 
     const nav = page.getByRole('navigation', { name: 'Primary' });
-    const libraryLink = nav.getByRole('link', { name: 'Mix Library & Detail' });
+    const libraryLink = nav.getByRole('link', { name: 'Library' });
     const jobsLink = nav.getByRole('link', { name: 'Jobs' });
     await expect(libraryLink).toHaveAttribute('aria-current', 'page');
 
@@ -193,7 +193,7 @@ test.describe('Accessibility semantics', () => {
     page,
   }) => {
     await mockA11yApi(page);
-    await page.goto('/');
+    await page.goto('/library');
 
     const slider = page.getByRole('slider', { name: /waveform position/ });
     await expect(slider).toBeVisible();
@@ -246,7 +246,7 @@ test.describe('Accessibility semantics', () => {
 
   test('core routes use no dialogs', async ({ page }) => {
     await mockA11yApi(page);
-    const routes = ['/', '/process', `/jobs?mix=${MIX_ID}`, '/jobs/job-a11y-run', '/more'];
+    const routes = ['/', '/library', '/process', `/jobs?mix=${MIX_ID}`, '/jobs/job-a11y-run', '/more'];
     for (const path of routes) {
       await page.goto(path);
       await expect(page.locator('h1')).toContainText('SYSTEM CORRUPT');
@@ -259,7 +259,7 @@ test.describe('Accessibility semantics', () => {
     await mockA11yApi(page);
     const readiness: Array<{ path: string; ready: () => Promise<void> }> = [
       {
-        path: '/',
+        path: '/library',
         ready: async () => {
           await expect(page.getByRole('slider')).toBeVisible();
         },
@@ -306,7 +306,7 @@ test.describe('Accessibility semantics', () => {
     }
 
     // Spot-check the known icon-only controls by accessible name.
-    await page.goto('/');
+    await page.goto('/library');
     await expect(page.getByRole('button', { name: /Switch to .* Mode/ })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Zoom waveform in' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Zoom waveform out' })).toBeVisible();
@@ -371,9 +371,9 @@ test.describe('Accessibility semantics', () => {
     await mockA11yApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
 
-    for (const path of ['/', '/jobs/job-a11y-run']) {
+    for (const path of ['/library', '/jobs/job-a11y-run']) {
       await page.goto(path);
-      if (path === '/') await expect(page.getByRole('slider')).toBeVisible();
+      if (path === '/library') await expect(page.getByRole('slider')).toBeVisible();
       else await expect(page.getByRole('progressbar')).toBeVisible();
       const small = await page.evaluate(() => {
         const bad: string[] = [];
@@ -400,7 +400,7 @@ test.describe('Accessibility semantics', () => {
 
   test('primary actions keep readable contrast', async ({ page }) => {
     await mockA11yApi(page);
-    await page.goto('/');
+    await page.goto('/library');
     // White on the dark transport surface (observed ~14.7).
     await expect(page.getByTestId('play-pause-btn')).toBeVisible();
     expect(await contrastRatio(page, '[data-testid="play-pause-btn"]')).toBeGreaterThanOrEqual(4.5);

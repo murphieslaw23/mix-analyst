@@ -19,7 +19,7 @@ test.describe('Waveform detail: zoom and engine-region inspection', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/library');
   });
 
   test('zoom controls narrow and reset the visible window', async ({ page }) => {

@@ -97,7 +97,7 @@ test.describe('Reduced motion', () => {
   test('core library flows work with reduced motion', async ({ page }) => {
     await mockReducedApi(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/');
+    await page.goto('/library');
 
     // Key controls render without depending on any transition.
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();

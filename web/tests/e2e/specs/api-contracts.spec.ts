@@ -15,7 +15,7 @@ test.describe('Library API contracts', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/library');
     await expect(page.getByText('Mix Archive')).toBeVisible();
     await expect(page.getByText('No mixes yet.')).toBeVisible();
     await expect(page.getByTestId('track-card')).toHaveCount(0);
@@ -31,7 +31,7 @@ test.describe('Library API contracts', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/library');
     await expect(page.getByText('No mixes yet.')).toBeVisible();
     await expect(page.getByTestId('track-card')).toHaveCount(0);
   });
@@ -45,7 +45,7 @@ test.describe('Library API contracts', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto('/library');
     await expect(page.getByText('Could not load mixes')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
   });

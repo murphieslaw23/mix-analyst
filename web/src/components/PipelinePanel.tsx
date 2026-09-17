@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { API_BASE, api, authHeaders, getApiKey, setApiKey } from '../api';
+import { API_BASE, api, authHeaders } from '../api';
+import { PROCESS_INTAKE_ROUTE, navigate } from '../app/routes';
 
 interface JobStatus {
   id: string;
@@ -10,15 +11,14 @@ interface JobStatus {
   error_message?: string | null;
 }
 
-interface SelectedMix {
+interface PipelineMix {
   id: string;
   title?: string;
 }
 
 interface PipelinePanelProps {
-  selectedMix: SelectedMix | null;
+  mix: PipelineMix;
   isDark: boolean;
-  onLibraryChanged: () => void;
 }
 
 const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'completed', 'failed', 'synced', 'rendered']);
@@ -94,18 +94,10 @@ function useJobEvents(
   }, [jobId]);
 }
 
-export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDark, onLibraryChanged }) => {
-  const [apiKey, setApiKeyState] = useState<string>(() => getApiKey());
+export const PipelinePanel: React.FC<PipelinePanelProps> = ({ mix, isDark }) => {
   const [jobs, setJobs] = useState<JobStatus[]>([]);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<string | null>(null);
-
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadTitle, setUploadTitle] = useState('');
-  const [uploadArtist, setUploadArtist] = useState('');
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [uploadDoneName, setUploadDoneName] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
 
   const [mastering, setMastering] = useState<any>(null);
   const [masterPreset, setMasterPreset] = useState('sound_system_heavy');
@@ -135,15 +127,14 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
   useJobEvents(liveJobId, mergeJob);
 
   const fetchAll = useCallback(async () => {
-    if (!selectedMix) return;
     const headers = authHeaders();
     try {
       const [jobsRes, masteringRes, stemsRes, sidechainRes, broadcastRes] = await Promise.all([
-        api.get(`/mixes/${selectedMix.id}/jobs`, { headers }).catch(() => null),
-        api.get(`/mixes/${selectedMix.id}/mastering-report`, { headers }).catch(() => null),
-        api.get(`/mixes/${selectedMix.id}/stems`, { headers }).catch(() => null),
-        api.get(`/mixes/${selectedMix.id}/sidechain`, { headers }).catch(() => null),
-        api.get(`/mixes/${selectedMix.id}/broadcast-status`, { headers }).catch(() => null),
+        api.get(`/mixes/${mix.id}/jobs`, { headers }).catch(() => null),
+        api.get(`/mixes/${mix.id}/mastering-report`, { headers }).catch(() => null),
+        api.get(`/mixes/${mix.id}/stems`, { headers }).catch(() => null),
+        api.get(`/mixes/${mix.id}/sidechain`, { headers }).catch(() => null),
+        api.get(`/mixes/${mix.id}/broadcast-status`, { headers }).catch(() => null),
       ]);
       if (jobsRes) setJobs(jobsRes.data || []);
       setMastering(masteringRes?.data ?? null);
@@ -154,7 +145,7 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
     } catch {
       setPanelError('Backend unreachable — start the API service to use pipeline operations.');
     }
-  }, [selectedMix]);
+  }, [mix.id]);
 
   useEffect(() => {
     setJobs([]);
@@ -173,16 +164,9 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
     return (err as Error)?.message || 'Request failed';
   };
 
-  const saveKey = () => {
-    setApiKey(apiKey.trim());
-    setPanelNotice(apiKey.trim() ? 'API key saved for mutation requests.' : 'API key cleared — open mode.');
-    setTimeout(() => setPanelNotice(null), 3000);
-  };
-
   const dispatchAnalysis = async () => {
-    if (!selectedMix) return;
     try {
-      await api.post(`/mixes/${selectedMix.id}/jobs`, { job_type: 'ANALYSIS' }, { headers: authHeaders() });
+      await api.post(`/mixes/${mix.id}/jobs`, { job_type: 'ANALYSIS' }, { headers: authHeaders() });
       await fetchAll();
     } catch (err) {
       setPanelError(describeError(err));
@@ -207,51 +191,9 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
     }
   };
 
-  const startUpload = async () => {
-    if (!uploadFile || uploading) return;
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      const CHUNK = 5 * 1024 * 1024;
-      const total = uploadFile.size;
-      const init = await api.post(
-        '/uploads',
-        { filename: uploadFile.name, total_size_bytes: total, chunk_size: CHUNK },
-        { headers: authHeaders() },
-      );
-      const uploadId: string = init.data.upload_id;
-      let offset = 0;
-      while (offset < total) {
-        const slice = uploadFile.slice(offset, offset + CHUNK);
-        const form = new FormData();
-        form.append('file', slice, uploadFile.name);
-        form.append('offset', String(offset));
-        const res = await api.patch(`/uploads/${uploadId}`, form, { headers: authHeaders() });
-        offset = res.data.bytes_received;
-        setUploadProgress(Math.min(99, Math.round((offset / total) * 100)));
-      }
-      const title = uploadTitle.trim() || uploadFile.name.replace(/\.[^.]+$/, '');
-      const done = await api.post(`/uploads/${uploadId}/complete`, { title, artist: uploadArtist.trim() || null }, { headers: authHeaders() });
-      setUploadProgress(100);
-      setUploadDoneName(uploadFile.name);
-      setPanelNotice(`Upload complete — mix "${done.data.title}" registered.`);
-      setTimeout(() => setPanelNotice(null), 4000);
-      setUploadFile(null);
-      setUploadTitle('');
-      setUploadArtist('');
-      onLibraryChanged();
-    } catch (err) {
-      setPanelError(`Upload failed: ${describeError(err)}`);
-    } finally {
-      setUploading(false);
-      setTimeout(() => setUploadProgress(null), 4000);
-    }
-  };
-
   const triggerMastering = async () => {
-    if (!selectedMix) return;
     try {
-      await api.post(`/mixes/${selectedMix.id}/master`, { preset_id: masterPreset }, { headers: authHeaders() });
+      await api.post(`/mixes/${mix.id}/master`, { preset_id: masterPreset }, { headers: authHeaders() });
       await fetchAll();
     } catch (err) {
       setPanelError(describeError(err));
@@ -259,9 +201,8 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
   };
 
   const triggerStems = async () => {
-    if (!selectedMix) return;
     try {
-      await api.post(`/mixes/${selectedMix.id}/stems`, { model_name: stemModel }, { headers: authHeaders() });
+      await api.post(`/mixes/${mix.id}/stems`, { model_name: stemModel }, { headers: authHeaders() });
       await fetchAll();
     } catch (err) {
       setPanelError(describeError(err));
@@ -269,9 +210,8 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
   };
 
   const triggerSidechain = async () => {
-    if (!selectedMix) return;
     try {
-      await api.post('/mastering/sidechain', { media_id: selectedMix.id }, { headers: authHeaders() });
+      await api.post('/mastering/sidechain', { media_id: mix.id }, { headers: authHeaders() });
       await fetchAll();
     } catch (err) {
       setPanelError(describeError(err));
@@ -279,11 +219,10 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
   };
 
   const triggerRender = async () => {
-    if (!selectedMix) return;
     try {
       await api.post(
         '/broadcast/render-stream',
-        { media_id: selectedMix.id, stream_title: renderTitle.trim() || selectedMix.title || 'Live Set' },
+        { media_id: mix.id, stream_title: renderTitle.trim() || mix.title || 'Live Set' },
         { headers: authHeaders() },
       );
       await fetchAll();
@@ -293,10 +232,9 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
   };
 
   const triggerSync = async () => {
-    if (!selectedMix) return;
     try {
       await api.post(
-        `/mixes/${selectedMix.id}/sync/azuracast`,
+        `/mixes/${mix.id}/sync/azuracast`,
         { station_id: syncStation.trim() || 'syco23_live', playlist_name: syncPlaylist.trim() || undefined },
         { headers: authHeaders() },
       );
@@ -323,63 +261,25 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
       )}
 
       <div className={`border rounded-lg p-5 ${card}`}>
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-bold uppercase tracking-widest text-[#ea580c]">Mix Ingestion</h3>
+            <h3 className="text-sm font-bold uppercase tracking-widest text-[#ea580c]">New Upload</h3>
             <p className={`text-xs mt-1 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
-              Resumable chunked upload (5 MB slices) with ffprobe validation.
+              Uploads run as a guided journey in Process audio (resumable 5&nbsp;MB chunks, validation, hand-off here).
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKeyState(e.target.value)}
-              placeholder="X-API-Key (optional)"
-              data-testid="pipeline-api-key"
-              className={`px-2.5 py-1.5 rounded border text-xs font-mono w-48 ${input}`}
-            />
-            <button onClick={saveKey} className={btnGhost} data-testid="pipeline-api-key-save">
-              Save Key
-            </button>
-          </div>
+          <a
+            href={PROCESS_INTAKE_ROUTE}
+            onClick={(e) => {
+              e.preventDefault();
+              navigate(PROCESS_INTAKE_ROUTE);
+            }}
+            className={`${btnPrimary} no-underline`}
+            data-testid="pipeline-go-process"
+          >
+            Go to Process audio
+          </a>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="file"
-            accept="audio/*,.wav,.flac,.mp3,.ogg,.m4a"
-            onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
-            data-testid="pipeline-upload-input"
-            className={`text-xs file:mr-3 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-[#ea580c] file:text-white file:text-xs file:font-bold ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}
-          />
-          <input
-            value={uploadTitle}
-            onChange={(e) => setUploadTitle(e.target.value)}
-            placeholder="Title (optional)"
-            data-testid="pipeline-upload-title"
-            className={`px-2.5 py-1.5 rounded border text-xs w-44 ${input}`}
-          />
-          <input
-            value={uploadArtist}
-            onChange={(e) => setUploadArtist(e.target.value)}
-            placeholder="Artist (optional)"
-            data-testid="pipeline-upload-artist"
-            className={`px-2.5 py-1.5 rounded border text-xs w-40 ${input}`}
-          />
-          <button onClick={() => void startUpload()} disabled={!uploadFile || uploading} className={btnPrimary} data-testid="pipeline-upload-start">
-            {uploading ? 'Uploading…' : 'Upload Mix'}
-          </button>
-        </div>
-        {uploadProgress !== null && (
-          <div className="mt-3">
-            <div className={`h-2 rounded-full overflow-hidden ${isDark ? 'bg-[#232630]' : 'bg-[#e5e7eb]'}`}>
-              <div className="h-full bg-[#ea580c] transition-all" style={{ width: `${uploadProgress}%` }} data-testid="pipeline-upload-progress" />
-            </div>
-            <div className={`text-[11px] font-mono mt-1 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
-              {uploadDoneName ?? uploadFile?.name} — {uploadProgress}%
-            </div>
-          </div>
-        )}
       </div>
 
       <div className={`border rounded-lg p-5 ${card}`}>
@@ -387,14 +287,14 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
           <div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-[#ea580c]">Analysis Jobs</h3>
             <p className={`text-xs mt-1 ${isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}`}>
-              {selectedMix ? `Target: ${selectedMix.title || selectedMix.id}` : 'Select a mix from the archive first.'}
+              {`Target: ${mix.title || mix.id}`}
             </p>
           </div>
           <div className="flex gap-2">
             <button onClick={() => void fetchAll()} className={btnGhost} data-testid="pipeline-refresh">
               Refresh
             </button>
-            <button onClick={() => void dispatchAnalysis()} disabled={!selectedMix} className={btnPrimary} data-testid="pipeline-dispatch-analysis">
+            <button onClick={() => void dispatchAnalysis()} className={btnPrimary} data-testid="pipeline-dispatch-analysis">
               Dispatch Analysis
             </button>
           </div>
@@ -440,7 +340,7 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
               <option value="club_broadcast">Club Broadcast (-14 LUFS)</option>
               <option value="vinyl_premaster">Vinyl Pre-Master (-16 LUFS)</option>
             </select>
-            <button onClick={() => void triggerMastering()} disabled={!selectedMix} className={btnPrimary} data-testid="pipeline-master-trigger">
+            <button onClick={() => void triggerMastering()} className={btnPrimary} data-testid="pipeline-master-trigger">
               Master
             </button>
           </div>
@@ -453,7 +353,7 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
                     <span className={isDark ? 'text-[#9ca3af]' : 'text-[#6b7280]'}>
                       {mastering.output_measurements?.integrated_lufs} LUFS · {mastering.compliance_passed ? 'COMPLIANT' : 'CHECK'}
                     </span>
-                    <a href={`${API_BASE}/mixes/${selectedMix?.id}/mastered`} download className="text-[#ea580c] hover:underline">
+                    <a href={`${API_BASE}/mixes/${mix.id}/mastered`} download className="text-[#ea580c] hover:underline">
                       Download master WAV
                     </a>
                   </>
@@ -473,7 +373,7 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
               <option value="htdemucs_ft">htdemucs_ft (fine-tuned)</option>
               <option value="hdemucs_mmi">hdemucs_mmi</option>
             </select>
-            <button onClick={() => void triggerStems()} disabled={!selectedMix} className={btnPrimary} data-testid="pipeline-stem-trigger">
+            <button onClick={() => void triggerStems()} className={btnPrimary} data-testid="pipeline-stem-trigger">
               Separate
             </button>
           </div>
@@ -498,7 +398,7 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
           <h4 className="text-xs font-bold uppercase tracking-widest text-[#ea580c] mb-2">Sidechain</h4>
           <p className={`text-[11px] mb-2 ${isDark ? 'text-[#71717a]' : 'text-[#9ca3af]'}`}>Requires completed stem separation.</p>
           <div className="flex gap-2 mb-3">
-            <button onClick={() => void triggerSidechain()} disabled={!selectedMix} className={btnPrimary} data-testid="pipeline-sidechain-trigger">
+            <button onClick={() => void triggerSidechain()} className={btnPrimary} data-testid="pipeline-sidechain-trigger">
               Run Ducking
             </button>
           </div>
@@ -524,10 +424,10 @@ export const PipelinePanel: React.FC<PipelinePanelProps> = ({ selectedMix, isDar
           <div className="flex flex-col gap-2 mb-3">
             <input value={renderTitle} onChange={(e) => setRenderTitle(e.target.value)} placeholder="Stream title (optional)" data-testid="pipeline-render-title" className={`px-2.5 py-1.5 rounded border text-xs ${input}`} />
             <div className="flex gap-2">
-              <button onClick={() => void triggerRender()} disabled={!selectedMix} className={btnPrimary} data-testid="pipeline-render-trigger">
+              <button onClick={() => void triggerRender()} className={btnPrimary} data-testid="pipeline-render-trigger">
                 Render 1080p
               </button>
-              <button onClick={() => void triggerSync()} disabled={!selectedMix} className={btnGhost} data-testid="pipeline-sync-trigger">
+              <button onClick={() => void triggerSync()} className={btnGhost} data-testid="pipeline-sync-trigger">
                 Sync AzuraCast
               </button>
             </div>

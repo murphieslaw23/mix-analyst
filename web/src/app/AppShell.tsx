@@ -36,8 +36,12 @@ export const AppShell: React.FC<AppShellProps> = ({
   // target the nav would also match this visually-hidden region.
   const viewName = (() => {
     switch (getRouteForPath(currentPath)) {
+      case 'dashboard':
+        return 'Dashboard';
+      case 'library':
+        return 'Library';
       case 'process':
-        return 'Process';
+        return 'Pipeline';
       case 'intake':
         return 'Process audio';
       case 'jobs':
@@ -47,9 +51,10 @@ export const AppShell: React.FC<AppShellProps> = ({
       case 'batchDetail':
         return 'Batches';
       case 'more':
+      case 'notifications':
         return 'More';
       default:
-        return 'Library';
+        return 'Dashboard';
     }
   })();
 

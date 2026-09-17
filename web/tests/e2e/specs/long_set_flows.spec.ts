@@ -41,7 +41,7 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
     // Grant clipboard permissions
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 
-    await page.goto('/');
+    await page.goto('/library');
   });
 
   test('User Flow 1: 30-Minute Mix Ingestion & Archive Selection', async ({ page }) => {

@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { authHeaders } from '../../api';
 import { apiClient, type ApiProblem } from '../../api/client';
-import { PROCESS_ROUTE, navigate } from '../../app/routes';
+import { pipelinePath, navigate } from '../../app/routes';
 import {
   initialProcessState,
   processReducer,
@@ -277,15 +277,16 @@ export function useUpload(): UseUploadResult {
     }
   }, []);
 
-  // Persisted mix -> hand off to the Pipeline surface, where job dispatch
-  // lives (PipelinePanel). Navigation is a side effect of READY only.
+  // Persisted mix -> hand off to the Pipeline surface scoped to the new
+  // mix, where job dispatch lives. Navigation is a side effect of READY only.
   useEffect(() => {
     if (state.status === 'ready') {
-      const timer = window.setTimeout(() => navigate(PROCESS_ROUTE), 600);
+      const target = pipelinePath(state.mixId ?? undefined);
+      const timer = window.setTimeout(() => navigate(target), 600);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [state.status]);
+  }, [state.status, state.mixId]);
 
   return {
     status: state.status,
