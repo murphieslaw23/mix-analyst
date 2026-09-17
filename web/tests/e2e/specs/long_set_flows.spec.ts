@@ -99,7 +99,9 @@ test.describe('Mix Analyst Frontend E2E - 30-Minute Long Set Flows', () => {
 
     // Scrub forward and test Restart button
     const canvas = page.getByTestId('waveform-canvas');
-    await canvas.scrollIntoViewIfNeeded();
+    // Center the canvas in the viewport so the sticky header cannot
+    // cover the scrub point (scrollIntoViewIfNeeded may stop early).
+    await canvas.evaluate((el) => el.scrollIntoView({ block: 'center' }));
     const box = await canvas.boundingBox();
     if (box) {
       await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.5);
