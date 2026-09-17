@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from ...config import settings
 from ...db.session import get_db
 from ...models.analysis import AnalysisResult
+from ...models.artifact import Artifact
 from ...models.media import Mix
 from ...models.tracklist import TrackSegment
 from ...models.transition import TransitionEvent
 from ...schemas.analysis import AnalysisResultOut
+from ...schemas.artifact import ArtifactOut
 from ...schemas.auth import CurrentPrincipal
 from ...schemas.mix import (
     MixDetailOut,
@@ -288,6 +290,22 @@ def get_mix_transitions(
         mix_id=mix_id,
         total_transitions=len(transitions),
         transitions=[TransitionEventOut.model_validate(t) for t in transitions],
+    )
+
+
+@router.get("/{mix_id}/artifacts", response_model=list[ArtifactOut])
+def get_mix_artifacts(
+    mix_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[CurrentPrincipal, Depends(get_current_principal)],
+):
+    """List immutable derived artifacts (masters, waveforms, reports) for a mix."""
+    mix = require_owned_mix(db, principal, mix_id)
+    return (
+        db.query(Artifact)
+        .filter(Artifact.mix_id == mix.id, Artifact.project_id == principal.project_id)
+        .order_by(Artifact.created_at.desc())
+        .all()
     )
 
 

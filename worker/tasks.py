@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -568,6 +569,61 @@ def _pipeline_mark_finished(
     return finished
 
 
+MASTERING_ALGORITHM_VERSION = "twopass-mastering/1.0.0"
+
+
+def _register_artifact(
+    db,
+    *,
+    job_id: str,
+    mix_id: str,
+    role: str,
+    key: str,
+    file_path: Path,
+    algorithm_version: str,
+    media_type: str,
+) -> None:
+    """Persist an immutable artifact row for a derived file (idempotent).
+
+    Recording must never fail the pipeline: conflicts resolve to the
+    existing row and anything else rolls back quietly.
+    """
+    try:
+        project = db.execute(
+            text("SELECT project_id FROM jobs WHERE id = :id"), {"id": job_id}
+        ).fetchone()
+        hasher = hashlib.sha256()
+        with open(file_path, "rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                hasher.update(chunk)
+        db.execute(
+            text("""
+                INSERT INTO artifacts (
+                    id, project_id, mix_id, role, key, sha256,
+                    algorithm_version, media_type, byte_length, created_at
+                ) VALUES (
+                    :id, :project, :mix, :role, :key, :sha,
+                    :version, :media, :bytes, :now
+                ) ON CONFLICT (key) DO NOTHING
+            """),
+            {
+                "id": str(uuid.uuid4()),
+                "project": project.project_id if project else "default-project",
+                "mix": mix_id,
+                "role": role,
+                "key": key,
+                "sha": hasher.hexdigest(),
+                "version": algorithm_version,
+                "media": media_type,
+                "bytes": file_path.stat().st_size,
+                "now": datetime.now(timezone.utc),
+            },
+        )
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+
+
 def _resolve_mix_audio(db, mix_id: str) -> tuple[str, Path]:
     """Return (media_asset_id, absolute audio path) or raise FileNotFoundError."""
     row = db.execute(
@@ -667,6 +723,16 @@ def run_mastering_pipeline(self, job_id: str, mastering_job_id: str):
             },
         )
         db.commit()
+        _register_artifact(
+            db,
+            job_id=job_id,
+            mix_id=mjob.media_id,
+            role="master",
+            key=out_rel,
+            file_path=out_abs,
+            algorithm_version=MASTERING_ALGORITHM_VERSION,
+            media_type="audio/wav",
+        )
         _pipeline_mark_finished(db, job_id, True)
         return {
             "status": "ok",

@@ -179,3 +179,27 @@ def test_run_broadcast_render_produces_mp4(env):
     sync = env.db.query(BroadcastSync).filter_by(media_id="m1").one()
     assert sync.status == "rendered"
     assert env.db.query(Job).filter_by(id="j4").one().status == JobStatus.SUCCEEDED
+
+
+def test_mastering_registers_immutable_artifact(env):
+    """A completed master leaves exactly one content-addressed artifact row."""
+    from api.app.models.artifact import Artifact
+
+    wav = generate_synthetic_audio(duration_sec=10.0, bpm=120.0)
+    seed_mix(env.db, env.storage, wav)
+    env.db.add(
+        MasteringJob(
+            id="mjA", media_id="m1", preset_id="club_broadcast", status="queued"
+        )
+    )
+    seed_job(env.db, "jA", "m1", JobType.MASTERING)
+    env.db.commit()
+
+    result = run_mastering_pipeline("jA", "mjA")
+    assert result["status"] == "ok"
+
+    env.db.expire_all()
+    rows = env.db.query(Artifact).filter_by(mix_id="m1", role="master").all()
+    assert len(rows) == 1
+    assert rows[0].key.endswith("_master_club_broadcast.wav")
+    assert len(rows[0].sha256) == 64

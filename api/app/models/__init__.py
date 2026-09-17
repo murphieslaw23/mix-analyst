@@ -1,4 +1,5 @@
 from api.app.models.analysis import AnalysisResult
+from api.app.models.artifact import Artifact
 from api.app.models.batch import Batch
 from api.app.models.broadcast import BroadcastSync
 from api.app.models.identity import DEFAULT_PROJECT_ID, DEFAULT_USER_ID, Project, User
@@ -21,6 +22,7 @@ __all__ = [
     "DEFAULT_PROJECT_ID",
     "DEFAULT_USER_ID",
     "AnalysisResult",
+    "Artifact",
     "Batch",
     "BroadcastSync",
     "Job",
