@@ -13,7 +13,8 @@ env:
 jobs:
   lint-and-typecheck:
     name: Lint & Static Type Analysis
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -24,39 +25,47 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Set up Node 20
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Set up Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: "npm"
-          cache-dependency-path: "web/package.json"
+          node-version: 24
+          cache: "pnpm"
+          cache-dependency-path: "web/pnpm-lock.yaml"
 
       - name: Install Python Dependencies
         run: |
           pip install --upgrade pip
-          pip install "ruff==0.16.8" "mypy==2.3.1" pytest pytest-cov
+          pip install ruff 'mypy==1.10.1' pytest pytest-cov
           pip install -r api/requirements.txt
           pip install -r worker/requirements.txt
 
       - name: Run Ruff Lint & Format Verification
         run: |
-          ruff check api worker tests
-          ruff format --check api worker tests
+          ruff check .
+          ruff format --check .
 
       - name: Run MyPy Typecheck
         run: |
-          mypy api/app
+          cd api
+          mypy app
 
       - name: Install Frontend Dependencies & Typecheck
         run: |
           cd web
-          npm ci || npm install
-          npx tsc --noEmit
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit
+          pnpm run build
 
   test-suite:
     name: Backend Unit & Integration Tests
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     env:
       PYTHONPATH: .
     steps:
@@ -79,7 +88,7 @@ jobs:
           pip install --upgrade pip
           pip install -r api/requirements.txt
           pip install -r worker/requirements.txt
-          pip install pytest pytest-cov psutil
+          pip install pytest pytest-cov psutil 'httpx>=0.28,<1'
 
       - name: Run Pytest Test Suite
         run: |
@@ -91,28 +100,40 @@ jobs:
 
   playwright-e2e:
     name: Frontend Playwright E2E Test Suite
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Node 20
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Set up Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: "npm"
-          cache-dependency-path: "web/package.json"
+          node-version: 24
+          cache: "pnpm"
+          cache-dependency-path: "web/pnpm-lock.yaml"
 
       - name: Install Dependencies
         run: |
           cd web
-          npm ci || npm install
-          npx playwright install --with-deps chromium
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run Playwright E2E Tests
         run: |
           cd web
-          npm run test:e2e
+          pnpm run test:e2e
+
+      - name: Run Production PWA Lifecycle Tests
+        run: |
+          cd web
+          pnpm run test:pwa
 
       - name: Upload Playwright Report Artifact
         if: always()
@@ -124,13 +145,14 @@ jobs:
 
   docker-build:
     name: Multi-Stage Docker Image Build
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, syco23, broker]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: actions/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3
 
       - name: Build API Container Image
         uses: docker/build-push-action@v5

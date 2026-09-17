@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:pwa": "playwright test --config=playwright.pwa.config.ts"
   },
   "dependencies": {
     "axios": "^1.6.8",
@@ -16,7 +17,10 @@
     "lucide-react": "^0.363.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "tailwind-merge": "^2.2.2"
+    "tailwind-merge": "^2.2.2",
+    "workbox-precaching": "^7.3.0",
+    "workbox-routing": "^7.3.0",
+    "workbox-window": "^7.3.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.44.0",
